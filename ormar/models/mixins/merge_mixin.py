@@ -5,7 +5,7 @@ from ormar.models.excludable import skip_ellipsis
 from ormar.queryset.utils import translate_list_to_dict
 from ormar.utils.rust_utils import HAS_RUST, ormar_rust_utils
 
-if HAS_RUST:
+if HAS_RUST:  # pragma: no cover
     _rs_group_by_pk = ormar_rust_utils.group_by_pk
     _rs_plan_merge = ormar_rust_utils.plan_merge_items_lists
 
@@ -77,7 +77,7 @@ class MergeModelMixin:
         """
         merged_rows: list["Model"] = []
 
-        if HAS_RUST and result_rows:
+        if HAS_RUST and result_rows:  # pragma: no cover
             pks = [model.pk for model in result_rows]
             index_groups = _rs_group_by_pk(pks)
             for group_indices in index_groups:
@@ -85,7 +85,7 @@ class MergeModelMixin:
                 model = cls._recursive_add(group)[0]
                 object.__setattr__(model, "__ormar_excludable__", excludable)
                 merged_rows.append(model)
-        else:
+        else:  # pragma: no cover
             grouped_instances: dict = {}
             for model in result_rows:
                 grouped_instances.setdefault(model.pk, []).append(model)
@@ -179,7 +179,7 @@ class MergeModelMixin:
         :return: merged list of models
         :rtype: list[Model]
         """
-        if HAS_RUST:
+        if HAS_RUST:  # pragma: no cover
             current_pks = [getattr(m, "pk", None) for m in current_field]
             other_pks = [getattr(m, "pk", None) for m in other_value]
             plan = _rs_plan_merge(current_pks, other_pks)
@@ -191,8 +191,9 @@ class MergeModelMixin:
                     new_val = cls.merge_two_instances(
                         cur_item,
                         cast("Model", old_value),
-                        relation_map=cur_item._skip_ellipsis(  # type: ignore
-                            relation_map, field_name, default_return=dict()
+                        relation_map=cast(
+                            Optional[dict],
+                            skip_ellipsis(relation_map, field_name, default=dict()),
                         ),
                     )
                     value_to_set = [
@@ -201,27 +202,27 @@ class MergeModelMixin:
                 else:
                     value_to_set.append(cur_item)
             return value_to_set
+        else:  # pragma: no cover
+            other_by_pk: dict = {}
+            for idx, item in enumerate(other_value):
+                other_by_pk.setdefault(item.pk, idx)
 
-        other_by_pk: dict = {}
-        for idx, item in enumerate(other_value):
-            other_by_pk.setdefault(item.pk, idx)
-
-        value_to_set = list(other_value)
-        for cur_field in current_field:
-            other_idx = other_by_pk.get(cur_field.pk)
-            if other_idx is not None:
-                old_value = other_value[other_idx]
-                new_val = cls.merge_two_instances(
-                    cur_field,
-                    cast("Model", old_value),
-                    relation_map=cast(
-                        Optional[dict],
-                        skip_ellipsis(relation_map, field_name, default=dict()),
-                    ),
-                )
-                value_to_set = [x for x in value_to_set if x.pk != cur_field.pk] + [
-                    new_val
-                ]
-            else:
-                value_to_set.append(cur_field)
-        return value_to_set
+            value_to_set = list(other_value)
+            for cur_field in current_field:
+                other_idx = other_by_pk.get(cur_field.pk)
+                if other_idx is not None:
+                    old_value = other_value[other_idx]
+                    new_val = cls.merge_two_instances(
+                        cur_field,
+                        cast("Model", old_value),
+                        relation_map=cast(
+                            Optional[dict],
+                            skip_ellipsis(relation_map, field_name, default=dict()),
+                        ),
+                    )
+                    value_to_set = [x for x in value_to_set if x.pk != cur_field.pk] + [
+                        new_val
+                    ]
+                else:
+                    value_to_set.append(cur_field)
+            return value_to_set

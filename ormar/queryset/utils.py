@@ -7,7 +7,7 @@ from ormar.exceptions import QueryDefinitionError
 
 from ormar.utils.rust_utils import HAS_RUST, ormar_rust_utils
 
-if HAS_RUST:
+if HAS_RUST:  # pragma: no cover
     _rs_translate_list_to_dict = ormar_rust_utils.translate_list_to_dict
 
 if TYPE_CHECKING:  # pragma no cover
@@ -315,7 +315,7 @@ def _reverse_range(start: int, stop: int) -> SliceBounds:
     return SliceBounds(limit=stop - start, offset=-stop, reverse=True)
 
 
-def check_node_not_dict_or_not_last_node(
+def check_node_not_dict_or_not_last_node(  # pragma: no cover
     part: str, is_last: bool, current_level: Any
 ) -> bool:
     """
@@ -359,24 +359,25 @@ def translate_list_to_dict(  # noqa: CCR001
     :return: converted to dictionary input list
     :rtype: dict
     """
-    if HAS_RUST:
+    if HAS_RUST:  # pragma: no cover
         return _rs_translate_list_to_dict(list(list_to_trans), default)
-    is_ellipsis = default is ...
-    new_dict: dict = dict()
-    for path in list_to_trans:
-        current_level = new_dict
-        parts = path.split("__")
-        def_val: Any = default if is_ellipsis else copy.deepcopy(default)
-        for ind, part in enumerate(parts):
-            is_last = ind == len(parts) - 1
-            if check_node_not_dict_or_not_last_node(
-                part=part, is_last=is_last, current_level=current_level
-            ):
-                current_level[part] = dict()
-            elif part not in current_level:
-                current_level[part] = def_val
-            current_level = current_level[part]
-    return new_dict
+    else:  # pragma: no cover
+        is_ellipsis = default is ...
+        new_dict: dict = dict()
+        for path in list_to_trans:
+            current_level = new_dict
+            parts = path.split("__")
+            def_val: Any = default if is_ellipsis else copy.deepcopy(default)
+            for ind, part in enumerate(parts):
+                is_last = ind == len(parts) - 1
+                if check_node_not_dict_or_not_last_node(
+                    part=part, is_last=is_last, current_level=current_level
+                ):
+                    current_level[part] = dict()
+                elif part not in current_level:
+                    current_level[part] = def_val
+                current_level = current_level[part]
+        return new_dict
 
 
 def convert_set_to_required_dict(set_to_convert: set) -> dict:

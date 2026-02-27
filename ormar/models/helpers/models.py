@@ -6,7 +6,7 @@ import ormar  # noqa: I100
 from ormar.models.helpers.pydantic import populate_pydantic_default_values
 from ormar.utils.rust_utils import HAS_RUST, ormar_rust_utils
 
-if HAS_RUST:
+if HAS_RUST:  # pragma: no cover
     _rs_group_related_list = ormar_rust_utils.group_related_list
 
 if TYPE_CHECKING:  # pragma no cover
@@ -126,23 +126,24 @@ def group_related_list(list_: list) -> dict:
     :return: list converted to dictionary to avoid repetition and group nested models
     :rtype: dict[str, list]
     """
-    if HAS_RUST:
+    if HAS_RUST:  # pragma: no cover
         return _rs_group_related_list(list_)
-    groups: dict[str, list[str]] = {}
-    for item in list_:
-        head, _, tail = item.partition("__")
-        groups.setdefault(head, [])
-        if tail:
-            groups[head].append(tail)
+    else:  # pragma: no cover
+        groups: dict[str, list[str]] = {}
+        for item in list_:
+            head, _, tail = item.partition("__")
+            groups.setdefault(head, [])
+            if tail:
+                groups[head].append(tail)
 
-    result_dict: dict[str, Any] = {}
-    for key in sorted(groups):
-        children = sorted(groups[key])
-        if any("__" in x for x in children):
-            result_dict[key] = group_related_list(children)
-        else:
-            result_dict.setdefault(key, []).extend(children)
-    return dict(sorted(result_dict.items(), key=lambda item: len(item[1])))
+        result_dict: dict[str, Any] = {}
+        for key in sorted(groups):
+            children = sorted(groups[key])
+            if any("__" in x for x in children):
+                result_dict[key] = group_related_list(children)
+            else:
+                result_dict.setdefault(key, []).extend(children)
+        return dict(sorted(result_dict.items(), key=lambda item: len(item[1])))
 
 
 def config_field_not_set(model: type["Model"], field_name: str) -> bool:

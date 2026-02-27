@@ -9,7 +9,7 @@ from ormar.queryset.queries.query import Query
 from ormar.queryset.utils import translate_list_to_dict
 from ormar.utils.rust_utils import HAS_RUST, ormar_rust_utils
 
-if HAS_RUST:
+if HAS_RUST:  # pragma: no cover
     _RsUniqueList = ormar_rust_utils.UniqueList
     _rs_hash_item = ormar_rust_utils.hash_item
 
@@ -21,7 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 
-class _PyUniqueList(list):
+class _PyUniqueList(list):  # pragma: no cover
     """
     Simple subclass of list that prevents the duplicates.
     Uses a set for O(1) membership checks instead of O(n) list scan.
@@ -415,7 +415,7 @@ class LoadNode(Node):
             )
             self.models.append(instance)
 
-    def _hash_item(self, item: Union[dict, list]) -> tuple:
+    def _hash_item(self, item: Union[dict, list]) -> tuple:  # pragma: no cover
         """
         Converts model dictionary or list into a hashable tuple to allow its use
         as a dictionary key - used to ensure unique instances of related models.
