@@ -87,26 +87,17 @@ class ExcludableMixin(RelationMixin):
         :rtype: list[str]
         """
         model_excludable = excludable.get(model_cls=model, alias=alias)  # type: ignore
-        columns = [
-            model.get_column_name_from_alias(col.name) if not use_alias else col.name
-            for col in model.ormar_config.table.columns
-        ]
-        field_names = [
-            model.get_column_name_from_alias(col.name)
-            for col in model.ormar_config.table.columns
-        ]
-        if model_excludable.include:
-            columns = [
-                col
-                for col, name in zip(columns, field_names)
-                if model_excludable.is_included(name)
-            ]
-        if model_excludable.exclude:
-            columns = [
-                col
-                for col, name in zip(columns, field_names)
-                if not model_excludable.is_excluded(name)
-            ]
+        has_include = bool(model_excludable.include)
+        has_exclude = bool(model_excludable.exclude)
+
+        columns = []
+        for col in model.ormar_config.table.columns:
+            field_name = model.get_column_name_from_alias(col.name)
+            if has_include and not model_excludable.is_included(field_name):
+                continue
+            if has_exclude and model_excludable.is_excluded(field_name):
+                continue
+            columns.append(col.name if use_alias else field_name)
 
         # always has to return pk column for ormar to work
         if add_pk_columns:

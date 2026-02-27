@@ -5,6 +5,11 @@ from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
 
 from ormar.exceptions import QueryDefinitionError
 
+from ormar.utils.rust_utils import HAS_RUST, ormar_rust_utils
+
+if HAS_RUST:
+    _rs_translate_list_to_dict = ormar_rust_utils.translate_list_to_dict
+
 if TYPE_CHECKING:  # pragma no cover
     from ormar import BaseField, Model
 
@@ -354,11 +359,14 @@ def translate_list_to_dict(  # noqa: CCR001
     :return: converted to dictionary input list
     :rtype: dict
     """
+    if HAS_RUST:
+        return _rs_translate_list_to_dict(list(list_to_trans), default)
+    is_ellipsis = default is ...
     new_dict: dict = dict()
     for path in list_to_trans:
         current_level = new_dict
         parts = path.split("__")
-        def_val: Any = copy.deepcopy(default)
+        def_val: Any = default if is_ellipsis else copy.deepcopy(default)
         for ind, part in enumerate(parts):
             is_last = ind == len(parts) - 1
             if check_node_not_dict_or_not_last_node(

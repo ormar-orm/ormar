@@ -12,6 +12,13 @@ try:
 except ImportError:  # pragma: no cover
     import json  # type: ignore
 
+from ormar.utils.rust_utils import HAS_RUST, ormar_rust_utils
+
+if HAS_RUST:
+    _rs_encode_bytes = ormar_rust_utils.encode_bytes
+    _rs_decode_bytes = ormar_rust_utils.decode_bytes
+    _rs_encode_json = ormar_rust_utils.encode_json
+
 
 def parse_bool(value: str) -> bool:
     return value == "true"
@@ -27,7 +34,9 @@ def encode_decimal(value: decimal.Decimal, precision: Optional[int] = None) -> f
     )
 
 
-def encode_bytes(value: Union[str, bytes], represent_as_string: bool = False) -> str:
+def _py_encode_bytes(
+    value: Union[str, bytes], represent_as_string: bool = False
+) -> str:
     if represent_as_string:
         value = (
             value if isinstance(value, str) else base64.b64encode(value).decode("utf-8")
@@ -37,13 +46,13 @@ def encode_bytes(value: Union[str, bytes], represent_as_string: bool = False) ->
     return value
 
 
-def decode_bytes(value: str, represent_as_string: bool = False) -> bytes:
+def _py_decode_bytes(value: str, represent_as_string: bool = False) -> bytes:
     if represent_as_string:
         return value if isinstance(value, bytes) else base64.b64decode(value)
     return value if isinstance(value, bytes) else value.encode("utf-8")
 
 
-def encode_json(value: Any) -> Optional[str]:
+def _py_encode_json(value: Any) -> Optional[str]:
     if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
         value = value.isoformat()
     value = json.dumps(value) if not isinstance(value, str) else re_dump_value(value)
@@ -64,6 +73,11 @@ def re_dump_value(value: str) -> Union[str, bytes]:
     except json.JSONDecodeError:
         result = value
     return result
+
+
+encode_bytes = _rs_encode_bytes if HAS_RUST else _py_encode_bytes
+decode_bytes = _rs_decode_bytes if HAS_RUST else _py_decode_bytes
+encode_json = _rs_encode_json if HAS_RUST else _py_encode_json
 
 
 ENCODERS_MAP: dict[type, Callable] = {

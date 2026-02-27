@@ -1,10 +1,13 @@
-import itertools
 from typing import TYPE_CHECKING, Any, ForwardRef
 
 import pydantic
 
 import ormar  # noqa: I100
 from ormar.models.helpers.pydantic import populate_pydantic_default_values
+from ormar.utils.rust_utils import HAS_RUST, ormar_rust_utils
+
+if HAS_RUST:
+    _rs_group_related_list = ormar_rust_utils.group_related_list
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
@@ -123,18 +126,22 @@ def group_related_list(list_: list) -> dict:
     :return: list converted to dictionary to avoid repetition and group nested models
     :rtype: dict[str, list]
     """
-    result_dict: dict[str, Any] = dict()
-    list_.sort(key=lambda x: x.split("__")[0])
-    grouped = itertools.groupby(list_, key=lambda x: x.split("__")[0])
-    for key, group in grouped:
-        group_list = list(group)
-        new = sorted(
-            ["__".join(x.split("__")[1:]) for x in group_list if len(x.split("__")) > 1]
-        )
-        if any("__" in x for x in new):
-            result_dict[key] = group_related_list(new)
+    if HAS_RUST:
+        return _rs_group_related_list(list_)
+    groups: dict[str, list[str]] = {}
+    for item in list_:
+        head, _, tail = item.partition("__")
+        groups.setdefault(head, [])
+        if tail:
+            groups[head].append(tail)
+
+    result_dict: dict[str, Any] = {}
+    for key in sorted(groups):
+        children = sorted(groups[key])
+        if any("__" in x for x in children):
+            result_dict[key] = group_related_list(children)
         else:
-            result_dict.setdefault(key, []).extend(new)
+            result_dict.setdefault(key, []).extend(children)
     return dict(sorted(result_dict.items(), key=lambda item: len(item[1])))
 
 
