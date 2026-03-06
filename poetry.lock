@@ -1823,10 +1823,9 @@ files = [
 name = "ormar-utils"
 version = "0.1.0"
 description = "Rust-accelerated utility functions for the ormar ORM"
-optional = true
+optional = false
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"rust\" or extra == \"all\""
 files = [
     {file = "ormar_utils-0.1.0-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:dd0997bbbf689e55f92d33dccfece13026f6c4a85876c61f1bf66c950e1c45cc"},
     {file = "ormar_utils-0.1.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:72edeb7ba533f27a13d4037d4aab0e9ef94b38a705eda587f50e3defd7127966"},
@@ -3183,16 +3182,15 @@ type = ["pytest-mypy"]
 
 [extras]
 aiopg = ["aiopg", "psycopg2-binary"]
-all = ["PyMySQL", "aiomysql", "aiopg", "aiosqlite", "asyncpg", "cryptography", "mysqlclient", "orjson", "ormar-utils", "psycopg2-binary"]
+all = ["PyMySQL", "aiomysql", "aiopg", "aiosqlite", "asyncpg", "cryptography", "mysqlclient", "orjson", "psycopg2-binary"]
 crypto = ["cryptography"]
 mysql = ["PyMySQL", "aiomysql"]
 orjson = ["orjson"]
 postgres = ["asyncpg", "psycopg2-binary"]
 postgresql = ["asyncpg", "psycopg2-binary"]
-rust = ["ormar-utils"]
 sqlite = ["aiosqlite"]
 
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10.0"
-content-hash = "9c4f25576d03b1d6cda3a04c0c8290a23e409fe212ad38b8b9ad403d2d609e62"
+content-hash = "705aca6fcc3eb452b89b70acd08d2d6922256d50635b7f8de826fbc8316f1395"
