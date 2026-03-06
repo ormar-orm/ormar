@@ -1821,32 +1821,32 @@ files = [
 
 [[package]]
 name = "ormar-utils"
-version = "0.1.0"
+version = "0.1.1"
 description = "Rust-accelerated utility functions for the ormar ORM"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "ormar_utils-0.1.0-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:dd0997bbbf689e55f92d33dccfece13026f6c4a85876c61f1bf66c950e1c45cc"},
-    {file = "ormar_utils-0.1.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:72edeb7ba533f27a13d4037d4aab0e9ef94b38a705eda587f50e3defd7127966"},
-    {file = "ormar_utils-0.1.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:5738a89fdb0a547986129ef0091508417a1dbb87b272b2eebb47301b27846f9d"},
-    {file = "ormar_utils-0.1.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5010a52eddc067f5f0c5e060ee24d1a910e1f48f46b34c722c28af7a95b51fb6"},
-    {file = "ormar_utils-0.1.0-cp310-cp310-win_amd64.whl", hash = "sha256:4e4c94c3390887aa7f3a33d8c664e53db6acf9d6e9ab479d7450556880710da0"},
-    {file = "ormar_utils-0.1.0-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:fb177355f29381936d414779c4e647ebc9f900ea8d57e84581eb03a05f45c9ed"},
-    {file = "ormar_utils-0.1.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:73c48c7ff107b2d52686efbff5c1756a731688c7adea174b85230c0cac3bd37b"},
-    {file = "ormar_utils-0.1.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:40b3348b6e60c9e4e51ae416908c857b7ad683420b2e93fcf2063dc99ebda18e"},
-    {file = "ormar_utils-0.1.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:10e105d762c3145e8232bb44e3797e261ae8b6fac919d3d7e5c62c7b998e6a49"},
-    {file = "ormar_utils-0.1.0-cp311-cp311-win_amd64.whl", hash = "sha256:8877bc0aa59f1718538cce4c51eb927f7c939cfb1b38cc3b2c939a332ed0692f"},
-    {file = "ormar_utils-0.1.0-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:3c870d71193dabc367d3a74abf5d732f07618f2c5f2386cd8df7ff6488aeffd8"},
-    {file = "ormar_utils-0.1.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:7bad96df890c8ca70a89381b1d494afe1ff17a9e71cedeb76fb5d815e0eb0308"},
-    {file = "ormar_utils-0.1.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:df350fc39912d79cac1e7c7a66e7ff110994fe573f551ea1f4a6b032f4855f50"},
-    {file = "ormar_utils-0.1.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f3a5f651af0d1888d0c924c685afff94d3558a1670f9897df2c30f3d8dc88e32"},
-    {file = "ormar_utils-0.1.0-cp312-cp312-win_amd64.whl", hash = "sha256:5e30cd49075e952794b0d9491204af94a7370121a1a0f9460c7cf61de7cb8a38"},
-    {file = "ormar_utils-0.1.0-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:98c551cbccd840c2ce8df93aa0f402cd7ed55b4eb9e4236404734e89ddc6dba9"},
-    {file = "ormar_utils-0.1.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:e5852c8f9892397e07897099cfcf0f1a3430395924371b1802a55c785eab7109"},
-    {file = "ormar_utils-0.1.0-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:51266678bf9613c12ecf73d1d6c9e52d46a82e5a9e3b7f098dee0176d7d397c8"},
-    {file = "ormar_utils-0.1.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:4b1c79c2652e7be17e0a579fad823f5cc16880d105ac96ae6131179114c57836"},
-    {file = "ormar_utils-0.1.0-cp313-cp313-win_amd64.whl", hash = "sha256:4dd1ab340d75f98023dd97c9a8e4f83bf036515518e2f7d02991604a2c469b01"},
+    {file = "ormar_utils-0.1.1-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:e1abb5494942a937c317aac909979c422aac745c58121042216ba4163f22ef47"},
+    {file = "ormar_utils-0.1.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:1f80e577d840ae0f2e6455b84e6e6e6351a776a514af8b6ff1f809f24a71f432"},
+    {file = "ormar_utils-0.1.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:522f6fe1f68f4cd90a77a0851e2bcffbd7d473cb5eb492f53a79ecd249b4a95a"},
+    {file = "ormar_utils-0.1.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:77bcfffbef6f81a61192290834b2b80fbfeaa64242a8fbcdefe00051b9f5e70d"},
+    {file = "ormar_utils-0.1.1-cp310-cp310-win_amd64.whl", hash = "sha256:3e316b727853f0d722663e8af74aca8f9572f8340a76694ebd8a377fc6d6bfbe"},
+    {file = "ormar_utils-0.1.1-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:a5468770de8d01b36702fe96aa553efb30da46313304b97d113871519d4fec5b"},
+    {file = "ormar_utils-0.1.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:047f5e113e3adb68e4dc7d3915d999ed44a3e6914a5a0a8162cfc0f1bcc24a24"},
+    {file = "ormar_utils-0.1.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9b510c48557a1809e53a851b7acee4bac8fb7adac12ce738d3911b6ed85dc7bb"},
+    {file = "ormar_utils-0.1.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:530c46dcfcfb26067abd6e148b2c2337cfcefa1945cbffcae8a8b73ee816a101"},
+    {file = "ormar_utils-0.1.1-cp311-cp311-win_amd64.whl", hash = "sha256:d1cec4877a86d7f654d795f3f49bb4f8d81843032dc05f5a741ce471672f5c5d"},
+    {file = "ormar_utils-0.1.1-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:85e83277179776bd8d4915ce4a5e30e68054be22f3d4e4428e2f0a5515b113e1"},
+    {file = "ormar_utils-0.1.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:2736d32eeeb403f7883a4ffcc67b716e492ef38940d9ca42b9be7f1c958a458a"},
+    {file = "ormar_utils-0.1.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b69e0a1903c1eb8c63f284eec96aa550e44a417d79e673254b83d73b290c4c60"},
+    {file = "ormar_utils-0.1.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:da04622f42cc33dd88a94f21dda0f04ff7ff0773e3e3a176ef8d9bad5e60a1c1"},
+    {file = "ormar_utils-0.1.1-cp312-cp312-win_amd64.whl", hash = "sha256:a803c9f3b314eb54220bace76f7c49d091f305bba2fa591c19eead33ef5b1741"},
+    {file = "ormar_utils-0.1.1-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:f8635e83857b85e2521db8cf55c1c659169912713632b9bc8f7cb617df3235df"},
+    {file = "ormar_utils-0.1.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:4892b801969cbb402748a12920b8c285707fdb2540fe423b6c96bcbd6004aa98"},
+    {file = "ormar_utils-0.1.1-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:fae770725f88168f8dcecfafaca27375397a62a97776c2818b5a99c6d4baeb8d"},
+    {file = "ormar_utils-0.1.1-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b5bd489da692e9b94f27a577acf30465b30e94932f01f2745830cb94b1b413ce"},
+    {file = "ormar_utils-0.1.1-cp313-cp313-win_amd64.whl", hash = "sha256:405ed56e66cff421f293509d3e0a86af7da88663420a2d3ea5719e755421bb2a"},
 ]
 
 [[package]]
@@ -3193,4 +3193,4 @@ sqlite = ["aiosqlite"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10.0"
-content-hash = "705aca6fcc3eb452b89b70acd08d2d6922256d50635b7f8de826fbc8316f1395"
+content-hash = "9c8d97ddc54dfd3b6d58f40e75ca26de3dd109897778fcb8bee24d77079eab89"
