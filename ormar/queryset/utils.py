@@ -5,10 +5,7 @@ from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
 
 from ormar.exceptions import QueryDefinitionError
 
-from ormar.utils.rust_utils import HAS_RUST, ormar_rust_utils
-
-if HAS_RUST:  # pragma: no cover
-    _rs_translate_list_to_dict = ormar_rust_utils.translate_list_to_dict
+import ormar_rust_utils
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import BaseField, Model
@@ -315,30 +312,6 @@ def _reverse_range(start: int, stop: int) -> SliceBounds:
     return SliceBounds(limit=stop - start, offset=-stop, reverse=True)
 
 
-def check_node_not_dict_or_not_last_node(  # pragma: no cover
-    part: str, is_last: bool, current_level: Any
-) -> bool:
-    """
-    Checks if given name is not present in the current level of the structure.
-    Checks if given name is not the last name in the split list of parts.
-    Checks if the given name in current level is not a dictionary.
-
-    All those checks verify if there is a need for deeper traversal.
-
-    :param part:
-    :type part: str
-    :param is_last: flag to check if last element
-    :type is_last: bool
-    :param current_level: current level of the traversed structure
-    :type current_level: Any
-    :return: result of the check
-    :rtype: bool
-    """
-    return (part not in current_level and not is_last) or (
-        part in current_level and not isinstance(current_level[part], dict)
-    )
-
-
 def translate_list_to_dict(  # noqa: CCR001
     list_to_trans: Union[list, set], default: Any = ...
 ) -> dict:
@@ -359,25 +332,7 @@ def translate_list_to_dict(  # noqa: CCR001
     :return: converted to dictionary input list
     :rtype: dict
     """
-    if HAS_RUST:  # pragma: no cover
-        return _rs_translate_list_to_dict(list(list_to_trans), default)
-    else:  # pragma: no cover
-        is_ellipsis = default is ...
-        new_dict: dict = dict()
-        for path in list_to_trans:
-            current_level = new_dict
-            parts = path.split("__")
-            def_val: Any = default if is_ellipsis else copy.deepcopy(default)
-            for ind, part in enumerate(parts):
-                is_last = ind == len(parts) - 1
-                if check_node_not_dict_or_not_last_node(
-                    part=part, is_last=is_last, current_level=current_level
-                ):
-                    current_level[part] = dict()
-                elif part not in current_level:
-                    current_level[part] = def_val
-                current_level = current_level[part]
-        return new_dict
+    return ormar_rust_utils.translate_list_to_dict(list(list_to_trans), default)
 
 
 def convert_set_to_required_dict(set_to_convert: set) -> dict:

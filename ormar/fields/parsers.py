@@ -1,9 +1,9 @@
-import base64
 import datetime
 import decimal
 import uuid
-from typing import Any, Callable, Optional, Union
+from typing import Callable, Optional
 
+import ormar_rust_utils
 import pydantic
 from pydantic_core import SchemaValidator, core_schema
 
@@ -11,13 +11,6 @@ try:
     import orjson as json
 except ImportError:  # pragma: no cover
     import json  # type: ignore
-
-from ormar.utils.rust_utils import HAS_RUST, ormar_rust_utils
-
-if HAS_RUST:  # pragma: no cover
-    _rs_encode_bytes = ormar_rust_utils.encode_bytes
-    _rs_decode_bytes = ormar_rust_utils.decode_bytes
-    _rs_encode_json = ormar_rust_utils.encode_json
 
 
 def parse_bool(value: str) -> bool:
@@ -34,52 +27,9 @@ def encode_decimal(value: decimal.Decimal, precision: Optional[int] = None) -> f
     )
 
 
-def _py_encode_bytes(  # pragma: no cover
-    value: Union[str, bytes], represent_as_string: bool = False
-) -> str:
-    if represent_as_string:
-        value = (
-            value if isinstance(value, str) else base64.b64encode(value).decode("utf-8")
-        )
-    else:
-        value = value if isinstance(value, str) else value.decode("utf-8")
-    return value
-
-
-def _py_decode_bytes(
-    value: str, represent_as_string: bool = False
-) -> bytes:  # pragma: no cover
-    if represent_as_string:
-        return value if isinstance(value, bytes) else base64.b64decode(value)
-    return value if isinstance(value, bytes) else value.encode("utf-8")
-
-
-def _py_encode_json(value: Any) -> Optional[str]:  # pragma: no cover
-    if isinstance(value, (datetime.date, datetime.datetime, datetime.time)):
-        value = value.isoformat()
-    value = json.dumps(value) if not isinstance(value, str) else re_dump_value(value)
-    value = value.decode("utf-8") if isinstance(value, bytes) else value
-    return value
-
-
-def re_dump_value(value: str) -> Union[str, bytes]:  # pragma: no cover
-    """
-    Re-dumps value due to different string representation in orjson and json
-    :param value: string to re-dump
-    :type value: str
-    :return: re-dumped value
-    :rtype: list[str]
-    """
-    try:
-        result: Union[str, bytes] = json.dumps(json.loads(value))
-    except json.JSONDecodeError:
-        result = value
-    return result
-
-
-encode_bytes = _rs_encode_bytes if HAS_RUST else _py_encode_bytes
-decode_bytes = _rs_decode_bytes if HAS_RUST else _py_decode_bytes
-encode_json = _rs_encode_json if HAS_RUST else _py_encode_json
+encode_bytes = ormar_rust_utils.encode_bytes
+decode_bytes = ormar_rust_utils.decode_bytes
+encode_json = ormar_rust_utils.encode_json
 
 
 ENCODERS_MAP: dict[type, Callable] = {
