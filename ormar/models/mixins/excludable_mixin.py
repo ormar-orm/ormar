@@ -55,6 +55,29 @@ class ExcludableMixin(RelationMixin):
             columns.append(pk_alias)
         return columns
 
+    @staticmethod
+    def _get_table_column_pairs(
+        model: Union[type["Model"], type["ModelRow"]],
+    ) -> list[tuple[str, str]]:
+        """
+        Returns cached list of (col_name, field_name) tuples for the model's table.
+        Built once per model class and cached to avoid repeated SA column iteration.
+
+        :param model: model to get column pairs for
+        :type model: type["Model"]
+        :return: list of (column_name, field_name) tuples
+        :rtype: list[tuple[str, str]]
+        """
+        cached = getattr(model, "_table_column_pairs", None)
+        if cached is not None:
+            return cached
+        pairs = [
+            (col.name, model.get_column_name_from_alias(col.name))
+            for col in model.ormar_config.table.columns
+        ]
+        model._table_column_pairs = pairs  # type: ignore[union-attr]
+        return pairs
+
     @classmethod
     def own_table_columns(
         cls,
@@ -90,14 +113,14 @@ class ExcludableMixin(RelationMixin):
         has_include = bool(model_excludable.include)
         has_exclude = bool(model_excludable.exclude)
 
+        column_pairs = cls._get_table_column_pairs(model)
         columns = []
-        for col in model.ormar_config.table.columns:
-            field_name = model.get_column_name_from_alias(col.name)
+        for col_name, field_name in column_pairs:
             if has_include and not model_excludable.is_included(field_name):
                 continue
             if has_exclude and model_excludable.is_excluded(field_name):
                 continue
-            columns.append(col.name if use_alias else field_name)
+            columns.append(col_name if use_alias else field_name)
 
         # always has to return pk column for ormar to work
         if add_pk_columns:

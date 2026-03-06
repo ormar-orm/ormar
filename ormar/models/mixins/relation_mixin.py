@@ -27,13 +27,17 @@ class RelationMixin:
         :return: set of model fields with relation fields excluded
         :rtype: set
         """
-        related_names = cls.extract_related_names()
-        self_fields = {
-            name
-            for name in cls.ormar_config.model_fields.keys()
-            if name not in related_names
-        }
-        return self_fields
+        try:
+            return cls._db_own_fields  # type: ignore[attr-defined]
+        except AttributeError:
+            related_names = cls.extract_related_names()
+            self_fields = {
+                name
+                for name in cls.ormar_config.model_fields.keys()
+                if name not in related_names
+            }
+            cls._db_own_fields = self_fields  # type: ignore[attr-defined]
+            return self_fields
 
     @classmethod
     def extract_related_fields(cls) -> list["ForeignKeyField"]:

@@ -92,7 +92,11 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         :return: dictionary of model that is about to be saved
         :rtype: dict[str, str]
         """
-        ormar_fields = {k for k, v in cls.ormar_config.model_fields.items()}
+        try:
+            ormar_fields = cls._ormar_fields_set  # type: ignore[attr-defined]
+        except AttributeError:
+            ormar_fields = set(cls.ormar_config.model_fields.keys())
+            cls._ormar_fields_set = ormar_fields  # type: ignore[attr-defined]
         new_kwargs = {k: v for k, v in new_kwargs.items() if k in ormar_fields}
         return new_kwargs
 

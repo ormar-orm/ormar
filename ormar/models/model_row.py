@@ -366,15 +366,17 @@ class ModelRow(NewBaseModel):
         and values are database values
         :rtype: dict
         """
-        selected_columns = cls.own_table_columns(
-            model=cls, excludable=excludable, alias=table_prefix, use_alias=False
+        selected_columns = set(
+            cls.own_table_columns(
+                model=cls, excludable=excludable, alias=table_prefix, use_alias=False
+            )
         )
 
         column_prefix = table_prefix + "_" if table_prefix else ""
-        for column in cls.ormar_config.table.columns:
-            alias = cls.get_column_name_from_alias(column.name)
-            if alias not in item and alias in selected_columns:
-                prefixed_name = f"{column_prefix}{column.name}"
-                item[alias] = row[prefixed_name]
+        column_pairs = cls._get_table_column_pairs(cls)
+        for col_name, field_name in column_pairs:
+            if field_name not in item and field_name in selected_columns:
+                prefixed_name = f"{column_prefix}{col_name}"
+                item[field_name] = row[prefixed_name]
 
         return item

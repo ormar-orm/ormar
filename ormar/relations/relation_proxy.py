@@ -15,6 +15,9 @@ else:
     T = TypeVar("T", bound="Model")
 
 
+_QUERYSET_PROXY_METHODS = frozenset({"count", "clear"})
+
+
 class RelationProxy(Generic[T], list[T]):
     """
     Proxy of the Relation that is a list with special methods.
@@ -176,7 +179,7 @@ class RelationProxy(Generic[T], list[T]):
         :return: value of attribute
         :rtype: Any
         """
-        if item in ["count", "clear"]:
+        if item in _QUERYSET_PROXY_METHODS:
             self._initialize_queryset()
             return getattr(self.queryset_proxy, item)
         return super().__getattribute__(item)

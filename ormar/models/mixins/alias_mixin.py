@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING
 
+import ormar_rust_utils
+
 
 class AliasMixin:
     """
@@ -11,6 +13,27 @@ class AliasMixin:
 
         ormar_config: OrmarConfig
 
+    _alias_to_field_map: dict[str, str]
+    _field_to_alias_map: dict[str, str]
+
+    @classmethod
+    def _build_alias_cache(cls) -> None:
+        """
+        Build and cache alias mappings for this model class.
+        Builds two dicts:
+        - _field_to_alias_map: field_name -> db_alias
+        - _alias_to_field_map: db_alias -> field_name (reverse)
+        """
+        field_to_alias = {}
+        for field_name, field in cls.ormar_config.model_fields.items():
+            alias = field.get_alias()
+            if alias:
+                field_to_alias[field_name] = alias
+        cls._field_to_alias_map = field_to_alias
+        cls._alias_to_field_map = ormar_rust_utils.build_reverse_alias_map(
+            field_to_alias
+        )
+
     @classmethod
     def get_column_alias(cls, field_name: str) -> str:
         """
@@ -21,8 +44,11 @@ class AliasMixin:
         :return: alias (db name) if set, otherwise passed name
         :rtype: str
         """
-        field = cls.ormar_config.model_fields.get(field_name)
-        return field.get_alias() if field is not None else field_name
+        try:
+            return cls._field_to_alias_map.get(field_name, field_name)
+        except AttributeError:
+            cls._build_alias_cache()
+            return cls._field_to_alias_map.get(field_name, field_name)
 
     @classmethod
     def get_column_name_from_alias(cls, alias: str) -> str:
@@ -34,10 +60,11 @@ class AliasMixin:
         :return: field name if set, otherwise passed alias (db name)
         :rtype: str
         """
-        for field_name, field in cls.ormar_config.model_fields.items():
-            if field.get_alias() == alias:
-                return field_name
-        return alias  # if not found it's not an alias but actual name
+        try:
+            return cls._alias_to_field_map.get(alias, alias)
+        except AttributeError:
+            cls._build_alias_cache()
+            return cls._alias_to_field_map.get(alias, alias)
 
     @classmethod
     def translate_columns_to_aliases(cls, new_kwargs: dict) -> dict:
@@ -50,9 +77,15 @@ class AliasMixin:
         :return: dict with aliases and their values
         :rtype: dict
         """
-        for field_name, field in cls.ormar_config.model_fields.items():
-            if field_name in new_kwargs:
-                new_kwargs[field.get_alias()] = new_kwargs.pop(field_name)
+        try:
+            field_to_alias = cls._field_to_alias_map
+        except AttributeError:
+            cls._build_alias_cache()
+            field_to_alias = cls._field_to_alias_map
+        for field_name in list(new_kwargs.keys()):
+            alias = field_to_alias.get(field_name)
+            if alias and alias != field_name:
+                new_kwargs[alias] = new_kwargs.pop(field_name)
         return new_kwargs
 
     @classmethod
@@ -66,7 +99,13 @@ class AliasMixin:
         :return: dict with fields names and their values
         :rtype: dict
         """
-        for field_name, field in cls.ormar_config.model_fields.items():
-            if field.get_alias() and field.get_alias() in new_kwargs:
-                new_kwargs[field_name] = new_kwargs.pop(field.get_alias())
+        try:
+            alias_to_field = cls._alias_to_field_map
+        except AttributeError:
+            cls._build_alias_cache()
+            alias_to_field = cls._alias_to_field_map
+        for key in list(new_kwargs.keys()):
+            field_name = alias_to_field.get(key)
+            if field_name and field_name != key:
+                new_kwargs[field_name] = new_kwargs.pop(key)
         return new_kwargs

@@ -636,11 +636,15 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         """
         if value is None:
             return None if not self.virtual else []
-        constructors = {
-            f"{self.to.__name__}": self._register_existing_model,
-            "dict": self._construct_model_from_dict,
-            "list": self._extract_model_from_sequence,
-        }
+        try:
+            constructors = self._constructors_cache  # type: ignore[has-type]
+        except AttributeError:
+            self._constructors_cache = {
+                self.to.__name__: self._register_existing_model,
+                "dict": self._construct_model_from_dict,
+                "list": self._extract_model_from_sequence,
+            }
+            constructors = self._constructors_cache
 
         model = constructors.get(  # type: ignore
             value.__class__.__name__, self._construct_model_from_pk

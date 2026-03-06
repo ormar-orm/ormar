@@ -515,10 +515,13 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         :return: name of the model
         :rtype: str
         """
-        name = cls.__name__
         if lower:
-            name = name.lower()
-        return name
+            try:
+                return cls._lower_name  # type: ignore[attr-defined]
+            except AttributeError:
+                cls._lower_name = cls.__name__.lower()  # type: ignore[attr-defined]
+                return cls._lower_name  # type: ignore[attr-defined]
+        return cls.__name__
 
     @property
     def pk_column(self) -> sqlalchemy.Column:
