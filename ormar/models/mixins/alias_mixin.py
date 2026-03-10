@@ -101,7 +101,7 @@ class AliasMixin:
         """
         try:
             alias_to_field = cls._alias_to_field_map
-        except AttributeError:
+        except AttributeError:  # pragma: nocover
             cls._build_alias_cache()
             alias_to_field = cls._alias_to_field_map
         for key in list(new_kwargs.keys()):
