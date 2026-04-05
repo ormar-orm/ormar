@@ -27,6 +27,7 @@ from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
 from ormar.queryset.reverse_alias_resolver import ReverseAliasResolver
+from ormar.queryset.utils import get_limit_offset
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
@@ -1256,3 +1257,12 @@ class QuerySet(Generic[T]):
             sender=self.model_cls,  # type: ignore
             instances=objects,
         )
+
+    def __getitem__(self, key: Union[int, slice]) -> "QuerySet[T]":
+        """Retrieve an item or slice from the set of results."""
+
+        if not isinstance(key, (int, slice)):
+            raise TypeError(f"{key} is neither an integer nor a range.")
+
+        limit, offset = get_limit_offset(key=key)
+        return self.rebuild_self(offset=offset, limit_count=limit)
