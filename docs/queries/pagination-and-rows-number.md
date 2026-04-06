@@ -75,7 +75,12 @@ tracks = await Track.objects.limit(1).all()
     
     So operations like `filter()`, `select_related()`, `limit()` and `offset()` etc. can be chained.
     
-    Something like `Track.object.select_related("album").filter(album__name="Malibu").offset(1).limit(1).all()`
+    Something like `Track.objects.select_related("album").filter(album__name="Malibu").offset(1).limit(1).all()`
+
+!!!note
+    You can slice the results; But note that negative indexing is not supported.
+
+    Something like: `Track.objects[5:10].all()`
 
 ## offset
 
@@ -110,8 +115,12 @@ tracks = await Track.objects.offset(1).limit(1).all()
     
     So operations like `filter()`, `select_related()`, `limit()` and `offset()` etc. can be chained.
     
-    Something like `Track.object.select_related("album").filter(album__name="Malibu").offset(1).limit(1).all()`
+    Something like `Track.objects.select_related("album").filter(album__name="Malibu").offset(1).limit(1).all()`
 
+!!!note
+    You can slice the results; But note that negative indexing is not supported.
+
+    Something like: `Track.objects[5:10].all()`
 
 
 ## get

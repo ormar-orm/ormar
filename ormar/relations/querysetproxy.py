@@ -870,3 +870,19 @@ class QuerysetProxy(Generic[T]):
         return self.__class__(
             relation=self.relation, type_=self.type_, to=self.to, qryset=queryset
         )
+
+    def __getitem__(self, key: Union[int, slice]) -> "QuerysetProxy[T]":
+        """
+        You can slice the results to desired number of parent models.
+
+        Actual call delegated to QuerySet.
+
+        :param key: numbers of models to slicing
+        :type key: int | slice
+        :return: QuerysetProxy
+        :rtype: QuerysetProxy
+        """
+        queryset = self.queryset[key]
+        return self.__class__(
+            relation=self.relation, type_=self.type_, to=self.to, qryset=queryset
+        )
