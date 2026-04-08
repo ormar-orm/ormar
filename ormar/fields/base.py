@@ -286,6 +286,7 @@ class BaseField(FieldInfo):  # type: ignore[misc]
                 self.column_type,
                 *self.construct_constraints(),
                 primary_key=self.primary_key,
+                autoincrement=self.autoincrement,
                 nullable=self.sql_nullable,
                 index=self.index,
                 unique=self.unique,
