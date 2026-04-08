@@ -63,7 +63,7 @@ def test_fields_access():
     assert curr_field._source_model == PriceList
 
     with pytest.raises(AttributeError):
-        assert Product.category >= 3
+        assert Category.price_lists >= 3
 
 
 @pytest.mark.parametrize(
