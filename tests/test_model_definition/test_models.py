@@ -4,7 +4,7 @@ import datetime
 import os
 import uuid
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional, get_args
 
 import pydantic
 import pytest
@@ -139,6 +139,20 @@ class NotNullableCountry(ormar.Model):
     name: CountryNameEnum = ormar.Enum(enum_class=CountryNameEnum, nullable=False)
 
 
+class UserRole(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="user_roles")
+
+    id: int = ormar.Integer(primary_key=True)
+    mode: Literal["user", "manager", "admin"] = ormar.String(
+        max_length=32, choices=["user", "manager", "admin"]
+    )
+    optional_mode: Optional[Literal["user", "manager", "admin"]] = ormar.String(
+        max_length=32,
+        choices=["user", "manager", "admin"],
+        nullable=True,
+    )
+
+
 create_test_database = init_tests(base_ormar_config)
 
 
@@ -156,6 +170,20 @@ def test_model_class():
 def test_wrong_field_name():
     with pytest.raises(ModelError):
         User(non_existing_pk=1)
+
+
+def test_string_choices_field_definition():
+    field = UserRole.ormar_config.model_fields["mode"]
+
+    assert isinstance(field.column_type, sqlalchemy.String)
+    assert field.column_type.length == 32
+    assert field.choices == ["user", "manager", "admin"]
+    assert get_args(field.__pydantic_type__) == ("user", "manager", "admin")
+
+
+def test_string_field_rejects_non_string_choices():
+    with pytest.raises(ormar.ModelDefinitionError):
+        ormar.String(max_length=8, choices=["user", 1])  # type: ignore[list-item]
 
 
 def test_model_pk():
@@ -523,6 +551,39 @@ async def test_nullable_field_model_enum():
 
         with pytest.raises(ValueError):
             await NotNullableCountry(name=None).save()
+
+
+@pytest.mark.asyncio
+async def test_string_choices_field_validation():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            role = await UserRole.objects.create(mode="user", optional_mode=None)
+            assert role.mode == "user"
+            assert role.optional_mode is None
+
+            role.optional_mode = "manager"
+            assert role.optional_mode == "manager"
+
+            role.mode = "admin"
+            await role.update()
+            refreshed = await UserRole.objects.get(pk=role.pk)
+            assert refreshed.mode == "admin"
+            assert refreshed.optional_mode == "manager"
+
+            with pytest.raises(ValueError):
+                UserRole(mode="guest")
+
+            with pytest.raises(ValueError):
+                role.mode = "guest"
+
+            with pytest.raises(ValueError):
+                await UserRole(mode="guest").save()
+
+            with pytest.raises(ValueError):
+                await UserRole.objects.filter(pk=role.pk).update(mode="guest")
+
+            with pytest.raises(ValueError):
+                role.optional_mode = "guest"
 
 
 @pytest.mark.asyncio
