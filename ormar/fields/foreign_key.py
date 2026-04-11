@@ -299,6 +299,7 @@ def ForeignKey(  # type: ignore # noqa CFQ002
         related_orders_by=related_orders_by,
         skip_reverse=skip_reverse,
         skip_field=skip_field,
+        **kwargs,
     )
 
     Field = type("ForeignKey", (ForeignKeyField, BaseField), {})
