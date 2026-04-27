@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Optional, cast
 
 import ormar
+from ormar.models.excludable import skip_ellipsis
 from ormar.queryset.utils import translate_list_to_dict
 
 if TYPE_CHECKING:  # pragma no cover
@@ -113,8 +114,9 @@ class MergeModelMixin:
                     cls.merge_two_instances(
                         current_field,
                         other_value,
-                        relation_map=one._skip_ellipsis(  # type: ignore
-                            relation_map, field_name, default_return=dict()
+                        relation_map=cast(
+                            Optional[dict],
+                            skip_ellipsis(relation_map, field_name, default=dict()),
                         ),
                     ),
                 )
@@ -156,8 +158,9 @@ class MergeModelMixin:
                 new_val = cls.merge_two_instances(
                     cur_field,
                     cast("Model", old_value),
-                    relation_map=cur_field._skip_ellipsis(  # type: ignore
-                        relation_map, field_name, default_return=dict()
+                    relation_map=cast(
+                        Optional[dict],
+                        skip_ellipsis(relation_map, field_name, default=dict()),
                     ),
                 )
                 value_to_set = [x for x in value_to_set if x != cur_field] + [new_val]
