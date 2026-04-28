@@ -374,7 +374,7 @@ class ExcludableItems:
         :return: Excludable for given model and alias
         :rtype: ormar.models.excludable.Excludable
         """
-        key = excludable_key(model_cls, alias)
+        key = f"{alias + '_' if alias else ''}{model_cls.get_name(lower=True)}"
         excludable = self.items.get(key)
         if not excludable:
             excludable = Excludable()
@@ -457,9 +457,8 @@ class ExcludableItems:
                 self._flatten_paths.add(path_parts + (item,))
             self._flatten_map_cache = None
 
-        excludable = self.items.setdefault(
-            excludable_key(model_cls, alias), Excludable()
-        )
+        key = f"{alias + '_' if alias else ''}{model_cls.get_name(lower=True)}"
+        excludable = self.items.setdefault(key, Excludable())
         excludable.set_values(value=items, slot=slot)
 
     def _traverse_dict(  # noqa: CFQ002
@@ -636,7 +635,11 @@ class ExcludableItems:
                 source_model=source_model,
                 related_parts=list(parts),
             )
-            child = self.items.get(excludable_key(target_model, table_prefix))
+            child_key = (
+                f"{table_prefix + '_' if table_prefix else ''}"
+                f"{target_model.get_name(lower=True)}"
+            )
+            child = self.items.get(child_key)
             if not child:
                 continue
             conflicts = (child.include | child.exclude) - {...}
@@ -647,21 +650,6 @@ class ExcludableItems:
                     f"{sorted(conflicts)}. A flattened relation renders only "
                     f"its primary key and cannot have children selected."
                 )
-
-
-def excludable_key(model_cls: type["Model"], alias: str) -> str:
-    """
-    Compose the ``{alias}_{model_name}`` key used across ExcludableItems
-    lookups. Centralized here so every call site keys entries the same way.
-
-    :param model_cls: target model class
-    :type model_cls: type[Model]
-    :param alias: table alias from the relation manager (may be empty)
-    :type alias: str
-    :return: lookup key for ``ExcludableItems.items``
-    :rtype: str
-    """
-    return f"{alias + '_' if alias else ''}{model_cls.get_name(lower=True)}"
 
 
 def join_path(parts: PathParts, tail: Optional[str] = None) -> str:
