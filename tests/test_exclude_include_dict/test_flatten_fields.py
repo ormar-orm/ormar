@@ -120,115 +120,71 @@ async def _setup_post_graph():
 
 
 @pytest.mark.asyncio
-async def test_flatten_fk_string_form():
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            _, company, _, car = await _setup_car_graph()
-            cars = (
-                await Car.objects.select_related("manufacturer")
-                .flatten_fields("manufacturer")
-                .all()
-            )
-            assert cars[0].model_dump()["manufacturer"] == company.id
-
-
-@pytest.mark.asyncio
-async def test_flatten_fk_list_form():
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            _, company, _, _ = await _setup_car_graph()
-            cars = (
-                await Car.objects.select_related("manufacturer")
-                .flatten_fields(["manufacturer"])
-                .all()
-            )
-            assert cars[0].model_dump()["manufacturer"] == company.id
-
-
-@pytest.mark.asyncio
-async def test_flatten_fk_set_form():
+@pytest.mark.parametrize(
+    "flatten_arg",
+    [
+        "manufacturer",
+        ["manufacturer"],
+        {"manufacturer"},
+        {"manufacturer": ...},
+        Car.manufacturer,
+    ],
+    ids=["string", "list", "set", "dict_ellipsis", "field_accessor"],
+)
+async def test_flatten_fk_input_forms(flatten_arg):
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
             _, company, _, _ = await _setup_car_graph()
             cars = (
                 await Car.objects.select_related("manufacturer")
-                .flatten_fields({"manufacturer"})
+                .flatten_fields(flatten_arg)
                 .all()
             )
             assert cars[0].model_dump()["manufacturer"] == company.id
 
 
 @pytest.mark.asyncio
-async def test_flatten_fk_dict_ellipsis_form():
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            _, company, _, _ = await _setup_car_graph()
-            cars = (
-                await Car.objects.select_related("manufacturer")
-                .flatten_fields({"manufacturer": ...})
-                .all()
-            )
-            assert cars[0].model_dump()["manufacturer"] == company.id
-
-
-@pytest.mark.asyncio
-async def test_flatten_fk_field_accessor():
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            _, company, _, _ = await _setup_car_graph()
-            cars = (
-                await Car.objects.select_related("manufacturer")
-                .flatten_fields(Car.manufacturer)
-                .all()
-            )
-            assert cars[0].model_dump()["manufacturer"] == company.id
-
-
-@pytest.mark.asyncio
-async def test_flatten_fk_multiple_relations():
+@pytest.mark.parametrize(
+    "flatten_arg",
+    [["manufacturer", "lead_manager"], {"manufacturer": ..., "lead_manager": ...}],
+    ids=["list", "dict_ellipsis"],
+)
+async def test_flatten_fk_multiple_relations(flatten_arg):
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
             _, company, manager, _ = await _setup_car_graph()
-            cars_string = (
+            cars = (
                 await Car.objects.select_related(["manufacturer", "lead_manager"])
-                .flatten_fields(["manufacturer", "lead_manager"])
+                .flatten_fields(flatten_arg)
                 .all()
             )
-            cars_dict = (
-                await Car.objects.select_related(["manufacturer", "lead_manager"])
-                .flatten_fields({"manufacturer": ..., "lead_manager": ...})
-                .all()
-            )
-            for car_row in (cars_string[0], cars_dict[0]):
-                data = car_row.model_dump()
-                assert data["manufacturer"] == company.id
-                assert data["lead_manager"] == manager.id
+            data = cars[0].model_dump()
+            assert data["manufacturer"] == company.id
+            assert data["lead_manager"] == manager.id
 
 
 @pytest.mark.asyncio
-async def test_flatten_fk_deep_dunder_vs_dict():
+@pytest.mark.parametrize(
+    "flatten_arg",
+    [
+        "manufacturer__hq",
+        {"manufacturer": {"hq": ...}},
+        [Car.manufacturer.hq],  # type: ignore[union-attr]
+    ],
+    ids=["dunder", "dict", "field_accessor"],
+)
+async def test_flatten_fk_deep_dunder_vs_dict(flatten_arg):
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
             hq, _, _, _ = await _setup_car_graph()
-            cars_dunder = (
+            cars = (
                 await Car.objects.select_related("manufacturer__hq")
-                .flatten_fields("manufacturer__hq")
+                .flatten_fields(flatten_arg)
                 .all()
             )
-            cars_dict = (
-                await Car.objects.select_related("manufacturer__hq")
-                .flatten_fields({"manufacturer": {"hq": ...}})
-                .all()
-            )
-            cars_accessor = (
-                await Car.objects.select_related("manufacturer__hq")
-                .flatten_fields([Car.manufacturer.hq])
-                .all()
-            )
-            for car_row in (cars_dunder[0], cars_dict[0], cars_accessor[0]):
-                data = car_row.model_dump()
-                assert isinstance(data["manufacturer"], dict)
-                assert data["manufacturer"]["hq"] == hq.id
+            data = cars[0].model_dump()
+            assert isinstance(data["manufacturer"], dict)
+            assert data["manufacturer"]["hq"] == hq.id
 
 
 # ---------------------------------------------------------------------------
@@ -336,47 +292,44 @@ async def test_flatten_m2m_suppresses_through_models():
 
 
 @pytest.mark.asyncio
-async def test_flatten_fk_then_m2m_both_styles():
+@pytest.mark.parametrize(
+    "flatten_arg",
+    ["posts__categories", {"posts": {"categories": ...}}],
+    ids=["dunder", "dict"],
+)
+async def test_flatten_fk_then_m2m_both_styles(flatten_arg):
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
             _, cat_a, cat_b, _ = await _setup_post_graph()
-
-            posts_dunder = (
+            authors = (
                 await Author.objects.select_related("posts__categories")
-                .flatten_fields("posts__categories")
+                .flatten_fields(flatten_arg)
                 .all()
             )
-            posts_dict = (
-                await Author.objects.select_related("posts__categories")
-                .flatten_fields({"posts": {"categories": ...}})
-                .all()
+            data = authors[0].model_dump()
+            assert sorted(data["posts"][0]["categories"]) == sorted(
+                [cat_a.id, cat_b.id]
             )
-            for author_row in (posts_dunder[0], posts_dict[0]):
-                data = author_row.model_dump()
-                assert sorted(data["posts"][0]["categories"]) == sorted(
-                    [cat_a.id, cat_b.id]
-                )
 
 
 @pytest.mark.asyncio
-async def test_flatten_three_levels_deep():
+@pytest.mark.parametrize(
+    "flatten_arg",
+    ["manufacturer__hq", {"manufacturer": {"hq": ...}}],
+    ids=["dunder", "dict"],
+)
+async def test_flatten_three_levels_deep(flatten_arg):
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
             hq, _, _, _ = await _setup_car_graph()
             # flatten the deepest hop — car.manufacturer is still a dict, but
             # manufacturer.hq renders as its pk
-            rows_dunder = (
+            rows = (
                 await Car.objects.select_related("manufacturer__hq")
-                .flatten_fields("manufacturer__hq")
+                .flatten_fields(flatten_arg)
                 .all()
             )
-            rows_dict = (
-                await Car.objects.select_related("manufacturer__hq")
-                .flatten_fields({"manufacturer": {"hq": ...}})
-                .all()
-            )
-            for row in (rows_dunder[0], rows_dict[0]):
-                assert row.model_dump()["manufacturer"]["hq"] == hq.id
+            assert rows[0].model_dump()["manufacturer"]["hq"] == hq.id
 
 
 # ---------------------------------------------------------------------------
@@ -435,30 +388,25 @@ async def test_flatten_plus_exclude_same_relation_drops_field():
 
 
 @pytest.mark.asyncio
-async def test_flatten_conflicts_with_include_child_sub_fields():
+@pytest.mark.parametrize(
+    "build_query",
+    [
+        lambda: Car.objects.flatten_fields("manufacturer").fields(
+            {"manufacturer": {"name"}}
+        ),
+        lambda: Car.objects.flatten_fields("manufacturer").exclude_fields(
+            {"manufacturer": {"name"}}
+        ),
+        lambda: Car.objects.fields({"manufacturer": {"name"}}).flatten_fields(
+            "manufacturer"
+        ),
+    ],
+    ids=["include_after_flatten", "exclude_after_flatten", "include_before_flatten"],
+)
+async def test_flatten_conflicts_with_child_sub_fields(build_query):
     async with base_ormar_config.database:
         with pytest.raises(QueryDefinitionError, match="Flatten conflict"):
-            Car.objects.flatten_fields("manufacturer").fields(
-                {"manufacturer": {"name"}}
-            )
-
-
-@pytest.mark.asyncio
-async def test_flatten_conflicts_with_exclude_child_sub_fields():
-    async with base_ormar_config.database:
-        with pytest.raises(QueryDefinitionError, match="Flatten conflict"):
-            Car.objects.flatten_fields("manufacturer").exclude_fields(
-                {"manufacturer": {"name"}}
-            )
-
-
-@pytest.mark.asyncio
-async def test_flatten_conflicts_order_independent():
-    async with base_ormar_config.database:
-        with pytest.raises(QueryDefinitionError, match="Flatten conflict"):
-            Car.objects.fields({"manufacturer": {"name"}}).flatten_fields(
-                "manufacturer"
-            )
+            build_query()
 
 
 @pytest.mark.asyncio
@@ -726,42 +674,40 @@ async def test_flatten_direct_field_accessor_list():
 
 
 @pytest.mark.asyncio
-async def test_flatten_direct_plus_include_child_raises():
+@pytest.mark.parametrize(
+    "select_related, dump_kwargs",
+    [
+        (
+            "manufacturer",
+            {
+                "flatten_fields": "manufacturer",
+                "include": {"manufacturer": {"name"}},
+            },
+        ),
+        (
+            "manufacturer",
+            {
+                "flatten_fields": "manufacturer",
+                "exclude": {"manufacturer": {"name": ...}},
+            },
+        ),
+        (
+            "manufacturer__hq",
+            {
+                "flatten_fields": "manufacturer__hq",
+                "include": {"manufacturer": {"hq": {"city"}}},
+            },
+        ),
+    ],
+    ids=["include_child", "exclude_child", "deep_include_child"],
+)
+async def test_flatten_direct_conflict_raises(select_related, dump_kwargs):
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
             await _setup_car_graph()
-            cars = await Car.objects.select_related("manufacturer").all()
+            cars = await Car.objects.select_related(select_related).all()
             with pytest.raises(QueryDefinitionError, match="Flatten conflict"):
-                cars[0].model_dump(
-                    flatten_fields="manufacturer",
-                    include={"manufacturer": {"name"}},
-                )
-
-
-@pytest.mark.asyncio
-async def test_flatten_direct_plus_exclude_child_raises():
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            await _setup_car_graph()
-            cars = await Car.objects.select_related("manufacturer").all()
-            with pytest.raises(QueryDefinitionError, match="Flatten conflict"):
-                cars[0].model_dump(
-                    flatten_fields="manufacturer",
-                    exclude={"manufacturer": {"name": ...}},
-                )
-
-
-@pytest.mark.asyncio
-async def test_flatten_direct_deep_conflict_raises():
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            await _setup_car_graph()
-            cars = await Car.objects.select_related("manufacturer__hq").all()
-            with pytest.raises(QueryDefinitionError, match="Flatten conflict"):
-                cars[0].model_dump(
-                    flatten_fields="manufacturer__hq",
-                    include={"manufacturer": {"hq": {"city"}}},
-                )
+                cars[0].model_dump(**dump_kwargs)
 
 
 @pytest.mark.asyncio
