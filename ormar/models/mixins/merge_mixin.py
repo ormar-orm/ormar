@@ -6,6 +6,7 @@ from ormar.queryset.utils import translate_list_to_dict
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
+    from ormar.models.excludable import ExcludableItems
 
 
 class MergeModelMixin:
@@ -43,16 +44,29 @@ class MergeModelMixin:
         return cls._recursive_add(added_values)
 
     @classmethod
-    def merge_instances_list(cls, result_rows: list["Model"]) -> list["Model"]:
+    def merge_instances_list(
+        cls,
+        result_rows: list["Model"],
+        *,
+        excludable: "ExcludableItems",
+    ) -> list["Model"]:
         """
         Merges a list of models into list of unique models.
 
         Models can duplicate during joins when parent model has multiple child rows,
         in the end all parent (main) models should be unique.
 
+        Each merged top-level model also has the queryset's ``ExcludableItems``
+        attached via the ``__ormar_excludable__`` slot so a bare ``model_dump()``
+        on the result can resolve the (lazily cached) flatten map without going
+        back through the queryset.
+
         :param result_rows: list of already initialized Models with child models
         populated, each instance is one row in db and some models can duplicate
         :type result_rows: list["Model"]
+        :param excludable: ExcludableItems to attach to every merged top-level
+            instance via the ``__ormar_excludable__`` slot
+        :type excludable: ExcludableItems
         :return: list of merged models where each main model is unique
         :rtype: list["Model"]
         """
@@ -64,6 +78,7 @@ class MergeModelMixin:
 
         for group in grouped_instances.values():
             model = cls._recursive_add(group)[0]
+            object.__setattr__(model, "__ormar_excludable__", excludable)
             merged_rows.append(model)
 
         return merged_rows

@@ -194,25 +194,11 @@ class QuerySet(Generic[T]):
                 await asyncio.sleep(0)
 
         if result_rows:
-            merged = self.model.merge_instances_list(result_rows)  # type: ignore
-            self._attach_excludable_to_instances(merged)
-            return merged  # type: ignore
+            return self.model.merge_instances_list(  # type: ignore[return-value]
+                result_rows,  # type: ignore[arg-type]
+                excludable=self._excludable,
+            )
         return cast(list["T"], result_rows)
-
-    def _attach_excludable_to_instances(self, instances: list) -> None:
-        """
-        Attach the queryset's ``ExcludableItems`` reference to each returned
-        top-level instance via the ``__ormar_excludable__`` slot so bare
-        ``model_dump()`` calls can read the (lazily cached) flatten map.
-        The reference is shared across instances and the slot already exists
-        on every model, so the per-instance memory delta is a single pointer.
-
-        :param instances: merged list of top-level instances to tag
-        :type instances: list
-        """
-        for instance in instances:
-            if instance is not None:
-                object.__setattr__(instance, "__ormar_excludable__", self._excludable)
 
     def _resolve_filter_groups(
         self, groups: Any
