@@ -264,9 +264,9 @@ def test_flatten_map_caches_and_invalidates_on_new_path():
 
 def test_flatten_has_flatten_entries_flag():
     excludable = ExcludableItems()
-    assert excludable.has_flatten_entries() is False
+    assert not any(entry.flatten for entry in excludable.items.values())
     excludable.build(items="manufacturer", model_cls=Car, slot="flatten")
-    assert excludable.has_flatten_entries() is True
+    assert any(entry.flatten for entry in excludable.items.values())
 
 
 def test_flatten_copy_preserves_paths_and_sets():

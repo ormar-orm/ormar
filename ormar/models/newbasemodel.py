@@ -740,16 +740,16 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             (flattened or skipped)
         :rtype: Optional[NestedDescent]
         """
-        if flatten_map is not None and flatten_map.is_field_flattened(field):
-            if isinstance(nested_model, MutableSequence):
-                if not exclude_list:
-                    dict_instance[field] = [m.pk for m in nested_model]
-            elif nested_model is not None:
-                dict_instance[field] = nested_model.pk
-            else:
-                dict_instance[field] = None
+        is_sequence = isinstance(nested_model, MutableSequence)
+        if is_sequence and exclude_list:
             return None
-        if isinstance(nested_model, MutableSequence) and exclude_list:
+        if flatten_map is not None and flatten_map.is_field_flattened(field):
+            if is_sequence:
+                dict_instance[field] = [m.pk for m in nested_model]
+            else:
+                dict_instance[field] = (
+                    nested_model.pk if nested_model is not None else None
+                )
             return None
         return NestedDescent(
             flatten_map=flatten_map.descend(field) if flatten_map is not None else None,

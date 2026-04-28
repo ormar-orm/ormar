@@ -344,15 +344,6 @@ class ExcludableItems:
             count += len(self.items[key].include)
         return count
 
-    def has_flatten_entries(self) -> bool:
-        """
-        Returns whether any Excludable entry has flatten markers.
-
-        :return: True if at least one entry has a non-empty flatten set
-        :rtype: bool
-        """
-        return any(entry.flatten for entry in self.items.values())
-
     def flatten_map(self) -> Optional[FlattenMap]:
         """
         Return a :class:`FlattenMap` over the stored flatten paths, built

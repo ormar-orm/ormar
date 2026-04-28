@@ -17,6 +17,18 @@ def build_flatten_map(paths: Iterable[PathParts]) -> dict:
     Build a nested-Ellipsis dict from pre-split flatten path tuples — the
     runtime representation threaded through ``model_dump`` recursion.
 
+    Example::
+
+        paths = [
+            ("author", "name"),
+            ("author", "email"),
+            ("category", "title"),
+        ]
+        build_flatten_map(paths) == {
+            "author": {"name": ..., "email": ...},
+            "category": {"title": ...},
+        }
+
     :param paths: iterable of tuple paths (each path already split on ``__``)
     :type paths: Iterable[PathParts]
     :return: nested dict where leaves are ``...``
