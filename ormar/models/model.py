@@ -38,6 +38,32 @@ class Model(ModelRow):
             )
         return row
 
+    async def _emit_signal(self, name: str, **kwargs: Any) -> None:
+        """
+        Emit a lifecycle signal on this model's SignalEmitter.
+
+        When ``ormar_config.emit_parent_signals`` is True, the same signal is
+        also dispatched on every concrete ormar ancestor in the MRO. Each
+        emit uses ``sender=ancestor_cls`` so handlers registered with
+        ``@pre_save(Parent)`` see the parent class as the sender.
+
+        :param name: signal name on the SignalEmitter (e.g. ``"pre_save"``).
+        :type name: str
+        :param kwargs: extra payload forwarded to receivers.
+        :type kwargs: Any
+        """
+        cls = type(self)
+        await getattr(self.ormar_config.signals, name).send(sender=cls, **kwargs)
+        if not self.ormar_config.emit_parent_signals:
+            return
+        seen = {id(self.ormar_config.signals)}
+        for ancestor in cls.__mro__[1:]:
+            cfg = getattr(ancestor, "ormar_config", None)
+            if cfg is None or cfg.abstract or id(cfg.signals) in seen:
+                continue
+            seen.add(id(cfg.signals))
+            await getattr(cfg.signals, name).send(sender=ancestor, **kwargs)
+
     async def upsert(self: T, **kwargs: Any) -> T:
         """
         Performs either a save or an update depending on the presence of the pk.
@@ -85,7 +111,7 @@ class Model(ModelRow):
         :return: saved Model
         :rtype: Model
         """
-        await self.signals.pre_save.send(sender=self.__class__, instance=self)
+        await self._emit_signal("pre_save", instance=self)
         self_fields = self._extract_model_db_fields()
 
         if (
@@ -138,7 +164,7 @@ class Model(ModelRow):
             await self.load()
 
         self.__setattr_fields__.clear()
-        await self.signals.post_save.send(sender=self.__class__, instance=self)
+        await self._emit_signal("post_save", instance=self)
         return self
 
     async def save_related(  # noqa: CCR001, CFQ002
@@ -274,9 +300,7 @@ class Model(ModelRow):
                 "You cannot update not saved model! Use save or upsert method."
             )
 
-        await self.signals.pre_update.send(
-            sender=self.__class__, instance=self, passed_args=kwargs
-        )
+        await self._emit_signal("pre_update", instance=self, passed_args=kwargs)
         self_fields = self._extract_model_db_fields()
         self_fields.pop(self.get_column_name_from_alias(self.ormar_config.pkname))
         if _columns:
@@ -292,7 +316,7 @@ class Model(ModelRow):
             await self._execute_query(expr)
         self.set_save_status(True)
         self.__setattr_fields__.clear()
-        await self.signals.post_update.send(sender=self.__class__, instance=self)
+        await self._emit_signal("post_update", instance=self)
         return self
 
     async def delete(self) -> int:
@@ -310,12 +334,12 @@ class Model(ModelRow):
         :return: number of deleted rows (for some backends)
         :rtype: int
         """
-        await self.signals.pre_delete.send(sender=self.__class__, instance=self)
+        await self._emit_signal("pre_delete", instance=self)
         expr = self.ormar_config.table.delete()
         expr = expr.where(self.pk_column == (getattr(self, self.ormar_config.pkname)))
         result = await self._execute_query(expr)
         self.set_save_status(False)
-        await self.signals.post_delete.send(sender=self.__class__, instance=self)
+        await self._emit_signal("post_delete", instance=self)
         return result
 
     async def load(self: T) -> T:

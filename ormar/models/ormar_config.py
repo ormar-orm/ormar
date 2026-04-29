@@ -22,6 +22,8 @@ class OrmarConfig:
         tablename: str
         order_by: list[str]
         abstract: bool
+        proxy: bool
+        emit_parent_signals: bool
         exclude_parent_fields: list[str]
         constraints: list[ColumnCollectionConstraint]
 
@@ -33,6 +35,8 @@ class OrmarConfig:
         tablename: Optional[str] = None,
         order_by: Optional[list[str]] = None,
         abstract: bool = False,
+        proxy: bool = False,
+        emit_parent_signals: bool = False,
         queryset_class: type[QuerySet] = QuerySet,
         extra: Extra = Extra.forbid,
         constraints: Optional[list[ColumnCollectionConstraint]] = None,
@@ -52,6 +56,8 @@ class OrmarConfig:
         self.property_fields: set = set()
         self.signals: SignalEmitter = SignalEmitter()
         self.abstract = abstract
+        self.proxy = proxy
+        self.emit_parent_signals = emit_parent_signals
         self.requires_ref_update: bool = False
         self.extra = extra
         self.queryset_class = queryset_class
@@ -65,6 +71,8 @@ class OrmarConfig:
         tablename: Optional[str] = None,
         order_by: Optional[list[str]] = None,
         abstract: Optional[bool] = None,
+        proxy: Optional[bool] = None,
+        emit_parent_signals: Optional[bool] = None,
         queryset_class: Optional[type[QuerySet]] = None,
         extra: Optional[Extra] = None,
         constraints: Optional[list[ColumnCollectionConstraint]] = None,
@@ -76,6 +84,12 @@ class OrmarConfig:
             tablename=tablename,
             order_by=order_by,
             abstract=abstract or self.abstract,
+            proxy=proxy if proxy is not None else self.proxy,
+            emit_parent_signals=(
+                emit_parent_signals
+                if emit_parent_signals is not None
+                else self.emit_parent_signals
+            ),
             queryset_class=queryset_class or self.queryset_class,
             extra=extra or self.extra,
             constraints=constraints,

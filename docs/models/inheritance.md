@@ -1,9 +1,10 @@
 # Inheritance
 
-Out of various types of ORM models inheritance `ormar` currently supports two of them:
+Out of various types of ORM models inheritance `ormar` currently supports three of them:
 
 * **Mixins**
 * **Concrete table inheritance** (with parents set to `abstract=True`)
+* **Proxy models** (with children set to `proxy=True`)
 
 ## Types of inheritance
 
@@ -15,6 +16,8 @@ The short summary of different types of inheritance:
 * **Concrete table inheritance [SUPPORTED]** - means that parent is marked as abstract
   and each child has its own table with columns from a parent and own child columns, kind
   of similar to Mixins but parent also is a Model
+* **Proxy models [SUPPORTED]** - means that only parent has an actual table,
+  children just add methods, modify settings etc. and share the parent's table
 * **Single table inheritance [NOT SUPPORTED]** - means that only one table is created
   with fields that are combination/sum of the parent and all children models but child
   models use only subset of column in db (all parent and own ones, skipping the other
@@ -23,8 +26,6 @@ The short summary of different types of inheritance:
   is saved on parent model and part is saved on child model that are connected to each
   other by kind of one to one relation and under the hood you operate on two models at
   once
-* **Proxy models [NOT SUPPORTED]** - means that only parent has an actual table,
-  children just add methods, modify settings etc.
 
 ## Mixins
 
@@ -192,6 +193,68 @@ assert isinstance(
     `created_date: str = ormar.String(max_length=200) # exception`
     
     `created_date: str = ormar.String(max_length=200, name="creation_date2") # exception`
+
+## Proxy models
+
+A proxy model is a child class that **shares its parent's table** and only adds
+methods, computed fields, or a custom `queryset_class`. Use it when you want
+multiple Python views over the same underlying table, for example to attach
+domain methods to a generic record type.
+
+To declare a proxy model, set `proxy=True` on the child's `OrmarConfig`:
+
+```python
+base_ormar_config = ormar.OrmarConfig(
+    database=DatabaseConnection(DATABASE_URL),
+    metadata=sqlalchemy.MetaData(),
+)
+
+
+class Human(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="humans")
+
+    id: int = ormar.Integer(primary_key=True)
+    first_name: str = ormar.String(max_length=50)
+    last_name: str = ormar.String(max_length=50)
+
+
+class User(Human):
+    ormar_config = base_ormar_config.copy(proxy=True)
+
+    def full_name(self) -> str:
+        return f"{self.first_name} {self.last_name}"
+```
+
+Both `Human.objects.all()` and `User.objects.all()` read from the same `humans`
+table; the only difference is that `User` rows are returned as `User` instances
+and gain the `full_name()` method.
+
+### Constraints
+
+* The base class must be a non-abstract `ormar.Model`. Proxying an
+  `abstract=True` parent raises `ModelDefinitionError` — use concrete
+  inheritance for that.
+* A proxy model **cannot** declare new ormar fields. Doing so raises
+  `ModelDefinitionError` because the schema is fixed by the parent.
+* `proxy=True` and `abstract=True` are mutually exclusive on the same class.
+* Proxy chains (e.g. `Admin(User)` with `proxy=True` where `User` itself is a
+  proxy of `Human`) are allowed and resolve back to the root concrete table.
+* All concrete ormar bases of a proxy must share the same table.
+
+### Behavior notes
+
+* Each proxy class has its own `SignalEmitter`, so a `pre_save` registered on
+  `User` does not fire when a `Human` instance is saved (and vice versa).
+  Set `emit_parent_signals=True` on the proxy's `OrmarConfig` to also dispatch
+  the parent's `pre_save` / `post_save` / `pre_update` / `post_update` /
+  `pre_delete` / `post_delete` handlers (with `sender=parent_cls`) on every
+  save / update / delete via the proxy. The flag is opt-in to preserve the
+  contract of existing handlers that assume the instance is the parent type.
+* Reverse relations defined on related models still point at the original
+  parent class — proxying does not create new reverse accessors.
+* The proxy's `queryset_class` and `extra` settings can be overridden via
+  `OrmarConfig.copy(proxy=True, queryset_class=...)` independently of the
+  parent.
 
 ## Relations in inheritance
 
