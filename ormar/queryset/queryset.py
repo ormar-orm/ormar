@@ -4,6 +4,7 @@ from typing import (
     Any,
     AsyncGenerator,
     Generic,
+    Iterable,
     Optional,
     Sequence,
     TypeVar,
@@ -27,12 +28,16 @@ from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
 from ormar.queryset.reverse_alias_resolver import ReverseAliasResolver
-from ormar.queryset.utils import normalize_slice
+from ormar.queryset.utils import (
+    extract_access_chains,
+    get_relationship_alias_model_and_str,
+    normalize_slice,
+)
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
     from ormar.models import T
-    from ormar.models.excludable import ExcludableItems
+    from ormar.models.excludable import ExcludableItems, Slot
     from ormar.models.ormar_config import OrmarConfig
 else:
     T = TypeVar("T", bound="Model")
@@ -189,7 +194,10 @@ class QuerySet(Generic[T]):
                 await asyncio.sleep(0)
 
         if result_rows:
-            return self.model.merge_instances_list(result_rows)  # type: ignore
+            return self.model.merge_instances_list(  # type: ignore[return-value]
+                result_rows,  # type: ignore[arg-type]
+                excludable=self._excludable,
+            )
         return cast(list["T"], result_rows)
 
     def _resolve_filter_groups(
@@ -375,10 +383,7 @@ class QuerySet(Generic[T]):
         """
         if not isinstance(related, list):
             related = [related]
-        related = [
-            rel._access_chain if isinstance(rel, FieldAccessor) else rel
-            for rel in related
-        ]
+        related = cast(list, extract_access_chains(related))
 
         related = sorted(list(set(list(self._select_related) + related)))
         return self.rebuild_self(select_related=related)
@@ -431,16 +436,92 @@ class QuerySet(Generic[T]):
         """
         if not isinstance(related, list):
             related = [related]
-        related = [
-            rel._access_chain if isinstance(rel, FieldAccessor) else rel
-            for rel in related
-        ]
+        related = cast(list, extract_access_chains(related))
 
         related = list(set(list(self._prefetch_related) + related))
         return self.rebuild_self(prefetch_related=related)
 
+    def flatten_fields(
+        self,
+        columns: Union[list, str, set, tuple, dict, FieldAccessor],
+    ) -> "QuerySet[T]":
+        """
+        Render selected related models as their primary-key value on
+        ``model_dump()`` instead of the default nested dict.
+
+        Accepts the same input forms as :py:meth:`fields` / :py:meth:`exclude_fields`
+        plus ``FieldAccessor`` / list of accessors. Missing relations are
+        auto-loaded: single-valued foreign keys go into ``select_related``,
+        many-to-many and reverse relations into ``prefetch_related``.
+
+        Chained calls merge. A flatten directive conflicts with any include or
+        exclude sub-field selection on the same relation (scalar output has no
+        place for children).
+
+        :param columns: relations to flatten on serialization
+        :type columns: Union[list, str, set, tuple, dict, FieldAccessor]
+        :return: new QuerySet with the flatten spec applied
+        :rtype: QuerySet[T]
+        """
+        normalized = extract_access_chains(columns)
+
+        excludable = ormar.ExcludableItems.from_excludable(self._excludable)
+        excludable.build(
+            items=normalized,
+            model_cls=self.model_cls,  # type: ignore
+            slot="flatten",
+        )
+        excludable.validate_flatten_vs_excludable(
+            source_model=self.model_cls  # type: ignore
+        )
+
+        select_to_add, prefetch_to_add = self._classify_flatten_paths(
+            excludable._flatten_paths
+        )
+        new_select = sorted(set(self._select_related) | select_to_add)
+        new_prefetch = sorted(set(self._prefetch_related) | prefetch_to_add)
+        return self.rebuild_self(
+            excludable=excludable,
+            select_related=new_select,
+            prefetch_related=new_prefetch,
+        )
+
+    def _classify_flatten_paths(
+        self, paths: Iterable[tuple[str, ...]]
+    ) -> tuple[set[str], set[str]]:
+        """
+        Split flatten tuple paths into ``select_related`` (single-valued FK,
+        incl. self-ref) and ``prefetch_related`` (m2m / reverse) buckets so
+        the caller can auto-add whichever the user hasn't loaded already.
+
+        :param paths: pre-split tuple paths collected during flatten build
+        :type paths: Iterable[tuple[str, ...]]
+        :return: (paths for select_related, paths for prefetch_related) — each
+            as dunder strings for downstream ``select_related`` /
+            ``prefetch_related`` call sites
+        :rtype: tuple[set[str], set[str]]
+        """
+        select_paths: set[str] = set()
+        prefetch_paths: set[str] = set()
+        source_model = self.model
+        for parts in paths:
+            parent_model: type["Model"] = source_model
+            if len(parts) > 1:
+                _, parent_model, _, _ = get_relationship_alias_model_and_str(
+                    source_model=source_model,
+                    related_parts=list(parts[:-1]),
+                )
+            field = parent_model.ormar_config.model_fields[parts[-1]]
+            bucket = (
+                prefetch_paths
+                if getattr(field, "is_multi", False) or getattr(field, "virtual", False)
+                else select_paths
+            )
+            bucket.add("__".join(parts))
+        return select_paths, prefetch_paths
+
     def fields(
-        self, columns: Union[list, str, set, dict], _is_exclude: bool = False
+        self, columns: Union[list, str, set, dict], slot: "Slot" = "include"
     ) -> "QuerySet[T]":
         """
         With `fields()` you can select subset of model columns to limit the data load.
@@ -479,8 +560,8 @@ class QuerySet(Generic[T]):
 
         To include whole nested model specify model related field name and ellipsis.
 
-        :param _is_exclude: flag if it's exclude or include operation
-        :type _is_exclude: bool
+        :param slot: which Excludable slot to write into ("include" or "exclude")
+        :type slot: Slot
         :param columns: columns to include
         :type columns: Union[list, str, set, dict]
         :return: QuerySet
@@ -490,8 +571,12 @@ class QuerySet(Generic[T]):
         excludable.build(
             items=columns,
             model_cls=self.model_cls,  # type: ignore
-            is_exclude=_is_exclude,
+            slot=slot,
         )
+        if excludable._flatten_paths:
+            excludable.validate_flatten_vs_excludable(
+                source_model=self.model_cls  # type: ignore
+            )
 
         return self.rebuild_self(excludable=excludable)
 
@@ -522,7 +607,7 @@ class QuerySet(Generic[T]):
         :return: QuerySet
         :rtype: QuerySet
         """
-        return self.fields(columns=columns, _is_exclude=True)
+        return self.fields(columns=columns, slot="exclude")
 
     def order_by(self, columns: Union[list, str, OrderAction]) -> "QuerySet[T]":
         """

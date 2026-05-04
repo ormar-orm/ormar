@@ -12,6 +12,7 @@ from pydantic_core import CoreSchema, SchemaValidator
 import ormar  # noqa: I100, I202
 from ormar.exceptions import ModelPersistenceError
 from ormar.fields.parsers import encode_json
+from ormar.models.excludable import skip_ellipsis
 from ormar.models.mixins import AliasMixin
 from ormar.models.mixins.relation_mixin import RelationMixin
 
@@ -25,7 +26,6 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
     """
 
     if TYPE_CHECKING:  # pragma: nocover
-        _skip_ellipsis: Callable
         _json_fields: set[str]
         _bytes_fields: set[str]
         _onupdate_fields: set[str]
@@ -438,8 +438,8 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
                     update_count = await value.save_related(
                         follow=follow,
                         save_all=save_all,
-                        relation_map=self._skip_ellipsis(  # type: ignore
-                            relation_map, field.name, default_return={}
+                        relation_map=skip_ellipsis(
+                            relation_map, field.name, default={}
                         ),
                         update_count=update_count,
                         previous_model=self,

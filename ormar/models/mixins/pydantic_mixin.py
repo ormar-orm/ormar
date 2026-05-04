@@ -1,13 +1,18 @@
 import copy
 import string
 from random import choices
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 import pydantic
 from pydantic import BaseModel
 from pydantic._internal._decorators import DecoratorInfos
 
 from ormar.fields import BaseField, ForeignKeyField, ManyToManyField
+from ormar.models.excludable import (
+    filter_not_excluded_fields,
+    normalize_to_dict,
+    skip_ellipsis,
+)
 from ormar.models.mixins.relation_mixin import RelationMixin  # noqa: I100, I202
 from ormar.queryset.utils import translate_list_to_dict
 
@@ -17,8 +22,6 @@ class PydanticMixin(RelationMixin):
 
     if TYPE_CHECKING:  # pragma: no cover
         __pydantic_decorators__: DecoratorInfos
-        _skip_ellipsis: Callable
-        _get_not_excluded_fields: Callable
 
     @classmethod
     def get_pydantic(
@@ -52,13 +55,11 @@ class PydanticMixin(RelationMixin):
         include: Union[set, dict, None] = None,
         exclude: Union[set, dict, None] = None,
     ) -> type[pydantic.BaseModel]:
-        if include and isinstance(include, set):
-            include = translate_list_to_dict(include)
-        if exclude and isinstance(exclude, set):
-            exclude = translate_list_to_dict(exclude)
+        include = normalize_to_dict(include)
+        exclude = normalize_to_dict(exclude)
         fields_dict: dict[str, Any] = dict()
         defaults: dict[str, Any] = dict()
-        fields_to_process = cls._get_not_excluded_fields(
+        fields_to_process = filter_not_excluded_fields(
             fields={*cls.ormar_config.model_fields.keys()},
             include=include,
             exclude=exclude,
@@ -129,9 +130,11 @@ class PydanticMixin(RelationMixin):
         relation_map: dict[str, Any],
     ) -> tuple[type[BaseModel], dict]:
         target = field.to._convert_ormar_to_pydantic(
-            include=cls._skip_ellipsis(include, name),
-            exclude=cls._skip_ellipsis(exclude, name),
-            relation_map=cls._skip_ellipsis(relation_map, name, default_return=dict()),
+            include=skip_ellipsis(include, name),
+            exclude=skip_ellipsis(exclude, name),
+            relation_map=cast(
+                dict[str, Any], skip_ellipsis(relation_map, name, default=dict())
+            ),
         )
         if field.is_multi or field.virtual:
             target = list[target]  # type: ignore

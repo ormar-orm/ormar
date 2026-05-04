@@ -321,7 +321,7 @@ class ModelRow(NewBaseModel):
         # remove relations on through field
         model_excludable = excludable.get(model_cls=model_cls, alias=table_prefix)
         model_excludable.set_values(
-            value=model_cls.extract_related_names(), is_exclude=True
+            value=model_cls.extract_related_names(), slot="exclude"
         )
         child_dict = model_cls.extract_prefixed_table_columns(
             item={}, row=row, excludable=excludable, table_prefix=table_prefix
