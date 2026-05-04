@@ -18,7 +18,7 @@ async def test_updating_models_individually(
     async def update(authors: list[Author]):
         for author in authors:
             _ = await author.update(
-                name="".join(random.sample(string.ascii_letters, 5))
+                name="u_" + "".join(random.sample(string.ascii_letters, 5))
             )
 
     update(authors_in_db)
