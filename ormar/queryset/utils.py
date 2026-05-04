@@ -3,9 +3,9 @@ import copy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
 
-from ormar.exceptions import QueryDefinitionError
-
 import ormar_rust_utils
+
+from ormar.exceptions import QueryDefinitionError
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import BaseField, Model
