@@ -338,10 +338,14 @@ class ManyToManyField(  # type: ignore
             "__module__": self.owner.__module__,
             "__qualname__": f"{self.owner.__qualname__}.{class_name}",
         }
+        # Default through tables live in the owner's schema (the side declaring
+        # the M2M). User-supplied through models can override by configuring
+        # their own OrmarConfig.schema.
         new_config = ormar.models.ormar_config.OrmarConfig(
             tablename=table_name,
             database=self.owner.ormar_config.database,
             metadata=self.owner.ormar_config.metadata,
+            schema=self.owner.ormar_config.schema,
         )
         through_model = type(
             class_name,

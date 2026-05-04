@@ -17,3 +17,5 @@ services:
       MYSQL_DATABASE: testsuite
     ports:
       - 3306:3306
+    volumes:
+      - ./mysql-init:/docker-entrypoint-initdb.d:ro

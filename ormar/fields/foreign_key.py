@@ -103,9 +103,9 @@ def populate_fk_params_based_on_to_model(
     :return: tuple with target pydantic type, list of fk constraints and target col type
     :rtype: tuple[Any, list, Any]
     """
-    fk_string = (
-        to.ormar_config.tablename + "." + to.get_column_alias(to.ormar_config.pkname)
-    )
+    from ormar.models.helpers.sqlalchemy import qualified_fk_reference
+
+    fk_string = qualified_fk_reference(to, to.get_column_alias(to.ormar_config.pkname))
     to_field = to.ormar_config.model_fields[to.ormar_config.pkname]
     pk_only_model = create_dummy_model(to, to_field)
     __type__ = (

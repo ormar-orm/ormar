@@ -265,6 +265,41 @@ You can overwrite this parameter by providing `ormar_config` object's `tablename
 --8<-- "../docs_src/models/docs002.py"
 ```
 
+### Schemas
+
+You can place a model in a non-default database schema by passing `schema=` to
+`OrmarConfig` (or `OrmarConfig.copy()`). This lets you have multiple tables that
+share a name as long as they live in different schemas, and lets you logically
+group tables by domain.
+
+```python
+base = ormar.OrmarConfig(database=..., metadata=sqlalchemy.MetaData())
+
+class HrEmployee(ormar.Model):
+    ormar_config = base.copy(tablename="employees", schema="hr")
+    id: int = ormar.Integer(primary_key=True)
+
+class ItEmployee(ormar.Model):
+    ormar_config = base.copy(tablename="employees", schema="it")
+    id: int = ormar.Integer(primary_key=True)
+```
+
+`copy()` inherits the parent config's schema by default; pass `schema=None`
+explicitly to opt out, or pass a different value to override.
+
+#### Dialect support
+
+| Dialect    | Status                  | Notes |
+|------------|-------------------------|-------|
+| PostgreSQL | Supported               | True schemas. Cross-schema foreign keys work. You must `CREATE SCHEMA` before `metadata.create_all()`. |
+| MySQL      | Supported with caveats  | `schema` maps to a database name (qualified `db.tbl`). Cross-database FKs require both tables to be InnoDB. `DEFERRABLE`/`MATCH` are not allowed. You must `CREATE DATABASE` before `metadata.create_all()`. |
+| SQLite     | Not supported           | SQLite forbids foreign keys whose parent and child live in different attached databases. Ormar raises `ModelDefinitionError` if it sees a cross-schema FK targeting SQLite. |
+
+!!! warning
+    `metadata.create_all()` does **not** create the schemas themselves. You must
+    issue `CREATE SCHEMA <name>` (PostgreSQL) or `CREATE DATABASE <name>` (MySQL)
+    before tables can be created in those schemas.
+
 ### Constraints
 
 On a model level you can also set model-wise constraints on sql columns.

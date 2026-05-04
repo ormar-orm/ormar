@@ -58,7 +58,7 @@ class OrderAction(QueryAction):
         :rtype: sqlalchemy.sql.elements.TextClause
         """
         prefix = f"{self.table_prefix}_" if self.table_prefix else ""
-        return f"{prefix}{self.table}.{self.field_alias}"
+        return f"{prefix}{self.table.name}.{self.field_alias}"
 
     def get_min_or_max(self) -> sqlalchemy.sql.expression.TextClause:
         """
@@ -70,12 +70,12 @@ class OrderAction(QueryAction):
         :return: min or max function to order
         :rtype: sqlalchemy.sql.elements.TextClause
         """
-        prefix = f"{self.table_prefix}_" if self.table_prefix else ""
+        reference = self.get_field_name_text()
         if self.direction == "":
             function = "min" if not self.is_postgres_bool else "bool_or"
-            return text(f"{function}({prefix}{self.table}.{self.field_alias})")
+            return text(f"{function}({reference})")
         function = "max" if not self.is_postgres_bool else "bool_or"
-        return text(f"{function}({prefix}{self.table}.{self.field_alias}) desc")
+        return text(f"{function}({reference}) desc")
 
     def get_text_clause(self) -> sqlalchemy.sql.expression.TextClause:
         """

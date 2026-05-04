@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Optional, Union
 
 import sqlalchemy
+from pydantic_core import PydanticUndefined, PydanticUndefinedType
 from sqlalchemy.ext.asyncio import AsyncEngine
 from sqlalchemy.sql.schema import ColumnCollectionConstraint
 
@@ -20,6 +21,7 @@ class OrmarConfig:
         database: DatabaseConnection
         engine: AsyncEngine
         tablename: str
+        schema: Optional[str]
         order_by: list[str]
         abstract: bool
         proxy: bool
@@ -33,6 +35,7 @@ class OrmarConfig:
         database: Optional[DatabaseConnection] = None,
         engine: Optional[AsyncEngine] = None,
         tablename: Optional[str] = None,
+        schema: Optional[str] = None,
         order_by: Optional[list[str]] = None,
         abstract: bool = False,
         proxy: bool = False,
@@ -46,6 +49,7 @@ class OrmarConfig:
         self.database = database  # type: ignore
         self.engine = engine  # type: ignore
         self.tablename = tablename  # type: ignore
+        self.schema = schema
         self.orders_by = order_by or []
         self.columns: list[sqlalchemy.Column] = []
         self.constraints = constraints or []
@@ -69,6 +73,7 @@ class OrmarConfig:
         database: Optional[DatabaseConnection] = None,
         engine: Optional[AsyncEngine] = None,
         tablename: Optional[str] = None,
+        schema: Union[str, None, PydanticUndefinedType] = PydanticUndefined,
         order_by: Optional[list[str]] = None,
         abstract: Optional[bool] = None,
         proxy: Optional[bool] = None,
@@ -77,11 +82,17 @@ class OrmarConfig:
         extra: Optional[Extra] = None,
         constraints: Optional[list[ColumnCollectionConstraint]] = None,
     ) -> "OrmarConfig":
+        # PydanticUndefined distinguishes "omitted" (inherit parent schema)
+        # from an explicit ``schema=None`` (clear schema).
+        resolved_schema = (
+            self.schema if isinstance(schema, PydanticUndefinedType) else schema
+        )
         return OrmarConfig(
             metadata=metadata or self.metadata,
             database=database or self.database,
             engine=engine or self.engine,
             tablename=tablename,
+            schema=resolved_schema,
             order_by=order_by,
             abstract=abstract or self.abstract,
             proxy=proxy if proxy is not None else self.proxy,

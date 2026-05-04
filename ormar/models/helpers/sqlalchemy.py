@@ -16,6 +16,56 @@ if TYPE_CHECKING:  # pragma no cover
     from ormar.models.ormar_config import OrmarConfig
 
 
+def qualified_fk_reference(target: type["Model"], column_alias: str) -> str:
+    """
+    Builds the dotted reference string passed to ``sqlalchemy.ForeignKey``.
+
+    SQLAlchemy expects ``"schema.table.column"`` for cross-schema foreign keys
+    and ``"table.column"`` when the target is in the default schema.
+
+    :param target: target ormar Model
+    :type target: type["Model"]
+    :param column_alias: alias of the referenced column on the target table
+    :type column_alias: str
+    :return: dotted reference string
+    :rtype: str
+    """
+    config = target.ormar_config
+    prefix = f"{config.schema}." if config.schema else ""
+    return f"{prefix}{config.tablename}.{column_alias}"
+
+
+def validate_cross_schema_constraints(
+    metadata: sqlalchemy.MetaData, dialect_name: str
+) -> None:
+    """
+    Rejects cross-schema foreign keys on dialects that cannot enforce them.
+
+    SQLite forbids foreign keys whose parent and child tables live in different
+    attached databases. Detecting this at metaclass time is unreliable because
+    models are usually declared before the engine/dialect is known, so the check
+    runs against the assembled metadata before ``create_all``.
+
+    :raises ModelDefinitionError: if a cross-schema FK is found on SQLite
+    :param metadata: metadata holding all the registered ormar tables
+    :type metadata: sqlalchemy.MetaData
+    :param dialect_name: name of the dialect about to issue DDL
+    :type dialect_name: str
+    """
+    if dialect_name != "sqlite":
+        return
+    for table in metadata.sorted_tables:
+        for fk in table.foreign_keys:
+            parent_schema = fk.column.table.schema
+            child_schema = table.schema
+            if parent_schema != child_schema:
+                raise ormar.ModelDefinitionError(
+                    f"SQLite does not support foreign keys across schemas: "
+                    f"{table.fullname}.{fk.parent.name} -> {fk.column.table.fullname}."
+                    " Use PostgreSQL or MySQL, or keep both tables in the same schema."
+                )
+
+
 def adjust_through_many_to_many_model(model_field: "ManyToManyField") -> None:
     """
     Registers m2m relation on through model.
@@ -104,7 +154,7 @@ def create_and_append_m2m_fk(
         field_name,
         pk_column.type,
         sqlalchemy.schema.ForeignKey(
-            model.ormar_config.tablename + "." + pk_alias,
+            qualified_fk_reference(model, pk_alias),
             ondelete="CASCADE",
             onupdate="CASCADE",
             name=foreign_key_name or default_name,
@@ -303,7 +353,11 @@ def populate_config_sqlalchemy_table_if_required(config: "OrmarConfig") -> None:
     ):
         set_constraint_names(config=config)
         table = sqlalchemy.Table(
-            config.tablename, config.metadata, *config.columns, *config.constraints
+            config.tablename,
+            config.metadata,
+            *config.columns,
+            *config.constraints,
+            schema=config.schema,
         )
         config.table = table
 

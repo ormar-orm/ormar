@@ -61,6 +61,13 @@ jobs:
     - name: Install dependencies
       run: poetry install --extras "all"
 
+    - name: Grant MySQL global privileges
+      # The schema-per-model tests create extra databases for cross-schema
+      # FKs/M2M; the default GH Actions service container only grants the
+      # user access to MYSQL_DATABASE. Mirror what scripts/mysql-init/ does
+      # for local docker-compose runs.
+      run: mysql -h 127.0.0.1 -uroot -ppassword -e "GRANT ALL PRIVILEGES ON *.* TO 'username'@'%'; FLUSH PRIVILEGES;"
+
     - name: Run mysql
       env:
         DATABASE_URL: "mysql://username:password@127.0.0.1:3306/testsuite"
