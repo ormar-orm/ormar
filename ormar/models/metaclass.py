@@ -353,7 +353,33 @@ def copy_data_from_parent_model(  # noqa: CCR001
     :rtype: tuple[dict, dict]
     """
     if attrs.get("ormar_config"):
-        if model_fields and not base_class.ormar_config.abstract:  # type: ignore
+        child_config = attrs["ormar_config"]
+        child_proxy = getattr(child_config, "proxy", False)
+        base_abstract = base_class.ormar_config.abstract  # type: ignore
+
+        if child_proxy:
+            if base_abstract:
+                raise ModelDefinitionError(
+                    f"Proxy model {curr_class.__name__} cannot inherit from "
+                    f"abstract class {base_class.__name__}; "
+                    f"use concrete inheritance instead."
+                )
+            new_fields = set(model_fields) - set(
+                base_class.ormar_config.model_fields  # type: ignore
+            )
+            if new_fields:
+                raise ModelDefinitionError(
+                    f"Proxy model {curr_class.__name__} cannot declare new ormar "
+                    f"fields: {sorted(new_fields)}."
+                )
+            update_attrs_from_base_config(
+                base_class=base_class,  # type: ignore
+                attrs=attrs,
+                model_fields=model_fields,
+            )
+            return attrs, dict(base_class.ormar_config.model_fields)
+
+        if model_fields and not base_abstract:
             raise ModelDefinitionError(
                 f"{curr_class.__name__} cannot inherit "
                 f"from non abstract class {base_class.__name__}"
@@ -521,6 +547,50 @@ def update_attrs_and_fields(
     return updated_model_fields
 
 
+def wire_proxy_from_parent(new_model: type["Model"]) -> None:
+    """
+    Resolve the concrete ormar parent of a proxy model and share its table,
+    columns, primary key, model_fields, metadata and database with the proxy.
+
+    Proxy models do not own a SQLAlchemy table. They reuse the parent's table
+    so that queries via the proxy class hit the same physical rows.
+
+    :raises ModelDefinitionError: if the proxy has no concrete ormar parent or
+        if it inherits from multiple concrete ormar models with different tables.
+    :param new_model: the proxy model class being constructed
+    :type new_model: type["Model"]
+    """
+    concrete_bases = [
+        base
+        for base in new_model.__mro__[1:]
+        if hasattr(base, "ormar_config")
+        and not base.ormar_config.abstract
+        and base is not new_model
+    ]
+    if not concrete_bases:
+        raise ModelDefinitionError(
+            f"Proxy model {new_model.__name__} has no concrete ormar parent."
+        )
+    primary_table = concrete_bases[0].ormar_config.table
+    for other in concrete_bases[1:]:
+        if other.ormar_config.table is not primary_table:
+            raise ModelDefinitionError(
+                f"Proxy model {new_model.__name__} cannot inherit from multiple "
+                f"concrete ormar models with different tables."
+            )
+    parent_cfg = concrete_bases[0].ormar_config
+    cfg = new_model.ormar_config
+    cfg.table = parent_cfg.table
+    cfg.tablename = parent_cfg.tablename
+    cfg.pkname = parent_cfg.pkname
+    cfg.columns = parent_cfg.columns
+    cfg.model_fields = parent_cfg.model_fields
+    cfg.metadata = parent_cfg.metadata
+    cfg.database = parent_cfg.database
+    cfg.alias_manager = parent_cfg.alias_manager
+    new_model.pk = PkDescriptor(name=parent_cfg.pkname)
+
+
 def add_field_descriptor(
     name: str, field: "BaseField", new_model: type["Model"]
 ) -> None:
@@ -653,7 +723,9 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
             register_signals(new_model=new_model)
             modify_schema_example(model=new_model)
 
-            if not new_model.ormar_config.abstract:
+            if new_model.ormar_config.proxy:
+                wire_proxy_from_parent(new_model)
+            elif not new_model.ormar_config.abstract:
                 new_model = populate_config_tablename_columns_and_pk(name, new_model)
                 populate_config_sqlalchemy_table_if_required(new_model.ormar_config)
                 expand_reverse_relationships(new_model)

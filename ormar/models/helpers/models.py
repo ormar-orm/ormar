@@ -71,12 +71,20 @@ def check_required_config_parameters(new_model: type["Model"]) -> None:
     :param new_model: newly declared ormar Model
     :type new_model: Model class
     """
-    if new_model.ormar_config.database is None and not new_model.ormar_config.abstract:
+    if new_model.ormar_config.proxy and new_model.ormar_config.abstract:
+        raise ormar.ModelDefinitionError(
+            f"{new_model.__name__} cannot be both proxy and abstract."
+        )
+
+    skip_db_metadata_checks = (
+        new_model.ormar_config.abstract or new_model.ormar_config.proxy
+    )
+    if new_model.ormar_config.database is None and not skip_db_metadata_checks:
         raise ormar.ModelDefinitionError(
             f"{new_model.__name__} does not have database defined."
         )
 
-    if new_model.ormar_config.metadata is None and not new_model.ormar_config.abstract:
+    if new_model.ormar_config.metadata is None and not skip_db_metadata_checks:
         raise ormar.ModelDefinitionError(
             f"{new_model.__name__} does not have metadata defined."
         )
