@@ -1,6 +1,9 @@
 from typing import Optional
 
+import pytest
+
 import ormar
+from ormar.exceptions import QueryDefinitionError
 from ormar.models.excludable import ExcludableItems
 from tests.lifespan import init_tests
 from tests.settings import create_config
@@ -100,7 +103,7 @@ def compare_results_include(excludable):
 def test_excluding_fields_from_list():
     fields = ["gearbox_type", "gears", "aircon_type", "year", "manufacturer__founded"]
     excludable = ExcludableItems()
-    excludable.build(items=fields, model_cls=Car, is_exclude=True)
+    excludable.build(items=fields, model_cls=Car, slot="exclude")
     compare_results(excludable)
 
 
@@ -113,7 +116,7 @@ def test_excluding_fields_from_dict():
         "manufacturer": {"founded": ...},
     }
     excludable = ExcludableItems()
-    excludable.build(items=fields, model_cls=Car, is_exclude=True)
+    excludable.build(items=fields, model_cls=Car, slot="exclude")
     compare_results(excludable)
 
 
@@ -126,7 +129,7 @@ def test_excluding_fields_from_dict_with_set():
         "manufacturer": {"founded"},
     }
     excludable = ExcludableItems()
-    excludable.build(items=fields, model_cls=Car, is_exclude=True)
+    excludable.build(items=fields, model_cls=Car, slot="exclude")
     compare_results(excludable)
 
 
@@ -139,7 +142,7 @@ def test_gradual_build_from_lists():
     ]
     excludable = ExcludableItems()
     for fields in fields_col:
-        excludable.build(items=fields, model_cls=Car, is_exclude=True)
+        excludable.build(items=fields, model_cls=Car, slot="exclude")
     compare_results(excludable)
 
 
@@ -152,7 +155,7 @@ def test_nested_includes():
         "manufacturer__hq__nicks__name",
     ]
     excludable = ExcludableItems()
-    excludable.build(items=fields, model_cls=Car, is_exclude=False)
+    excludable.build(items=fields, model_cls=Car, slot="include")
     compare_results_include(excludable)
 
 
@@ -163,7 +166,7 @@ def test_nested_includes_from_dict():
         "manufacturer": {"name": ..., "hq": {"name": ..., "nicks": {"name": ...}}},
     }
     excludable = ExcludableItems()
-    excludable.build(items=fields, model_cls=Car, is_exclude=False)
+    excludable.build(items=fields, model_cls=Car, slot="include")
     compare_results_include(excludable)
 
 
@@ -174,8 +177,176 @@ def test_nested_includes_from_dict_with_set():
         "manufacturer": {"name": ..., "hq": {"name": ..., "nicks": {"name"}}},
     }
     excludable = ExcludableItems()
-    excludable.build(items=fields, model_cls=Car, is_exclude=False)
+    excludable.build(items=fields, model_cls=Car, slot="include")
     compare_results_include(excludable)
+
+
+def _compare_flatten_results_single(excludable):
+    car_excludable = excludable.get(Car)
+    assert car_excludable.flatten == {"manufacturer"}
+    assert car_excludable.is_flattened("manufacturer")
+    assert not car_excludable.is_flattened("gears")
+
+
+def _compare_flatten_results_deep(excludable):
+    manager = Company.ormar_config.alias_manager
+    alias = manager.resolve_relation_alias(Car, "manufacturer")
+    manu_excludable = excludable.get(Company, alias=alias)
+    assert manu_excludable.flatten == {"hq"}
+    assert manu_excludable.is_flattened("hq")
+
+    car_excludable = excludable.get(Car)
+    assert car_excludable.flatten == set()
+
+
+def test_flatten_from_string():
+    excludable = ExcludableItems()
+    excludable.build(items="manufacturer", model_cls=Car, slot="flatten")
+    _compare_flatten_results_single(excludable)
+    assert excludable._flatten_paths == {("manufacturer",)}
+
+
+def test_flatten_from_list():
+    excludable = ExcludableItems()
+    excludable.build(items=["manufacturer"], model_cls=Car, slot="flatten")
+    _compare_flatten_results_single(excludable)
+
+
+def test_flatten_from_set():
+    excludable = ExcludableItems()
+    excludable.build(items={"manufacturer"}, model_cls=Car, slot="flatten")
+    _compare_flatten_results_single(excludable)
+
+
+def test_flatten_from_dict_ellipsis():
+    excludable = ExcludableItems()
+    excludable.build(items={"manufacturer": ...}, model_cls=Car, slot="flatten")
+    _compare_flatten_results_single(excludable)
+
+
+def test_flatten_deep_dunder():
+    excludable = ExcludableItems()
+    excludable.build(items="manufacturer__hq", model_cls=Car, slot="flatten")
+    _compare_flatten_results_deep(excludable)
+    assert excludable._flatten_paths == {("manufacturer", "hq")}
+
+
+def test_flatten_deep_dict():
+    excludable = ExcludableItems()
+    excludable.build(items={"manufacturer": {"hq": ...}}, model_cls=Car, slot="flatten")
+    _compare_flatten_results_deep(excludable)
+
+
+def test_flatten_deep_dict_with_set():
+    excludable = ExcludableItems()
+    excludable.build(items={"manufacturer": {"hq"}}, model_cls=Car, slot="flatten")
+    _compare_flatten_results_deep(excludable)
+
+
+def test_flatten_map_is_none_when_no_paths():
+    excludable = ExcludableItems()
+    assert excludable.flatten_map() is None
+
+
+def test_flatten_map_caches_and_invalidates_on_new_path():
+    excludable = ExcludableItems()
+    excludable.build(items="hq", model_cls=Company, slot="flatten")
+    first = excludable.flatten_map()
+    assert first.data == {"hq": ...}
+    assert excludable.flatten_map() is first  # cached: same FlattenMap reference
+
+    # adding a new (non-colliding) flatten path invalidates the cache
+    excludable.build(items="cars", model_cls=Company, slot="flatten")
+    rebuilt = excludable.flatten_map()
+    assert rebuilt is not first
+    assert rebuilt.data == {"hq": ..., "cars": ...}
+
+
+def test_flatten_has_flatten_entries_flag():
+    excludable = ExcludableItems()
+    assert not any(entry.flatten for entry in excludable.items.values())
+    excludable.build(items="manufacturer", model_cls=Car, slot="flatten")
+    assert any(entry.flatten for entry in excludable.items.values())
+
+
+def test_flatten_copy_preserves_paths_and_sets():
+    excludable = ExcludableItems()
+    excludable.build(items="manufacturer__hq", model_cls=Car, slot="flatten")
+    clone = ExcludableItems.from_excludable(excludable)
+    assert clone._flatten_paths == {("manufacturer", "hq")}
+    manager = Company.ormar_config.alias_manager
+    alias = manager.resolve_relation_alias(Car, "manufacturer")
+    assert clone.get(Company, alias=alias).flatten == {"hq"}
+
+
+def test_flatten_rejects_non_relation_leaf_from_dunder():
+    excludable = ExcludableItems()
+    with pytest.raises(QueryDefinitionError, match="not a relation"):
+        excludable.build(items="manufacturer__name", model_cls=Car, slot="flatten")
+
+
+def test_flatten_rejects_non_relation_leaf_from_dict():
+    excludable = ExcludableItems()
+    with pytest.raises(QueryDefinitionError, match="not a relation"):
+        excludable.build(
+            items={"manufacturer": {"name": ...}},
+            model_cls=Car,
+            slot="flatten",
+        )
+
+
+def test_flatten_rejects_non_relation_leaf_from_set_in_dict():
+    excludable = ExcludableItems()
+    with pytest.raises(QueryDefinitionError, match="not a relation"):
+        excludable.build(
+            items={"manufacturer": {"name"}}, model_cls=Car, slot="flatten"
+        )
+
+
+def test_flatten_rejects_unknown_relation():
+    excludable = ExcludableItems()
+    with pytest.raises(QueryDefinitionError, match="Unknown relation"):
+        excludable.build(items="nope", model_cls=Car, slot="flatten")
+
+
+def test_flatten_rejects_through_target():
+    excludable = ExcludableItems()
+    with pytest.raises(QueryDefinitionError, match="through model"):
+        excludable.build(
+            items="manufacturer__hq__nickshq", model_cls=Car, slot="flatten"
+        )
+
+
+def test_flatten_rejects_prefix_collision_list():
+    excludable = ExcludableItems()
+    with pytest.raises(QueryDefinitionError, match="unreachable"):
+        excludable.build(
+            items=["manufacturer", "manufacturer__hq"],
+            model_cls=Car,
+            slot="flatten",
+        )
+
+
+def test_flatten_rejects_prefix_collision_gradual():
+    excludable = ExcludableItems()
+    excludable.build(items="manufacturer", model_cls=Car, slot="flatten")
+    with pytest.raises(QueryDefinitionError, match="unreachable"):
+        excludable.build(items="manufacturer__hq", model_cls=Car, slot="flatten")
+
+
+def test_flatten_vs_excludable_errors_on_child_sub_selection():
+    excludable = ExcludableItems()
+    excludable.build(items={"manufacturer__name"}, model_cls=Car, slot="include")
+    excludable.build(items="manufacturer", model_cls=Car, slot="flatten")
+    with pytest.raises(QueryDefinitionError, match="Flatten conflict"):
+        excludable.validate_flatten_vs_excludable(source_model=Car)
+
+
+def test_flatten_vs_excludable_allows_parent_whole_relation_include():
+    excludable = ExcludableItems()
+    excludable.build(items={"manufacturer"}, model_cls=Car, slot="include")
+    excludable.build(items="manufacturer", model_cls=Car, slot="flatten")
+    excludable.validate_flatten_vs_excludable(source_model=Car)
 
 
 def test_includes_and_excludes_combo():
@@ -184,10 +355,10 @@ def test_includes_and_excludes_combo():
     fields_exc1 = {"manufacturer__founded"}
     fields_exc2 = "aircon_type"
     excludable = ExcludableItems()
-    excludable.build(items=fields_inc1, model_cls=Car, is_exclude=False)
-    excludable.build(items=fields_inc2, model_cls=Car, is_exclude=False)
-    excludable.build(items=fields_exc1, model_cls=Car, is_exclude=True)
-    excludable.build(items=fields_exc2, model_cls=Car, is_exclude=True)
+    excludable.build(items=fields_inc1, model_cls=Car, slot="include")
+    excludable.build(items=fields_inc2, model_cls=Car, slot="include")
+    excludable.build(items=fields_exc1, model_cls=Car, slot="exclude")
+    excludable.build(items=fields_exc2, model_cls=Car, slot="exclude")
 
     car_excludable = excludable.get(Car)
     assert car_excludable.include == {"id", "name", "year", "gearbox_type", "gears"}

@@ -1,7 +1,6 @@
 import asyncio
 import random
 import string
-import time
 
 import nest_asyncio
 import pytest
@@ -88,9 +87,6 @@ async def authors_in_db(num_models: int):
 
 
 @pytest_asyncio.fixture
-@pytest.mark.benchmark(
-    min_rounds=1, timer=time.process_time, disable_gc=True, warmup=False
-)
 async def aio_benchmark(benchmark):
     def _fixture_wrapper(func):
         def _func_wrapper(*args, **kwargs):

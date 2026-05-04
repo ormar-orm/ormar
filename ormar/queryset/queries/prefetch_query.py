@@ -276,7 +276,7 @@ class LoadNode(Node):
             if model_excludable.include and not model_excludable.is_included(
                 related_name
             ):
-                model_excludable.set_values({related_name}, is_exclude=False)
+                model_excludable.set_values({related_name}, slot="include")
 
     def _build_relation_string(self) -> str:
         node: Union[LoadNode, Node] = self

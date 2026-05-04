@@ -2202,20 +2202,20 @@ extra = ["pygments (>=2.19.1)"]
 
 [[package]]
 name = "pymysql"
-version = "1.1.2"
+version = "1.1.3"
 description = "Pure Python MySQL Driver"
 optional = true
-python-versions = ">=3.8"
+python-versions = ">=3.9"
 groups = ["main"]
 markers = "extra == \"all\" or extra == \"mysql\""
 files = [
-    {file = "pymysql-1.1.2-py3-none-any.whl", hash = "sha256:e6b1d89711dd51f8f74b1631fe08f039e7d76cf67a42a323d3178f0f25762ed9"},
-    {file = "pymysql-1.1.2.tar.gz", hash = "sha256:4961d3e165614ae65014e361811a724e2044ad3ea3739de9903ae7c21f539f03"},
+    {file = "pymysql-1.1.3-py3-none-any.whl", hash = "sha256:8164ba62c552f6105f3b11753352d0f16b90d1703ba67d81923d5a8a5d1c5289"},
+    {file = "pymysql-1.1.3.tar.gz", hash = "sha256:e70ebf2047a4edf6138cf79c68ad418ef620af65900aa585c5e8bfc95044d43a"},
 ]
 
 [package.extras]
-ed25519 = ["PyNaCl (>=1.4.0)"]
-rsa = ["cryptography"]
+ed25519 = ["PyNaCl (>=1.6.2)"]
+rsa = ["cryptography (>=46.0.7)"]
 
 [[package]]
 name = "pyparsing"
@@ -2805,14 +2805,14 @@ files = [
 
 [[package]]
 name = "types-requests"
-version = "2.33.0.20260408"
+version = "2.33.0.20260503"
 description = "Typing stubs for requests"
 optional = false
 python-versions = ">=3.10"
 groups = ["dev"]
 files = [
-    {file = "types_requests-2.33.0.20260408-py3-none-any.whl", hash = "sha256:81f31d5ea4acb39f03be7bc8bed569ba6d5a9c5d97e89f45ac43d819b68ca50f"},
-    {file = "types_requests-2.33.0.20260408.tar.gz", hash = "sha256:95b9a86376807a216b2fb412b47617b202091c3ea7c078f47cc358d5528ccb7b"},
+    {file = "types_requests-2.33.0.20260503-py3-none-any.whl", hash = "sha256:02aaa7e3577a13471715bb1bddb693cc985ea514f754b503bf033e6a09a3e528"},
+    {file = "types_requests-2.33.0.20260503.tar.gz", hash = "sha256:9721b2d9dbee7131f2fb39f20f0ebb1999c18cef4b512c9a7932f3722de7c5f4"},
 ]
 
 [package.dependencies]

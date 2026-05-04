@@ -3,7 +3,6 @@ from typing import (
     AbstractSet,
     Any,
     Mapping,
-    Optional,
     Union,
     cast,
 )
@@ -27,24 +26,6 @@ class ExcludableMixin(RelationMixin):
     if TYPE_CHECKING:  # pragma: no cover
         from ormar import Model
         from ormar.models import ModelRow
-
-    @staticmethod
-    def get_child(
-        items: Union[set, dict, None], key: Optional[str] = None
-    ) -> Union[set, dict, None]:
-        """
-        Used to get nested dictionaries keys if they exists otherwise returns
-        passed items.
-        :param items: bag of items to include or exclude
-        :type items:  Union[set, dict, None]
-        :param key: name of the child to extract
-        :type key: str
-        :return: child extracted from items if exists
-        :rtype: Union[set, dict, None]
-        """
-        if isinstance(items, dict):
-            return items.get(key, {})
-        return items
 
     @staticmethod
     def _populate_pk_column(

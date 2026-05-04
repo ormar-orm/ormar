@@ -4,6 +4,7 @@ To select only chosen columns of your model you can use following functions.
 
 * `fields(columns: Union[list, str, set, dict]) -> QuerySet`
 * `exclude_fields(columns: Union[list, str, set, dict]) -> QuerySet`
+* `flatten_fields(columns: Union[list, str, set, tuple, dict, FieldAccessor]) -> QuerySet`
 
 
 * `QuerysetProxy`
@@ -286,6 +287,113 @@ await (
     Something like `Track.object.select_related("album").filter(album__name="Malibu").offset(1).limit(1).all()`
 
 
+## flatten_fields
+
+`flatten_fields(columns: Union[list, str, set, tuple, dict, FieldAccessor]) -> QuerySet`
+
+With `flatten_fields()` you can render selected related models as their primary
+key value on `model_dump()` instead of the default nested dict. This is useful
+when your API clients expect `{"manufacturer": 1}` rather than
+`{"manufacturer": {"id": 1, "name": "Toyota", ...}}`.
+
+Accepts the same input forms as `fields()` / `exclude_fields()` (string, list,
+set, tuple, dict-with-Ellipsis) plus `FieldAccessor` / list of accessors.
+Works across foreign keys, many-to-many, and reverse relations.
+
+```python hl_lines="1-6"
+all_cars = await (
+    Car.objects
+    .select_related('manufacturer')
+    .flatten_fields('manufacturer')
+    .all()
+)
+assert all_cars[0].model_dump() == {
+    'id': 1,
+    'name': 'Corolla',
+    'manufacturer': 1,  # flattened from nested dict to pk value
+}
+```
+
+The same can be written in nested-dict form:
+
+```python
+Car.objects.flatten_fields({'manufacturer': ...})
+```
+
+Or with a `FieldAccessor`:
+
+```python
+Car.objects.flatten_fields(Car.manufacturer)
+```
+
+Deeply nested relations use `__`:
+
+```python hl_lines="1-6"
+cars = await (
+    Car.objects
+    .select_related('manufacturer__hq')
+    .flatten_fields('manufacturer__hq')
+    .all()
+)
+assert cars[0].model_dump()['manufacturer']['hq'] == 7  # just the hq pk
+```
+
+Lists of pks for many-to-many and reverse relations:
+
+```python
+posts = await Post.objects.flatten_fields('categories').all()
+posts[0].model_dump()['categories']  # [1, 2, 3]
+```
+
+!!!note
+    Relations listed in `flatten_fields()` are **auto-loaded** — single-valued
+    foreign keys are added to `select_related()`, many-to-many and reverse
+    relations to `prefetch_related()`. You don't have to load them yourself.
+
+### flatten_all on model_dump
+
+`model.model_dump(flatten_all=True)` collapses every related model at every depth
+to its primary key in one shot. `model.model_dump(flatten_fields=...)` accepts
+the same input forms as the queryset method and works even on models not loaded
+via a queryset.
+
+```python
+car.model_dump(flatten_all=True)
+# {"id": 1, "name": "Corolla", "manufacturer": 1, "lead_manager": 2}
+
+car.model_dump(flatten_fields={'manufacturer': ...})
+# {"id": 1, "name": "Corolla", "manufacturer": 1, "lead_manager": {...}}
+```
+
+### Validation rules
+
+Flatten directives conflict with sub-field selection on the flattened relation
+— you can't attach children to a scalar pk. The following raise
+`QueryDefinitionError`:
+
+* `flatten_fields('manufacturer')` combined with `fields({'manufacturer': {'name'}})`
+* `flatten_fields('manufacturer')` combined with `exclude_fields({'manufacturer': {'name'}})`
+* `flatten_fields(['manufacturer', 'manufacturer__hq'])` — the deeper path is unreachable
+* `flatten_fields('name')` on a non-relation column
+* `flatten_fields('manufacturer__nonexistent')` — unknown relation
+* `model_dump(flatten_all=True, exclude_primary_keys=True)` — directly contradictory
+
+Whole-relation `include`/`exclude` (e.g. `fields({'manufacturer'})`) is fine
+alongside a flatten directive.
+
+Filtering *through* a flattened relation still works — the join is generated
+for the filter, and the rendered output is just the pk:
+
+```python
+await (
+    Car.objects
+    .filter(manufacturer__hq__city='Tokyo')
+    .flatten_fields('manufacturer')
+    .all()
+)
+# join visits hq for the filter; manufacturer still rendered as its pk
+```
+
 ## QuerysetProxy methods
 
 When access directly the related `ManyToMany` field as well as `ReverseForeignKey`
@@ -308,6 +416,14 @@ Works exactly the same as [exclude_fields](./#exclude_fields) function above but
 objects from other side of the relation.
 
 !!!tip 
+    To read more about `QuerysetProxy` visit [querysetproxy][querysetproxy] section
+
+### flatten_fields
+
+Works exactly the same as [flatten_fields](./#flatten_fields) function above
+but applied to the related-side queryset.
+
+!!!tip
     To read more about `QuerysetProxy` visit [querysetproxy][querysetproxy] section
 
 

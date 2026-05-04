@@ -1,12 +1,76 @@
 import collections.abc
 import copy
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
 
 from ormar.exceptions import QueryDefinitionError
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import BaseField, Model
+
+
+PathParts = tuple[str, ...]
+
+
+def build_flatten_map(paths: Iterable[PathParts]) -> dict:
+    """
+    Build a nested-Ellipsis dict from pre-split flatten path tuples — the
+    runtime representation threaded through ``model_dump`` recursion.
+
+    Example::
+
+        paths = [
+            ("author", "name"),
+            ("author", "email"),
+            ("category", "title"),
+        ]
+        build_flatten_map(paths) == {
+            "author": {"name": ..., "email": ...},
+            "category": {"title": ...},
+        }
+
+    :param paths: iterable of tuple paths (each path already split on ``__``)
+    :type paths: Iterable[PathParts]
+    :return: nested dict where leaves are ``...``
+    :rtype: dict
+    """
+    result: dict = {}
+    for parts in paths:
+        current = result
+        last = len(parts) - 1
+        for i, part in enumerate(parts):
+            if i == last:
+                current[part] = ...
+            else:
+                current = current.setdefault(part, {})
+    return result
+
+
+def extract_access_chains(value: Any) -> Any:
+    """
+    Unwrap ``FieldAccessor`` inputs (or lists that contain them) into their
+    underlying dunder-path strings so downstream parsers see a uniform shape.
+    Anything that isn't an accessor (or list of accessors) is returned
+    unchanged — sets, tuples, dicts, and plain strings all pass through.
+
+    :param value: user input for a relation-spec method (``select_related``,
+        ``prefetch_related``, ``flatten_fields``)
+    :type value: Any
+    :return: a dunder string, a list with each accessor replaced by its chain,
+        or the original value unchanged
+    :rtype: Any
+    """
+    # Late import to avoid circular dependency with queryset package.
+    from ormar.queryset.field_accessor import FieldAccessor
+
+    if isinstance(value, FieldAccessor):
+        return [value._access_chain]
+    if isinstance(value, list):
+        return [
+            item._access_chain if isinstance(item, FieldAccessor) else item
+            for item in value
+        ]
+    return value
 
 
 @dataclass(frozen=True)
