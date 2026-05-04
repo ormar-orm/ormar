@@ -19,7 +19,7 @@ async def test_updating_models_in_bulk(
         await Author.objects.bulk_update(authors)
 
     for author in authors_in_db:
-        author.name = "".join(random.sample(string.ascii_letters, 5))
+        author.name = "u_" + "".join(random.sample(string.ascii_letters, 5))
 
     update(authors_in_db)
     author = await Author.objects.get(id=authors_in_db[0].id)
