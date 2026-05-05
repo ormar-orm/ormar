@@ -15,9 +15,6 @@ else:
     T = TypeVar("T", bound="Model")
 
 
-_QUERYSET_PROXY_METHODS = frozenset({"count", "clear"})
-
-
 class RelationProxy(Generic[T], list[T]):
     """
     Proxy of the Relation that is a list with special methods.
@@ -169,20 +166,38 @@ class RelationProxy(Generic[T], list[T]):
         except ReferenceError:
             return False
 
-    def __getattribute__(self, item: str) -> Any:
+    async def count(self, distinct: bool = True) -> int:  # type: ignore[override]
         """
-        Since some QuerySetProxy methods overwrite builtin list methods we
-        catch calls to them and delegate it to QuerySetProxy instead.
+        Returns count of related models. Delegates to ``QuerysetProxy.count``.
 
-        :param item: name of attribute
-        :type item: str
-        :return: value of attribute
-        :rtype: Any
+        Defined explicitly to shadow ``list.count`` so attribute lookup resolves
+        to the relation-aware version without going through ``__getattribute__``
+        on every attribute access.
+
+        :param distinct: flag if the primary table rows should be distinct
+        :type distinct: bool
+        :return: number of related models
+        :rtype: int
         """
-        if item in _QUERYSET_PROXY_METHODS:
-            self._initialize_queryset()
-            return getattr(self.queryset_proxy, item)
-        return super().__getattribute__(item)
+        self._initialize_queryset()
+        return await self.queryset_proxy.count(distinct=distinct)
+
+    async def clear(self, keep_reversed: bool = True) -> int:  # type: ignore[override]
+        """
+        Removes all related models from the relation. Delegates to
+        ``QuerysetProxy.clear``.
+
+        Defined explicitly to shadow ``list.clear`` so attribute lookup resolves
+        to the relation-aware version without going through ``__getattribute__``
+        on every attribute access.
+
+        :param keep_reversed: keep reversed FK rows in the database
+        :type keep_reversed: bool
+        :return: number of removed relation entries
+        :rtype: int
+        """
+        self._initialize_queryset()
+        return await self.queryset_proxy.clear(keep_reversed=keep_reversed)
 
     def __getattr__(self, item: str) -> Any:
         """
