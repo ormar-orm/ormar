@@ -60,7 +60,7 @@ class Relation(Generic[T]):
         self.manager = manager
         self._owner: "Model" = manager.owner
         self._type: RelationType = type_
-        self._to_remove: set = set()
+        self._to_remove: set[int] = set()
         self.to: type["T"] = to
         self._through = through
         self.field_name: str = field_name
