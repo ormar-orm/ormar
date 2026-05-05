@@ -114,6 +114,9 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         _json_fields: set
         _bytes_fields: set
         _onupdate_fields: set
+        _pydantic_field_names: Optional[frozenset[str]]
+        _extra_is_ignore: Optional[bool]
+        _allowed_kwarg_names: Optional[frozenset[str]]
         ormar_config: OrmarConfig
 
     # noinspection PyMissingConstructor
@@ -374,71 +377,65 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         :return: modified kwargs
         :rtype: tuple[dict, dict]
         """
-        property_fields = self.ormar_config.property_fields
-        model_fields = self.ormar_config.model_fields
-        pydantic_fields = set(self.__class__.model_fields.keys())
+        cls = type(self)
+        config = cls.ormar_config
+        model_fields = config.model_fields
+
+        pydantic_fields = cls._pydantic_field_names
+        if pydantic_fields is None:
+            pydantic_fields = frozenset(cls.model_fields.keys())
+            cls._pydantic_field_names = pydantic_fields
 
         # remove property fields
-        for prop_filed in property_fields:
-            kwargs.pop(prop_filed, None)
+        for prop_field in config.property_fields:
+            kwargs.pop(prop_field, None)
 
         if "pk" in kwargs:
-            kwargs[self.ormar_config.pkname] = kwargs.pop("pk")
+            kwargs[config.pkname] = kwargs.pop("pk")
 
         # extract through fields
-        through_tmp_dict = dict()
-        for field_name in self.extract_through_names():
-            through_tmp_dict[field_name] = kwargs.pop(field_name, None)
+        through_tmp_dict = {
+            field_name: kwargs.pop(field_name, None)
+            for field_name in self.extract_through_names()
+        }
 
-        kwargs = self._remove_extra_parameters_if_they_should_be_ignored(
-            kwargs=kwargs, model_fields=model_fields, pydantic_fields=pydantic_fields
-        )
+        extra_is_ignore = cls._extra_is_ignore
+        if extra_is_ignore is None:
+            extra_is_ignore = config.extra == Extra.ignore
+            cls._extra_is_ignore = extra_is_ignore
+
+        if extra_is_ignore:
+            allowed = cls._allowed_kwarg_names
+            if allowed is None:
+                allowed = frozenset(model_fields.keys()) | pydantic_fields
+                cls._allowed_kwarg_names = allowed
+            kwargs = {k: v for k, v in kwargs.items() if k in allowed}
+
+        json_fields = cls._json_fields
+        bytes_fields = cls._bytes_fields
+
         try:
-            new_kwargs: dict[str, Any] = {
-                k: self._convert_to_bytes(
-                    k,
-                    self._convert_json(
-                        k,
-                        (
-                            model_fields[k].expand_relationship(
-                                v, self, to_register=False
-                            )
-                            if k in model_fields
-                            else (v if k in pydantic_fields else model_fields[k])
-                        ),
-                    ),
-                )
-                for k, v in kwargs.items()
-            }
+            new_kwargs: dict[str, Any] = {}
+            for k, v in kwargs.items():
+                if k in model_fields:
+                    v = model_fields[k].expand_relationship(v, self, to_register=False)
+                elif k not in pydantic_fields:
+                    # raises KeyError, handled below to produce a friendly ModelError
+                    model_fields[k]
+                if k in json_fields:
+                    v = encode_json(v)
+                if k in bytes_fields and v is not None:
+                    v = decode_bytes(
+                        value=v,
+                        represent_as_string=model_fields[k].represent_as_base64_str,
+                    )
+                new_kwargs[k] = v
         except KeyError as e:
             raise ModelError(
                 f"Unknown field '{e.args[0]}' for model {self.get_name(lower=False)}"
             )
 
         return new_kwargs, through_tmp_dict
-
-    def _remove_extra_parameters_if_they_should_be_ignored(
-        self, kwargs: dict, model_fields: dict, pydantic_fields: set
-    ) -> dict:
-        """
-        Removes the extra fields from kwargs if they should be ignored.
-
-        :param kwargs: passed arguments
-        :type kwargs: dict
-        :param model_fields: dictionary of model fields
-        :type model_fields: dict
-        :param pydantic_fields: set of pydantic fields names
-        :type pydantic_fields: set
-        :return: dict without extra fields
-        :rtype: dict
-        """
-        if self.ormar_config.extra == Extra.ignore:
-            kwargs = {
-                k: v
-                for k, v in kwargs.items()
-                if k in model_fields or k in pydantic_fields
-            }
-        return kwargs
 
     def _initialize_internal_attributes(self) -> None:
         """
@@ -1229,28 +1226,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             setattr(self, key, value)
         return self
 
-    def _convert_to_bytes(
-        self, column_name: str, value: Any
-    ) -> Union[str, builtins.dict]:
-        """
-        Converts value to bytes from string
-
-        :param column_name: name of the field
-        :type column_name: str
-        :param value: value fo the field
-        :type value: Any
-        :return: converted value if needed, else original value
-        :rtype: Any
-        """
-        if column_name not in self._bytes_fields:
-            return value
-        field = self.ormar_config.model_fields[column_name]
-        if value is not None:
-            value = decode_bytes(
-                value=value, represent_as_string=field.represent_as_base64_str
-            )
-        return value
-
     def _convert_bytes_to_str(
         self, column_name: str, value: Any
     ) -> Union[str, builtins.dict]:
@@ -1274,23 +1249,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         ):
             return base64.b64encode(value).decode()
         return value
-
-    def _convert_json(
-        self, column_name: str, value: Any
-    ) -> Union[str, builtins.dict, None]:
-        """
-        Converts value to/from json if needed (for Json columns).
-
-        :param column_name: name of the field
-        :type column_name: str
-        :param value: value fo the field
-        :type value: Any
-        :return: converted value if needed, else original value
-        :rtype: Any
-        """
-        if column_name not in self._json_fields:
-            return value
-        return encode_json(value)
 
     def _extract_own_model_fields(self) -> builtins.dict:
         """

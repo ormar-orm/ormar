@@ -76,6 +76,12 @@ def add_cached_properties(new_model: type["Model"]) -> None:
     new_model._json_fields = set()
     new_model._bytes_fields = set()
     new_model._onupdate_fields = set()
+    # Lazy-populated in NewBaseModel._process_kwargs on first init per class.
+    # ormar_config.extra and ormar_config.model_fields are not finalized at
+    # this point in class creation, so eager init would be premature.
+    new_model._pydantic_field_names = None
+    new_model._extra_is_ignore = None
+    new_model._allowed_kwarg_names = None
 
 
 def add_property_fields(new_model: type["Model"], attrs: dict) -> None:  # noqa: CCR001
