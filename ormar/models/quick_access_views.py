@@ -22,7 +22,6 @@ quick_access_set = {
     "__private_attributes__",
     "__same__",
     "_calculate_keys",
-    "_convert_json",
     "_extract_db_related_names",
     "_extract_model_db_fields",
     "_extract_nested_models",
