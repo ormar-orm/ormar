@@ -13,6 +13,20 @@ from ormar.fields.sqlalchemy_encrypted import (
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar.models import Model, NewBaseModel
+    from ormar.relations.relation import RelationType
+
+# Lazy-imported on first BaseField construction to avoid a circular import
+# (ormar.relations → relation_manager → utils → foreign_key → base).
+_RELATION_TYPE: Optional[type["RelationType"]] = None
+
+
+def _relation_type_cls() -> type["RelationType"]:
+    global _RELATION_TYPE
+    if _RELATION_TYPE is None:
+        from ormar.relations.relation import RelationType as _RT
+
+        _RELATION_TYPE = _RT
+    return _RELATION_TYPE
 
 
 class BaseField(FieldInfo):  # type: ignore[misc]
@@ -52,6 +66,18 @@ class BaseField(FieldInfo):  # type: ignore[misc]
             "is_relation", None
         )  # ForeignKeyField + subclasses
         self.is_through: bool = kwargs.pop("is_through", False)  # ThroughFields
+        rt = _relation_type_cls()
+        self.relation_type: Optional["RelationType"]
+        if self.is_multi:
+            self.relation_type = rt.MULTIPLE
+        elif self.is_through:
+            self.relation_type = rt.THROUGH
+        elif self.virtual:
+            self.relation_type = rt.REVERSE
+        elif self.is_relation:
+            self.relation_type = rt.PRIMARY
+        else:
+            self.relation_type = None
 
         self.through_relation_name = kwargs.pop("through_relation_name", None)
         self.through_reverse_relation_name = kwargs.pop(

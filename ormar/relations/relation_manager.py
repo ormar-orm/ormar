@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING, Optional, Sequence, Union
 from weakref import proxy
 
-from ormar.relations.relation import Relation, RelationType
+from ormar.relations.relation import Relation
 from ormar.relations.utils import get_relations_sides_and_names
 
 if TYPE_CHECKING:  # pragma no cover
@@ -20,10 +20,8 @@ class RelationsManager:
         owner: Optional["Model"] = None,
     ) -> None:
         self.owner = proxy(owner)
-        self._related_fields = related_fields or []
-        self._related_names = [field.name for field in self._related_fields]
         self._relations: dict[str, Relation] = dict()
-        for field in self._related_fields:
+        for field in related_fields or []:
             self._add_relation(field)
 
     def __contains__(self, item: str) -> bool:
@@ -35,7 +33,7 @@ class RelationsManager:
         :return: result of the check
         :rtype: bool
         """
-        return item in self._related_names
+        return item in self._relations
 
     def clear(self) -> None:
         for relation in self._relations.values():
@@ -138,21 +136,6 @@ class RelationsManager:
             return relation
         return None
 
-    def _get_relation_type(self, field: "BaseField") -> RelationType:
-        """
-        Returns type of the relation declared on a field.
-
-        :param field: field with relation declaration
-        :type field: BaseField
-        :return: type of the relation defined on field
-        :rtype: RelationType
-        """
-        if field.is_multi:
-            return RelationType.MULTIPLE
-        if field.is_through:
-            return RelationType.THROUGH
-        return RelationType.PRIMARY if not field.virtual else RelationType.REVERSE
-
     def _add_relation(self, field: "BaseField") -> None:
         """
         Registers relation in the manager.
@@ -161,9 +144,13 @@ class RelationsManager:
         :param field: field with relation declaration
         :type field: BaseField
         """
+        # ``relation_type`` is set in ``BaseField.__init__`` for every
+        # relation/through field; ``_add_relation`` is only called for
+        # such fields, so the value is never None here.
+        assert field.relation_type is not None
         self._relations[field.name] = Relation(
             manager=self,
-            type_=self._get_relation_type(field),
+            type_=field.relation_type,
             field_name=field.name,
             to=field.to,
             through=getattr(field, "through", None),
