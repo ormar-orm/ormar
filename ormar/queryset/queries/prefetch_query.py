@@ -377,14 +377,15 @@ class LoadNode(Node):
         fields_to_exclude = self.relation_field.to.get_names_to_exclude(
             excludable=self.excludable, alias=self.exclude_prefix
         )
+        # ``self.table_prefix`` and ``self.exclude_prefix`` can differ, so the
+        # plan only amortizes the column mapping work — exclude set is reused
+        # from above. Build once before the loop.
+        row_plan = self.relation_field.to.build_row_extraction_plan(
+            self.table_prefix, self.excludable
+        )
         parsed_rows: dict[tuple, "Model"] = {}
         for row in self.rows:
-            item = self.relation_field.to.extract_prefixed_table_columns(
-                item={},
-                row=row,
-                table_prefix=self.table_prefix,
-                excludable=self.excludable,
-            )
+            item = self.relation_field.to.apply_row_plan(row_plan, row, {})
             hashable_item = self._hash_item(item)
             instance = parsed_rows.setdefault(
                 hashable_item,

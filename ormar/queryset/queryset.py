@@ -170,15 +170,23 @@ class QuerySet(Generic[T]):
         )
         return await query.prefetch_related(models=models)  # type: ignore
 
-    async def _process_query_result_rows(self, rows: list) -> list["T"]:
+    async def _process_query_result_rows(
+        self, rows: list, plan_cache: Optional[dict] = None
+    ) -> list["T"]:
         """
         Process database rows and initialize ormar Model from each of the rows.
 
         :param rows: list of database rows from query result
         :type rows: list[sqlalchemy.engine.result.RowProxy]
+        :param plan_cache: optional row-extraction plan cache; ``iterate``
+            passes a single dict shared across all chunks so amortization
+            survives the per-chunk ``_process_query_result_rows`` boundary
+        :type plan_cache: Optional[dict]
         :return: list of models
         :rtype: list[Model]
         """
+        if plan_cache is None:
+            plan_cache = {}
         result_rows = []
         for i, row in enumerate(rows):
             result_rows.append(
@@ -188,6 +196,7 @@ class QuerySet(Generic[T]):
                     excludable=self._excludable,
                     source_model=self.model,
                     proxy_source_model=self.proxy_source_model,
+                    plan_cache=plan_cache,
                 )
             )
             if i % 100 == 99:  # pragma: no cover
@@ -1267,6 +1276,9 @@ class QuerySet(Generic[T]):
         rows: list = []
         last_primary_key = None
         pk_alias = self.model.get_column_alias(self.model_config.pkname)
+        # Single shared cache across all yielded chunks so 1-row chunks
+        # (the common iterate case) still amortize the plan build.
+        plan_cache: dict = {}
 
         # Server-side cursor (asyncpg/aiomysql) requires an open transaction,
         # which AUTOCOMMIT does not provide.
@@ -1280,12 +1292,12 @@ class QuerySet(Generic[T]):
                     rows.append(row)
                     continue
 
-                yield (await self._process_query_result_rows(rows))[0]
+                yield (await self._process_query_result_rows(rows, plan_cache))[0]
                 last_primary_key = current_primary_key
                 rows = [row]
 
             if rows:
-                yield (await self._process_query_result_rows(rows))[0]
+                yield (await self._process_query_result_rows(rows, plan_cache))[0]
 
     async def create(self, **kwargs: Any) -> "T":
         """

@@ -226,14 +226,14 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
 
     @classmethod
     def _construct_with_excluded(
-        cls, excluded: set[str], **kwargs: Any
+        cls, excluded: AbstractSet[str], **kwargs: Any
     ) -> typing_extensions.Self:
         """
         Constructs model instance and nullifies excluded fields post-construction.
         Used when loading partial results from the database.
 
-        :param excluded: set of field names to nullify after construction
-        :type excluded: set[str]
+        :param excluded: collection of field names to nullify after construction
+        :type excluded: AbstractSet[str]
         :param kwargs: field values for the model
         :type kwargs: Any
         :return: constructed model instance
