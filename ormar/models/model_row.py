@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 try:
@@ -14,6 +15,30 @@ if TYPE_CHECKING:  # pragma: no cover
     from ormar.models import Model
 
 
+@dataclass(frozen=True)
+class RowExtractionPlan:
+    """
+    Precomputed per-``(model_cls, table_prefix, excludable)`` view of the work
+    that ``from_row`` used to redo for every row: which columns to read from
+    the SA row (already prefixed and filtered), which field names to nullify
+    after construction, and the model's pk field name.
+
+    :ivar column_mappings: ordered ``(prefixed_db_column, field_name)`` pairs
+        the row reader iterates over to populate the model dict
+    :ivar excluded_field_names: field names to nullify via
+        ``_construct_with_excluded`` after pydantic validation
+    :ivar pk_field_name: cached ``ormar_config.pkname`` so the row reader can
+        test for a populated pk without a per-row attribute lookup
+    """
+
+    column_mappings: tuple[tuple[str, str], ...]
+    excluded_field_names: frozenset[str]
+    pk_field_name: str
+
+
+PlanCache = dict[tuple[type, str, int], RowExtractionPlan]
+
+
 class ModelRow(NewBaseModel):
     @classmethod
     def from_row(  # noqa: CFQ002
@@ -27,6 +52,7 @@ class ModelRow(NewBaseModel):
         current_relation_str: str = "",
         proxy_source_model: Optional[type["Model"]] = None,
         used_prefixes: Optional[list[str]] = None,
+        plan_cache: Optional[PlanCache] = None,
     ) -> Optional["Model"]:
         """
         Model method to convert raw sql row from database into ormar.Model instance.
@@ -90,17 +116,17 @@ class ModelRow(NewBaseModel):
             proxy_source_model=proxy_source_model,  # type: ignore
             table_prefix=table_prefix,
             used_prefixes=used_prefixes,
+            plan_cache=plan_cache,
         )
-        item = cls.extract_prefixed_table_columns(
-            item=item, row=row, table_prefix=table_prefix, excludable=excludable
-        )
+        plan = cls.get_or_build_row_plan(table_prefix, excludable, plan_cache)
+        item = cls.apply_row_plan(plan, row, item)
 
         instance: Optional["Model"] = None
-        if item.get(cls.ormar_config.pkname, None) is not None:
-            excluded = cls.get_names_to_exclude(
-                excludable=excludable, alias=table_prefix
+        if item.get(plan.pk_field_name, None) is not None:
+            instance = cast(
+                "Model",
+                cls._construct_with_excluded(plan.excluded_field_names, **item),
             )
-            instance = cast("Model", cls._construct_with_excluded(excluded, **item))
             instance.set_save_status(True)
         return instance
 
@@ -154,6 +180,7 @@ class ModelRow(NewBaseModel):
         used_prefixes: list[str],
         current_relation_str: Optional[str] = None,
         proxy_source_model: Optional[type["Model"]] = None,
+        plan_cache: Optional[PlanCache] = None,
     ) -> dict:
         """
         Traverses structure of related models and populates the nested models
@@ -208,6 +235,7 @@ class ModelRow(NewBaseModel):
                 source_model=source_model,
                 proxy_source_model=proxy_source_model,
                 used_prefixes=used_prefixes,
+                plan_cache=plan_cache,
             )
             item[model_cls.get_column_name_from_alias(related)] = child
             if (
@@ -222,6 +250,7 @@ class ModelRow(NewBaseModel):
                     excludable=excludable,
                     child=child,
                     proxy_source_model=proxy_source_model,
+                    plan_cache=plan_cache,
                 )
 
         return item
@@ -262,6 +291,7 @@ class ModelRow(NewBaseModel):
         excludable: ExcludableItems,
         child: "Model",
         proxy_source_model: Optional[type["Model"]],
+        plan_cache: Optional[PlanCache] = None,
     ) -> None:
         """
         Populates the through model on reverse side of current query.
@@ -279,10 +309,16 @@ class ModelRow(NewBaseModel):
         :type child: "Model"
         :param proxy_source_model: source model from which querysetproxy is constructed
         :type proxy_source_model: type["Model"]
+        :param plan_cache: optional per-queryset plan cache
+        :type plan_cache: Optional[PlanCache]
         """
         through_name = cls.ormar_config.model_fields[related].through.get_name()
         through_child = cls._create_through_instance(
-            row=row, related=related, through_name=through_name, excludable=excludable
+            row=row,
+            related=related,
+            through_name=through_name,
+            excludable=excludable,
+            plan_cache=plan_cache,
         )
 
         if child.__class__ != proxy_source_model:
@@ -298,6 +334,7 @@ class ModelRow(NewBaseModel):
         through_name: str,
         related: str,
         excludable: ExcludableItems,
+        plan_cache: Optional[PlanCache] = None,
     ) -> "ModelRow":
         """
         Initialize the through model from db row.
@@ -311,6 +348,8 @@ class ModelRow(NewBaseModel):
         :type related: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems
+        :param plan_cache: optional per-queryset plan cache
+        :type plan_cache: Optional[PlanCache]
         :return: initialized through model without relation
         :rtype: "ModelRow"
         """
@@ -318,65 +357,110 @@ class ModelRow(NewBaseModel):
         table_prefix = cls.ormar_config.alias_manager.resolve_relation_alias(
             from_model=cls, relation_name=related
         )
-        # remove relations on through field
+        # remove relations on through field — must happen before the plan is
+        # built so the plan reflects the through-model's full exclude set
         model_excludable = excludable.get(model_cls=model_cls, alias=table_prefix)
         model_excludable.set_values(
             value=model_cls.extract_related_names(), slot="exclude"
         )
-        child_dict = model_cls.extract_prefixed_table_columns(
-            item={}, row=row, excludable=excludable, table_prefix=table_prefix
+        plan = model_cls.get_or_build_row_plan(table_prefix, excludable, plan_cache)
+        child_dict = model_cls.apply_row_plan(plan, row, {})
+        child = model_cls._construct_with_excluded(  # type: ignore
+            plan.excluded_field_names, **child_dict
         )
-        excluded = model_cls.get_names_to_exclude(
-            excludable=excludable, alias=table_prefix
-        )
-        child = model_cls._construct_with_excluded(excluded, **child_dict)  # type: ignore
         return child
 
     @classmethod
-    def extract_prefixed_table_columns(
+    def build_row_extraction_plan(
         cls,
-        item: dict,
-        row: ResultProxy,
         table_prefix: str,
         excludable: ExcludableItems,
-    ) -> dict:
+    ) -> RowExtractionPlan:
         """
-        Extracts own fields from raw sql result, using a given prefix.
-        Prefix changes depending on the table's position in a join.
+        Compute the per-row extraction plan for a ``(cls, table_prefix,
+        excludable)`` triple — the work that previously ran inside
+        ``extract_prefixed_table_columns`` for every row.
 
-        If the table is a main table, there is no prefix.
-        All joined tables have prefixes to allow duplicate column names,
-        as well as duplicated joins to the same table from multiple different tables.
-
-        Extracted fields populates the related dict later used to construct a Model.
-
-        Used in Model.from_row and PrefetchQuery._populate_rows methods.
-
+        :param table_prefix: prefix of the table from AliasManager
+        :type table_prefix: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems
-        :param item: dictionary of already populated nested models, otherwise empty dict
-        :type item: dict
-        :param row: raw result row from the database
-        :type row: sqlalchemy.engine.result.ResultProxy
-        :param table_prefix: prefix of the table from AliasManager
-        each pair of tables have own prefix (two of them depending on direction) -
-        used in joins to allow multiple joins to the same table.
-        :type table_prefix: str
-        :return: dictionary with keys corresponding to model fields names
-        and values are database values
-        :rtype: dict
+        :return: cacheable plan for fast per-row extraction
+        :rtype: RowExtractionPlan
         """
         selected_columns = set(
             cls.own_table_columns(
                 model=cls, excludable=excludable, alias=table_prefix, use_alias=False
             )
         )
-
         column_prefix = table_prefix + "_" if table_prefix else ""
         column_pairs = cls._get_table_column_pairs(cls)
-        for col_name, field_name in column_pairs:
-            if field_name not in item and field_name in selected_columns:
-                prefixed_name = f"{column_prefix}{col_name}"
-                item[field_name] = row[prefixed_name]
+        mappings = tuple(
+            (f"{column_prefix}{col_name}", field_name)
+            for col_name, field_name in column_pairs
+            if field_name in selected_columns
+        )
+        excluded = frozenset(
+            cls.get_names_to_exclude(excludable=excludable, alias=table_prefix)
+        )
+        return RowExtractionPlan(
+            column_mappings=mappings,
+            excluded_field_names=excluded,
+            pk_field_name=cls.ormar_config.pkname,
+        )
 
+    @classmethod
+    def get_or_build_row_plan(
+        cls,
+        table_prefix: str,
+        excludable: ExcludableItems,
+        plan_cache: Optional[PlanCache],
+    ) -> RowExtractionPlan:
+        """
+        Return a cached plan for the given key, or build and cache one. When
+        ``plan_cache`` is ``None`` (legacy / external caller) the plan is
+        built fresh on every call so behavior matches the pre-cache shape.
+
+        :param table_prefix: prefix of the table from AliasManager
+        :type table_prefix: str
+        :param excludable: structure of fields to include and exclude
+        :type excludable: ExcludableItems
+        :param plan_cache: per-queryset cache keyed by
+            ``(cls, table_prefix, id(excludable))``; ``None`` to bypass
+        :type plan_cache: Optional[PlanCache]
+        :return: extraction plan for this row position
+        :rtype: RowExtractionPlan
+        """
+        if plan_cache is None:
+            return cls.build_row_extraction_plan(table_prefix, excludable)
+        key = (cls, table_prefix, id(excludable))
+        plan = plan_cache.get(key)
+        if plan is None:
+            plan = cls.build_row_extraction_plan(table_prefix, excludable)
+            plan_cache[key] = plan
+        return plan
+
+    @staticmethod
+    def apply_row_plan(
+        plan: RowExtractionPlan,
+        row: ResultProxy,
+        item: dict,
+    ) -> dict:
+        """
+        Populate ``item`` from ``row`` using ``plan.column_mappings``. Skips
+        keys already present so a partially populated dict (e.g. from
+        ``_populate_nested_models_from_row``) is not overwritten.
+
+        :param plan: precomputed extraction plan
+        :type plan: RowExtractionPlan
+        :param row: raw result row from the database
+        :type row: sqlalchemy.engine.result.ResultProxy
+        :param item: dict to populate in place
+        :type item: dict
+        :return: ``item`` (returned for chaining symmetry with the legacy API)
+        :rtype: dict
+        """
+        for prefixed_name, field_name in plan.column_mappings:
+            if field_name not in item:
+                item[field_name] = row[prefixed_name]
         return item
