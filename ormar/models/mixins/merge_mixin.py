@@ -78,8 +78,15 @@ class MergeModelMixin:
             pks = [model.pk for model in result_rows]
             index_groups = ormar_rust_utils.group_by_pk(pks)
             for group_indices in index_groups:
-                group = [result_rows[i] for i in group_indices]
-                model = cls._recursive_add(group)[0]
+                # Single-row groups are the common case for queries with no
+                # parent duplication (``Model.objects.all()`` and similar);
+                # skip the wrapper list and the no-op ``_recursive_add`` call.
+                if len(group_indices) == 1:
+                    model = result_rows[group_indices[0]]
+                else:
+                    model = cls._recursive_add([result_rows[i] for i in group_indices])[
+                        0
+                    ]
                 object.__setattr__(model, "__ormar_excludable__", excludable)
                 merged_rows.append(model)
 

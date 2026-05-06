@@ -384,7 +384,7 @@ class BaseField(FieldInfo):  # type: ignore[misc]
         :return: returns untouched value for normal fields, expands only for relations
         :rtype: Any
         """
-        return value
+        return value  # pragma: no cover
 
     def set_self_reference_flag(self) -> None:
         """
