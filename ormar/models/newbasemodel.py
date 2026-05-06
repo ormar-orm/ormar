@@ -323,7 +323,11 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
 
         def _update_cache(relations: list[Relation], recurse: bool = True) -> None:
             for relation in relations:
-                relation_proxy = relation.get()
+                # Read ``related_models`` directly (rather than calling
+                # ``relation.get()``) so an un-materialized reverse/m2m
+                # proxy stays un-materialized — there is nothing in an
+                # empty proxy to migrate hashes for.
+                relation_proxy = relation.related_models
 
                 if hasattr(relation_proxy, "update_cache"):
                     relation_proxy.update_cache(prev_hash, new_hash)  # type: ignore

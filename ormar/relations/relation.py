@@ -64,11 +64,30 @@ class Relation(Generic[T]):
         self.to: type["T"] = to
         self._through = through
         self.field_name: str = field_name
-        self.related_models: Optional[Union[RelationProxy, "Model"]] = (
-            RelationProxy(relation=self, type_=type_, to=to, field_name=field_name)
-            if type_ in (RelationType.REVERSE, RelationType.MULTIPLE)
-            else None
-        )
+        # ``RelationProxy`` is built lazily on the first reverse/m2m use
+        # (``add`` / ``get`` / ``_clean_related``) to avoid the per-model
+        # allocation when the relation is never read.
+        self.related_models: Optional[Union[RelationProxy, "Model"]] = None
+
+    def _ensure_proxy(self) -> RelationProxy:
+        """
+        Materialize and cache the ``RelationProxy`` for reverse/m2m relations
+        on first use. Safe to call multiple times — subsequent calls return
+        the cached proxy.
+
+        :return: the relation's ``RelationProxy``
+        :rtype: RelationProxy
+        """
+        proxy = self.related_models
+        if not isinstance(proxy, RelationProxy):
+            proxy = RelationProxy(
+                relation=self,
+                type_=self._type,
+                to=self.to,
+                field_name=self.field_name,
+            )
+            self.related_models = proxy
+        return proxy
 
     def clear(self) -> None:
         if self._type in (RelationType.PRIMARY, RelationType.THROUGH):
@@ -146,8 +165,9 @@ class Relation(Generic[T]):
             self.related_models = child
             self._owner.__dict__[relation_name] = child
         else:
+            proxy = self._ensure_proxy()
             if self._find_existing(child) is None:
-                self.related_models.append(child)  # type: ignore
+                proxy.append(child)
                 rel = self._owner.__dict__.get(relation_name, [])
                 rel = rel or []
                 if not isinstance(rel, list):
@@ -186,11 +206,20 @@ class Relation(Generic[T]):
         """
         Return the related model or models from RelationProxy.
 
+        For reverse / many-to-many relations the ``RelationProxy`` is
+        materialized on first read so callers always see a list-like
+        return value (even when no children have been registered yet).
+
         :return: related model/models if set
         :rtype: Optional[Union[list[Model], Model]]
         """
         if self._to_remove:
             self._clean_related()
+        if self.related_models is None and self._type in (
+            RelationType.REVERSE,
+            RelationType.MULTIPLE,
+        ):
+            return self._ensure_proxy()
         return self.related_models
 
     def __repr__(self) -> str:  # pragma no cover
