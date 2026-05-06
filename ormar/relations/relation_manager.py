@@ -21,10 +21,15 @@ class RelationsManager:
     ) -> None:
         self.owner = proxy(owner)
         self._related_fields = related_fields or []
-        self._related_names = [field.name for field in self._related_fields]
+        # ``_field_map`` lets ``_get`` build a ``Relation`` lazily by name.
+        # Holding only the field reference (not a constructed Relation) is
+        # what skips the per-FK Relation/RelationProxy/QuerysetProxy
+        # allocation tree on every ``Model.__init__``.
+        self._field_map: dict[str, "ForeignKeyField"] = {
+            field.name: field for field in self._related_fields
+        }
+        self._related_names = list(self._field_map)
         self._relations: dict[str, Relation] = dict()
-        for field in self._related_fields:
-            self._add_relation(field)
 
     def __contains__(self, item: str) -> bool:
         """
@@ -51,7 +56,7 @@ class RelationsManager:
         :return: related model or list of related models if set
         :rtype: Optional[Union[Model, list[Model]]
         """
-        relation = self._relations.get(name, None)
+        relation = self._get(name)
         if relation is not None:
             return relation.get()
         return None  # pragma nocover
@@ -126,17 +131,34 @@ class RelationsManager:
 
     def _get(self, name: str) -> Optional[Relation]:
         """
-        Returns the actual relation and not the related model(s).
+        Return the ``Relation`` for ``name``, building it on first access.
+
+        Relations are constructed lazily so that ``Model.__init__`` does
+        not allocate a ``Relation`` (and, transitively, ``RelationProxy`` /
+        ``QuerysetProxy``) for every declared FK on every instance — most
+        of which are never read on row-materialization paths.
 
         :param name: name of the relation
         :type name: str
-        :return: Relation instance
+        :return: existing or freshly constructed Relation, or None if the
+            name does not correspond to a declared relation
         :rtype: ormar.relations.relation.Relation
         """
-        relation = self._relations.get(name, None)
+        relation = self._relations.get(name)
         if relation is not None:
             return relation
-        return None
+        field = self._field_map.get(name)
+        if field is None:
+            return None
+        relation = Relation(
+            manager=self,
+            type_=self._get_relation_type(field),
+            field_name=field.name,
+            to=field.to,
+            through=getattr(field, "through", None),
+        )
+        self._relations[name] = relation
+        return relation
 
     def _get_relation_type(self, field: "BaseField") -> RelationType:
         """
@@ -152,19 +174,3 @@ class RelationsManager:
         if field.is_through:
             return RelationType.THROUGH
         return RelationType.PRIMARY if not field.virtual else RelationType.REVERSE
-
-    def _add_relation(self, field: "BaseField") -> None:
-        """
-        Registers relation in the manager.
-        Adds Relation instance under field.name.
-
-        :param field: field with relation declaration
-        :type field: BaseField
-        """
-        self._relations[field.name] = Relation(
-            manager=self,
-            type_=self._get_relation_type(field),
-            field_name=field.name,
-            to=field.to,
-            through=getattr(field, "through", None),
-        )

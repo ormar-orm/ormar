@@ -32,9 +32,8 @@ class RelationProxy(Generic[T], list[T]):
         self.type_: "RelationType" = type_
         self.field_name = field_name
         self._owner: "Model" = self.relation.manager.owner
-        self.queryset_proxy: QuerysetProxy[T] = QuerysetProxy[T](
-            relation=self.relation, to=to, type_=type_
-        )
+        self._to: type["T"] = to
+        self._queryset_proxy: Optional[QuerysetProxy[T]] = None
         self._related_field_name: Optional[str] = None
 
         self._relation_cache: dict[int, int] = {}
@@ -50,6 +49,25 @@ class RelationProxy(Generic[T], list[T]):
                 except ReferenceError:
                     pass
         super().__init__(validated_data or ())
+
+    @property
+    def queryset_proxy(self) -> "QuerysetProxy[T]":
+        """
+        Builds the underlying ``QuerysetProxy`` on first access. Most
+        ``RelationProxy`` instances are constructed during row materialization
+        and never have any queryset method invoked on them, so deferring this
+        allocation skips a non-trivial dict/setattr pair per relation.
+
+        :return: lazily constructed (and cached) QuerysetProxy
+        :rtype: QuerysetProxy
+        """
+        proxy = self._queryset_proxy
+        if proxy is None:
+            proxy = QuerysetProxy[T](
+                relation=self.relation, to=self._to, type_=self.type_
+            )
+            self._queryset_proxy = proxy
+        return proxy
 
     @property
     def related_field_name(self) -> str:
@@ -224,14 +242,15 @@ class RelationProxy(Generic[T], list[T]):
 
     def _check_if_queryset_is_initialized(self) -> bool:
         """
-        Checks if the QuerySetProxy is already set and ready.
+        Checks if the QuerySetProxy is already set and ready. Reads the
+        backing ``_queryset_proxy`` slot directly so the check itself does
+        not force lazy construction of the proxy.
+
         :return: result of the check
         :rtype: bool
         """
-        return (
-            hasattr(self.queryset_proxy, "queryset")
-            and self.queryset_proxy.queryset is not None
-        )
+        proxy = self._queryset_proxy
+        return proxy is not None and proxy._queryset is not None
 
     def _check_if_model_saved(self) -> None:
         """
