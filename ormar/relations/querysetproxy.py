@@ -64,7 +64,7 @@ class QuerysetProxy(Generic[T]):
         :rtype: QuerySet
         """
         if not self._queryset:
-            raise AttributeError
+            raise AttributeError  # pragma: no cover
         return self._queryset
 
     @queryset.setter
