@@ -172,21 +172,22 @@ class MergeModelMixin:
         other_pks = [getattr(m, "pk", None) for m in other_value]
         plan = ormar_rust_utils.plan_merge_items_lists(current_pks, other_pks)
         value_to_set = list(other_value)
+        nested_relation_map = cast(
+            Optional[dict],
+            skip_ellipsis(relation_map, field_name, default=dict()),
+        )
         for cur_idx, other_idx in plan:
             cur_item = current_field[cur_idx]
             if other_idx is not None:
-                old_value = other_value[other_idx]
-                new_val = cls.merge_two_instances(
+                # ``other_idx`` is the destination slot the Rust planner
+                # already identified — write the merged instance there in
+                # place rather than rebuilding ``value_to_set`` with a pk
+                # filter (which was O(N) per match).
+                value_to_set[other_idx] = cls.merge_two_instances(
                     cur_item,
-                    cast("Model", old_value),
-                    relation_map=cast(
-                        Optional[dict],
-                        skip_ellipsis(relation_map, field_name, default=dict()),
-                    ),
+                    cast("Model", other_value[other_idx]),
+                    relation_map=nested_relation_map,
                 )
-                value_to_set = [
-                    x for x in value_to_set if getattr(x, "pk", None) != cur_item.pk
-                ] + [new_val]
             else:
                 value_to_set.append(cur_item)
         return value_to_set
