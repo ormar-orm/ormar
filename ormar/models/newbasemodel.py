@@ -117,6 +117,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         _pydantic_field_names: Optional[frozenset[str]]
         _extra_is_ignore: Optional[bool]
         _allowed_kwarg_names: Optional[frozenset[str]]
+        _relation_field_names: Optional[frozenset[str]]
         ormar_config: OrmarConfig
 
     # noinspection PyMissingConstructor
@@ -418,27 +419,52 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         json_fields = cls._json_fields
         bytes_fields = cls._bytes_fields
 
-        try:
-            new_kwargs: dict[str, Any] = {}
-            for k, v in kwargs.items():
-                if k in model_fields:
-                    v = model_fields[k].expand_relationship(v, self, to_register=False)
-                elif k not in pydantic_fields:
-                    # raises KeyError, handled below to produce a friendly ModelError
-                    model_fields[k]
-                if k in json_fields:
-                    v = encode_json(v)
-                if k in bytes_fields and v is not None:
-                    v = decode_bytes(
-                        value=v,
-                        represent_as_string=model_fields[k].represent_as_base64_str,
-                    )
-                new_kwargs[k] = v
-        except KeyError as e:
-            raise ModelError(
-                f"Unknown field '{e.args[0]}' for model {self.get_name(lower=False)}"
+        # ``relation_field_names`` is the disjoint set of fields that need
+        # ``expand_relationship``; everything else can skip that call. Cached
+        # on the class on first access — same pattern as ``_pydantic_field_names``.
+        relation_field_names = getattr(cls, "_relation_field_names", None)
+        if relation_field_names is None:
+            relation_field_names = frozenset(
+                name for name, f in model_fields.items() if f.is_relation
             )
+            cls._relation_field_names = relation_field_names  # type: ignore[attr-defined]
 
+        has_json = bool(json_fields)
+        has_bytes = bool(bytes_fields)
+        has_relations = bool(relation_field_names)
+
+        # Validate unknown kwargs up front so the dispatch loop doesn't need
+        # a per-iteration check. ``extra=ignore`` already filtered above, so
+        # in that branch no unknowns can remain.
+        if not extra_is_ignore:
+            for k in kwargs:
+                if k not in model_fields and k not in pydantic_fields:
+                    try:
+                        model_fields[k]
+                    except KeyError as e:
+                        raise ModelError(
+                            f"Unknown field '{e.args[0]}' for model "
+                            f"{self.get_name(lower=False)}"
+                        )
+
+        if not has_json and not has_bytes and not has_relations:
+            # Fast path — plain model with no relations/json/bytes. The
+            # validation pass above is the only per-key cost; the value
+            # copy is a single C-level dict construction.
+            return dict(kwargs), through_tmp_dict
+
+        new_kwargs: dict[str, Any] = {}
+        for k, v in kwargs.items():
+            if k in relation_field_names:
+                v = model_fields[k].expand_relationship(v, self, to_register=False)
+            if has_json and k in json_fields:
+                v = encode_json(v)
+            if has_bytes and k in bytes_fields and v is not None:
+                v = decode_bytes(
+                    value=v,
+                    represent_as_string=model_fields[k].represent_as_base64_str,
+                )
+            new_kwargs[k] = v
         return new_kwargs, through_tmp_dict
 
     def _initialize_internal_attributes(self) -> None:
