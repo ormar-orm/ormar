@@ -471,18 +471,26 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         return super().__eq__(other)  # pragma no cover
 
     def __hash__(self) -> int:
-        if getattr(self, "__cached_hash__", None) is not None:
-            return self.__cached_hash__ or 0
+        cached = getattr(self, "__cached_hash__", None)
+        if cached is not None:
+            return cached
 
-        if self.pk is not None:
-            ret = hash(str(self.pk) + self.__class__.__name__)
+        pk = self.pk
+        cls = type(self)
+        if pk is not None:
+            # ``type(self)`` hashes by identity in CPython, so ``hash((pk, cls))``
+            # is uniqueness-equivalent to the original ``str(pk) + cls.__name__``
+            # without two string allocations per call. This is the hot path —
+            # everything that goes through ``_relation_cache`` is keyed on
+            # saved-pk Models.
+            ret = hash((pk, cls))
         else:
-            vals = {
-                k: v
-                for k, v in self.__dict__.items()
-                if k not in self.extract_related_names()
-            }
-            ret = hash(str(vals) + self.__class__.__name__)
+            # Unsaved models can hold list/dict values in ``__dict__`` (json
+            # fields, reverse-relation slots), so we still ``str(vals)`` to
+            # keep the result hashable. Cold path; not perf-critical.
+            related = self.extract_related_names()
+            vals = {k: v for k, v in self.__dict__.items() if k not in related}
+            ret = hash((str(vals), cls))
 
         object.__setattr__(self, "__cached_hash__", ret)
         return ret
@@ -490,18 +498,23 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
     def __same__(self, other: "NewBaseModel") -> bool:
         """
         Used by __eq__, compares other model to this model.
-        Compares:
-        * _orm_ids,
-        * primary key values if it's set
-        * dictionary of own fields (excluding relations)
+
+        Saved models (both with pk) compare directly by ``(pk, type)`` to
+        skip the hash-cache fill on the *other* side. Unsaved/mixed states
+        fall through to the original hash-equality semantics.
+
         :param other: model to compare to
         :type other: NewBaseModel
         :return: result of comparison
         :rtype: bool
         """
-        if (self.pk is None and other.pk is not None) or (
-            self.pk is not None and other.pk is None
-        ):
+        if type(self) is not type(other):
+            return False  # pragma: no cover
+        self_pk = self.pk
+        other_pk = other.pk
+        if self_pk is not None and other_pk is not None:
+            return self_pk == other_pk
+        if (self_pk is None) != (other_pk is None):
             return False
         else:
             return hash(self) == other.__hash__()
