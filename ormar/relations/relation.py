@@ -113,15 +113,15 @@ class Relation(Generic[T]):
             for i, x in enumerate(self.related_models)  # type: ignore
             if i not in self._to_remove
         ]
-        self.related_models = RelationProxy(
+        proxy = RelationProxy(
             relation=self,
             type_=self._type,
             to=self.to,
             field_name=self.field_name,
             data_=cleaned_data,
         )
-        relation_name = self.field_name
-        self._owner.__dict__[relation_name] = cleaned_data
+        self.related_models = proxy
+        self._owner.__dict__[self.field_name] = proxy
         self._to_remove = set()
 
     def _find_existing(
@@ -157,6 +157,12 @@ class Relation(Generic[T]):
         Adds child Model to relation, either sets child as related model or adds
         it to the list in RelationProxy depending on relation type.
 
+        For reverse / many-to-many relations the ``RelationProxy`` itself is
+        stored under ``_owner.__dict__[relation_name]``, so a single O(1)
+        membership check on the proxy's hash cache covers both the relation
+        bookkeeping and the pydantic-visible ``__dict__`` slot — no parallel
+        list, no second linear scan.
+
         :param child: model to add to relation
         :type child: Model
         """
@@ -164,24 +170,15 @@ class Relation(Generic[T]):
         if self._type in (RelationType.PRIMARY, RelationType.THROUGH):
             self.related_models = child
             self._owner.__dict__[relation_name] = child
-        else:
-            proxy = self._ensure_proxy()
-            if self._find_existing(child) is None:
-                proxy.append(child)
-                rel = self._owner.__dict__.get(relation_name, [])
-                rel = rel or []
-                if not isinstance(rel, list):
-                    rel = [rel]
-                self._populate_owner_side_dict(rel=rel, child=child)
-                self._owner.__dict__[relation_name] = rel
-
-    def _populate_owner_side_dict(self, rel: list["Model"], child: "Model") -> None:
-        try:
-            if child not in rel:
-                rel.append(child)
-        except ReferenceError:
-            rel.clear()
-            rel.append(child)
+            return
+        proxy = self._ensure_proxy()
+        # ``_find_existing`` is the membership check *plus* a dead-weakref
+        # probe — when a hash collision lands on a stale entry we need that
+        # probe to populate ``_to_remove`` so the next ``get()`` triggers
+        # ``_clean_related``.
+        if self._find_existing(child) is None:
+            proxy.append(child)
+            self._owner.__dict__[relation_name] = proxy
 
     def remove(self, child: Union["NewBaseModel", type["NewBaseModel"]]) -> None:
         """
@@ -200,7 +197,6 @@ class Relation(Generic[T]):
             position = self._find_existing(child)
             if position is not None:
                 self.related_models.pop(position)  # type: ignore
-                del self._owner.__dict__[relation_name][position]
 
     def get(self) -> Optional[Union[list["Model"], "Model"]]:
         """
