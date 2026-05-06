@@ -2,6 +2,7 @@ import string
 import sys
 import uuid
 from dataclasses import dataclass
+from functools import cached_property
 from random import choices
 from typing import TYPE_CHECKING, Any, ForwardRef, Optional, Union, cast, overload
 
@@ -491,28 +492,6 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
             for val in value
         ]
 
-    def _register_existing_model(
-        self, value: "Model", child: "Model", to_register: bool
-    ) -> "Model":
-        """
-        Takes already created instance and registers it for parent.
-        Registration is mutual, so children have also reference to parent.
-
-        Used in reverse FK relations and normal FK for single models.
-
-        :param value: already instantiated Model
-        :type value: Model
-        :param child: child/ related Model
-        :type child: Model
-        :param to_register: flag if the relation should be set in RelationshipManager
-        :type to_register: bool
-        :return: (if needed) registered Model
-        :rtype: Model
-        """
-        if to_register:
-            self.register_relation(model=value, child=child)
-        return value
-
     def _construct_model_from_dict(
         self, value: dict, child: "Model", to_register: bool
     ) -> "Model":
@@ -611,6 +590,23 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         """
         return self.to.__class__ == ForwardRef
 
+    @cached_property
+    def _constructor_dispatch(self) -> dict[str, Any]:
+        """
+        Per-field map from input class name to the constructor handling that
+        shape. Built once at first access — by the time
+        ``expand_relationship`` runs, ``_verify_model_can_be_initialized``
+        has already gated on ``requires_ref_update``, so the bound methods
+        captured here are stable.
+
+        :return: dispatch table for the slow path of ``expand_relationship``
+        :rtype: dict[str, Any]
+        """
+        return {
+            "dict": self._construct_model_from_dict,
+            "list": self._extract_model_from_sequence,
+        }
+
     def expand_relationship(
         self,
         value: Any,
@@ -636,20 +632,17 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         """
         if value is None:
             return None if not self.virtual else []
-        try:
-            constructors = self._constructors_cache  # type: ignore[has-type]
-        except AttributeError:
-            self._constructors_cache = {
-                self.to.__name__: self._register_existing_model,
-                "dict": self._construct_model_from_dict,
-                "list": self._extract_model_from_sequence,
-            }
-            constructors = self._constructors_cache
-
-        model = constructors.get(  # type: ignore
+        # Fast path: ``value`` is already a Model of ``self.to``. Dominant
+        # case in row materialization and in user kwargs that pass
+        # constructed Models directly. Skips the dispatch table and the
+        # ``_register_existing_model`` indirection entirely.
+        if value.__class__ is self.to:
+            if to_register:
+                self.register_relation(model=value, child=cast("Model", child))
+            return value
+        return self._constructor_dispatch.get(
             value.__class__.__name__, self._construct_model_from_pk
         )(value, child, to_register)
-        return model
 
     def get_relation_name(self) -> str:  # pragma: no cover
         """
