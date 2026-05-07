@@ -361,6 +361,8 @@ Note how `Item` model above does not have a reference to `Category` although in 
     But, at the same time all root validators present on `ormar` models will **NOT** be copied to the generated pydantic model. Since root validator can operate on all fields and a user can exclude some fields during generation of pydantic model it's not safe to copy those validators.
     If required, you need to redefine/ manually copy them to generated pydantic model.
 
+Methods decorated with `@pydantic.computed_field` are also carried over to the generated model and follow the same `include` / `exclude` rules as regular fields, so they appear in the model's schema and `model_dump()` output (e.g. in `fastapi` responses).
+
 ## load()
 
 By default, when you query a table without prefetching related models, the ormar will still construct

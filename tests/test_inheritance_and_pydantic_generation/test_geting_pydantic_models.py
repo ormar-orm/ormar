@@ -1,6 +1,7 @@
 from typing import ForwardRef, Optional
 
 import pydantic
+from pydantic import computed_field
 from pydantic_core import PydanticUndefined
 
 import ormar
@@ -34,6 +35,33 @@ class Item(ormar.Model):
     id: int = ormar.Integer(primary_key=True)
     name: str = ormar.String(max_length=100, default="test")
     category: Optional[Category] = ormar.ForeignKey(Category, nullable=True)
+
+
+class CommentTopic(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="comment_topics")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=100)
+
+    @computed_field
+    def upper_name(self) -> str:
+        return self.name.upper()
+
+
+class Comment(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="comments")
+
+    id: int = ormar.Integer(primary_key=True)
+    body: str = ormar.String(max_length=200, default="")
+    topic: Optional[CommentTopic] = ormar.ForeignKey(CommentTopic, nullable=True)
+
+    @computed_field
+    def shouted_body(self) -> str:
+        return self.body.upper()
+
+    @computed_field
+    def trimmed_body(self) -> str:
+        return self.body.strip()
 
 
 class MutualA(ormar.Model):
@@ -303,3 +331,40 @@ def test_getting_pydantic_model_mutual_rels_exclude():
     assert len(MutualB2.model_fields) == 2
     assert set(MutualB2.model_fields.keys()) == {"id", "name"}
     assert MutualB1 != MutualB2
+
+
+def test_getting_pydantic_model_includes_computed_fields():
+    PydanticComment = Comment.get_pydantic()
+    assert set(PydanticComment.model_computed_fields.keys()) == {
+        "shouted_body",
+        "trimmed_body",
+    }
+    instance = PydanticComment(id=1, body=" hi ")
+    dumped = instance.model_dump()
+    assert dumped["shouted_body"] == " HI "
+    assert dumped["trimmed_body"] == "hi"
+
+
+def test_getting_pydantic_model_excludes_computed_field_by_name():
+    PydanticComment = Comment.get_pydantic(exclude={"trimmed_body"})
+    assert set(PydanticComment.model_computed_fields.keys()) == {"shouted_body"}
+    instance = PydanticComment(id=1, body=" hi ")
+    dumped = instance.model_dump()
+    assert "trimmed_body" not in dumped
+    assert dumped["shouted_body"] == " HI "
+
+
+def test_getting_pydantic_model_include_filters_computed_fields():
+    PydanticComment = Comment.get_pydantic(include={"id", "body", "shouted_body"})
+    assert set(PydanticComment.model_fields.keys()) == {"id", "body"}
+    assert set(PydanticComment.model_computed_fields.keys()) == {"shouted_body"}
+
+
+def test_getting_pydantic_model_propagates_computed_fields_through_relations():
+    PydanticComment = Comment.get_pydantic()
+    InnerTopic = PydanticComment.__pydantic_core_schema__["schema"]["fields"]["topic"][
+        "schema"
+    ]["schema"]["schema"]["cls"]
+    assert set(InnerTopic.model_computed_fields.keys()) == {"upper_name"}
+    inner = InnerTopic(id=1, name="news")
+    assert inner.model_dump()["upper_name"] == "NEWS"

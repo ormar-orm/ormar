@@ -88,6 +88,7 @@ class PydanticMixin(RelationMixin):
             {"__annotations__": fields_dict, **defaults},
         )
         model = cast(type[pydantic.BaseModel], model)
+        cls._copy_computed_fields(model=model, include=include, exclude=exclude)
         cls._copy_field_validators(model=model)
         cls.__cache__[cache_key] = model
         return model
@@ -141,6 +142,39 @@ class PydanticMixin(RelationMixin):
         if field.nullable:
             defaults[name] = None
         return target, defaults
+
+    @classmethod
+    def _copy_computed_fields(
+        cls,
+        model: type[pydantic.BaseModel],
+        include: Optional[dict],
+        exclude: Optional[dict],
+    ) -> None:
+        """
+        Copy ``@pydantic.computed_field`` decorated methods from the ormar model
+        onto the generated pydantic model so they are exposed in the schema and
+        serialization output. Computed fields are filtered with the same
+        include/exclude rules as regular fields.
+
+        :param model: pydantic model generated from the ormar model
+        :type model: type[pydantic.BaseModel]
+        :param include: fields of own and nested models to include
+        :type include: Optional[dict]
+        :param exclude: fields of own and nested models to exclude
+        :type exclude: Optional[dict]
+        """
+        computed_fields = cls.__pydantic_decorators__.computed_fields
+        if not computed_fields:
+            return
+        names_to_copy = filter_not_excluded_fields(
+            fields=set(computed_fields.keys()),
+            include=include,
+            exclude=exclude,
+        )
+        for name in names_to_copy:
+            decorator = computed_fields[name]
+            setattr(model, name, decorator.info.wrapped_property)
+            model.__pydantic_decorators__.computed_fields[name] = copy.copy(decorator)
 
     @classmethod
     def _copy_field_validators(cls, model: type[pydantic.BaseModel]) -> None:

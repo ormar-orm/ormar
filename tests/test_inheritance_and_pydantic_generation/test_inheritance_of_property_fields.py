@@ -53,3 +53,19 @@ def test_property_fields_are_inherited():
     bar = Bar(name="bar")
     assert bar.prefixed_name == "baz_bar"
     assert bar.model_dump() == {"name": "bar", "id": None, "prefixed_name": "baz_bar"}
+
+
+def test_inherited_property_fields_are_exposed_in_get_pydantic():
+    PydanticFoo = Foo.get_pydantic()
+    assert set(PydanticFoo.model_computed_fields.keys()) == {
+        "prefixed_name",
+        "double_prefixed_name",
+    }
+    foo_dump = PydanticFoo(name="foo").model_dump()
+    assert foo_dump["prefixed_name"] == "prefix_foo"
+    assert foo_dump["double_prefixed_name"] == "prefix2_foo"
+
+    PydanticBar = Bar.get_pydantic()
+    assert set(PydanticBar.model_computed_fields.keys()) == {"prefixed_name"}
+    bar_dump = PydanticBar(name="bar").model_dump()
+    assert bar_dump["prefixed_name"] == "baz_bar"
