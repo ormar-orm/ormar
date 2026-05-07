@@ -1,5 +1,95 @@
 # Release notes
 
+## 0.25.0
+
+### ⚡ Performance
+
+A broad performance pass across model construction, row hydration, relation
+resolution, alias lookups, and result merging — combining per-class caching,
+lazy initialization of relation machinery, and porting the hottest helpers to
+Rust via the new required [`ormar-utils`](https://pypi.org/project/ormar-utils/)
+dependency. End-to-end speedups vs 0.24.0 range from ~12 % on `select_related`,
+through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of models, and up to x2.5 speedup in getting `all`.
+
+### ✨ Features
+
+* Add `flatten_fields()` queryset method and `model_dump(flatten_fields=...)` /
+  `model_dump(flatten_all=True)` arguments to render related models as their
+  primary key value instead of nested dicts — see
+  [docs](./queries/select-columns.md#flatten_fields)
+  [#1641](https://github.com/collerek/ormar/pull/1641)
+
+    ```python
+    cars = await Car.objects.flatten_fields("manufacturer").all()
+    assert cars[0].model_dump() == {"id": 1, "name": "Corolla", "manufacturer": 1} # Note the id 1 and not the nested model
+
+    car.model_dump(flatten_all=True)
+    car.model_dump(flatten_fields={"manufacturer": ...})
+    ```
+
+* Add **proxy model inheritance** (`OrmarConfig(proxy=True)`) — child class
+  shares the parent's table and only adds methods / computed fields / a custom
+  `queryset_class` — thanks @SepehrBazyar — see
+  [docs](./models/inheritance.md#proxy-models)
+  [#760](https://github.com/collerek/ormar/pull/760)
+
+    ```python
+    class User(Human):
+        ormar_config = base_ormar_config.copy(proxy=True)
+
+        def full_name(self) -> str:
+            return f"{self.first_name} {self.last_name}"
+    ```
+
+* Add per-table `schema=` support on `OrmarConfig` so models can live in
+  non-default database schemas (PostgreSQL full, MySQL with caveats, SQLite
+  not supported for cross-schema FKs) — thanks @hk3dva — see
+  [docs](./models/index.md#schemas)
+  [#1493](https://github.com/collerek/ormar/pull/1493)
+* Add Python-style indexing and slicing on `QuerySet` — `Track.objects[:10]`,
+  `Track.objects[-5:]`, `Track.objects[5]` — thanks @SepehrBazyar — see
+  [docs](./queries/pagination-and-rows-number.md#slicing-with-__getitem__)
+  [#765](https://github.com/collerek/ormar/pull/765)
+* Add `nulls_ordering` argument to `.asc()` / `.desc()` (`ormar.NullsOrdering.FIRST`
+  / `LAST`) with MySQL emulation — thanks @SepehrBazyar — see
+  [docs](./queries/filter-and-sort.md#controlling-null-placement-with-nulls_ordering)
+  [#769](https://github.com/collerek/ormar/pull/769)
+* Allow filtering by a foreign-key column directly (`Book.objects.filter(Book.author == 5)`
+  or with a model instance) without adding a JOIN — thanks @djalouehz — see
+  [docs](./queries/filter-and-sort.md#filtering-by-foreign-key-columns)
+  [#854](https://github.com/collerek/ormar/pull/854)
+* Add `through_relation_nullable` and `through_reverse_relation_nullable` to
+  `ormar.ManyToMany` to enforce `NOT NULL` on the through table's FK columns —
+  thanks @evadev-eva — see
+  [docs](./relations/many-to-many.md#making-through-relation-columns-non-nullable)
+  [#852](https://github.com/collerek/ormar/pull/852)
+* Add `last()` / `last_or_none()` on `QuerySet` and expose `first_or_none()` /
+  `last()` / `last_or_none()` on `QuerysetProxy` — see
+  [docs](./queries/pagination-and-rows-number.md)
+  [#765](https://github.com/collerek/ormar/pull/765)
+* Forward unrecognized `**kwargs` from `ormar.ForeignKey` / `ormar.ManyToMany`
+  to `BaseField` — fixes `comment=` (and other `BaseField` kwargs) being
+  silently dropped on relation fields — thanks @booqoffsky
+  [#1239](https://github.com/collerek/ormar/pull/1239)
+
+### 🐛 Fixes
+
+* Clearing a nullable `ForeignKey` with `instance.fk = None` now also clears the
+  in-memory relation, so subsequent reads return `None` without a reload —
+  originally @amit12297, rebased — see
+  [docs](./relations/foreign-key.md)
+  [#1230](https://github.com/collerek/ormar/pull/1230)
+* Drop the unnecessary post-`INSERT` pk reload in `save()`, and raise
+  `ModelPersistenceError` on backends that cannot return a generated pk
+  (Oracle MySQL with non-`AUTO_INCREMENT` server-default pk) instead of
+  silently assigning the row count to `Model.pk` — thanks @vnicolaichuk
+  [#919](https://github.com/collerek/ormar/pull/919)
+* `SelectAction` aggregate identifiers now go through `sqlalchemy.column()`
+  instead of string concatenation
+  [#1637](https://github.com/collerek/ormar/pull/1637)
+* Fix the `mkdocs` deployment workflow
+  [#1638](https://github.com/collerek/ormar/pull/1638)
+
 ## 0.24.0
 
 ### ✨ Features

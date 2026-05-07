@@ -3,7 +3,7 @@ name = "ormar"
 
 [tool.poetry]
 name = "ormar"
-version = "0.24.0"
+version = "0.25.0"
 description = "An async ORM with fastapi in mind and pydantic validation."
 authors = ["Radosław Drążkiewicz <collerek@gmail.com>"]
 license = "MIT"
