@@ -47,12 +47,11 @@ ESCAPE_CHARACTERS = ["%", "_"]
 
 class FilterAction(QueryAction):
     """
-    Filter Actions is populated by queryset when filter() is called.
+    Represents a single WHERE predicate on a queryset.
 
-    All required params are extracted but kept raw until actual filter clause value
-    is required -> then the action is converted into text() clause.
-
-    Extracted in order to easily change table prefixes on complex relations.
+    Created for each ``key=value`` (or ``key__op=value``) passed to
+    ``filter(...)`` / ``exclude(...)`` and to filtering shortcuts like
+    ``get(...)`` / ``first(...)``.
     """
 
     def __init__(self, filter_str: str, value: Any, model_cls: type["Model"]) -> None:
