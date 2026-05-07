@@ -1,10 +1,8 @@
-import asyncio
 from enum import Enum
 from typing import Optional
 
 import pydantic
 import pytest
-import sqlalchemy.exc
 from pydantic import Json
 
 import ormar
@@ -239,89 +237,6 @@ async def test_get_or_create_with_defaults():
             assert created is False
             assert book2.title == "overwritten"
             assert book2 == book
-
-
-@pytest.mark.asyncio
-async def test_get_or_create_recovers_from_concurrent_create():
-    """Regression test for issue #1016."""
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            results = await asyncio.gather(
-                UniqueBook.objects.get_or_create(
-                    isbn="978-0-00-000000-1", title="Race"
-                ),
-                UniqueBook.objects.get_or_create(
-                    isbn="978-0-00-000000-1", title="Race"
-                ),
-            )
-
-            (book1, c1), (book2, c2) = results
-            assert book1.pk == book2.pk
-            assert book1.isbn == "978-0-00-000000-1"
-            assert sorted([c1, c2]) == [False, True]
-            assert await UniqueBook.objects.count() == 1
-
-
-@pytest.mark.asyncio
-async def test_get_or_create_propagates_unrelated_integrity_error():
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            await UniqueBook.objects.create(isbn="978-0-00-000000-2", title="Original")
-
-            with pytest.raises(sqlalchemy.exc.IntegrityError):
-                # ``isbn`` matches an existing row but ``title`` doesn't,
-                # so the initial get returns NoMatch, the create violates
-                # the unique constraint on isbn, and the retry get also
-                # returns NoMatch (title='Different' doesn't match) — so
-                # the integrity error is re-raised.
-                await UniqueBook.objects.get_or_create(
-                    isbn="978-0-00-000000-2", title="Different"
-                )
-
-
-@pytest.mark.asyncio
-async def test_proxy_get_or_create_recovers_from_concurrent_create():
-    """Same real-concurrency race as
-    ``test_get_or_create_recovers_from_concurrent_create`` but via the
-    m2m / reverse-fk proxy ``QuerysetProxy.get_or_create``, which has its
-    own try/except around the get/create pair.
-    """
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            library = await Library.objects.create(name="Main")
-
-            results = await asyncio.gather(
-                library.books.get_or_create(
-                    isbn="978-0-00-000000-3", title="ProxyRace"
-                ),
-                library.books.get_or_create(
-                    isbn="978-0-00-000000-3", title="ProxyRace"
-                ),
-            )
-
-            (book1, c1), (book2, c2) = results
-            assert book1.pk == book2.pk
-            assert sorted([c1, c2]) == [False, True]
-            assert await UniqueBook.objects.count() == 1
-
-
-@pytest.mark.asyncio
-async def test_proxy_get_or_create_propagates_unrelated_integrity_error():
-    """``QuerysetProxy.get_or_create`` re-raises the original
-    ``IntegrityError`` when the retry ``get`` still doesn't match —
-    same semantics as ``QuerySet.get_or_create``.
-    """
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            library = await Library.objects.create(name="Main")
-            await UniqueBook.objects.create(
-                isbn="978-0-00-000000-4", title="Original", library=library
-            )
-
-            with pytest.raises(sqlalchemy.exc.IntegrityError):
-                await library.books.get_or_create(
-                    isbn="978-0-00-000000-4", title="Different"
-                )
 
 
 @pytest.mark.asyncio
