@@ -112,6 +112,11 @@ assert album == album2
     Note that if you want to create a new object you either have to pass pk column
     value or pk column has to be set as autoincrement
 
+!!!note
+    Concurrent calls fall back to a second `get` if `create` trips a unique
+    constraint, returning the winning row with `created=False`. Wrap in
+    `database.transaction()` for stricter atomicity.
+
 ## first
 
 `first(*args, **kwargs) -> Model`

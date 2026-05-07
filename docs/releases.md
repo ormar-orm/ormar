@@ -1,5 +1,14 @@
 # Release notes
 
+## Unreleased
+
+### 🐛 Fixes
+
+* Fix race in `get_or_create` (and the m2m / reverse-fk variant) where
+  concurrent callers leaked `IntegrityError`. [#1016](https://github.com/collerek/ormar/issues/1016)
+* Fix `update_or_create` raising `NoMatch` instead of creating when called
+  with a pk that doesn't exist in the database.
+
 ## 0.25.0
 
 ### ⚡ Performance
