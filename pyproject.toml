@@ -95,7 +95,7 @@ ruff = ">=0.5.1,<0.15.13"
 setuptools = ">=78.1.1,<83.0.0"
 
 # types
-mypy = "^1.8.0"
+mypy = ">=1.8,<3.0"
 types-ujson = "^5.7.0"
 types-PyMySQL = "^1.0.19"
 types-ipaddress = "^1.0.1"
