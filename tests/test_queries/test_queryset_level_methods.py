@@ -95,6 +95,24 @@ class JsonTestModel(ormar.Model):
     json_field: Json = ormar.JSON()
 
 
+class Library(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="libraries")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=100)
+
+
+class UniqueBook(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="unique_books")
+
+    id: int = ormar.Integer(primary_key=True)
+    isbn: str = ormar.String(max_length=20, unique=True)
+    title: str = ormar.String(max_length=200)
+    library: Optional[Library] = ormar.ForeignKey(
+        Library, nullable=True, related_name="books"
+    )
+
+
 create_test_database = init_tests(base_ormar_config)
 
 
@@ -243,6 +261,59 @@ async def test_update_or_create():
                 await Book.objects.get(
                     title="Volume I", author="Anonymous", genre="Fantasy"
                 )
+
+
+@pytest.mark.asyncio
+async def test_update_or_create_creates_when_pk_does_not_exist():
+    """``update_or_create`` with a pk that doesn't exist must create the
+    row at that pk instead of raising ``NoMatch``.
+    """
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            assert await Book.objects.count() == 0
+
+            book = await Book.objects.update_or_create(
+                id=42, title="X", author="Y", genre="Fiction"
+            )
+            assert book.id == 42
+            assert await Book.objects.count() == 1
+
+            updated = await Book.objects.update_or_create(id=42, genre="Historic")
+            assert updated.id == 42
+            assert updated.genre == "Historic"
+            assert await Book.objects.count() == 1
+
+
+@pytest.mark.asyncio
+async def test_update_or_create_creates_when_pk_alias_does_not_exist():
+    """Same as above but using the ``pk`` alias kwarg, which goes
+    through the ``kwargs.pop("pk")`` rename branch.
+    """
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            book = await Book.objects.update_or_create(
+                pk=99, title="A", author="B", genre="Fiction"
+            )
+            assert book.id == 99
+            assert await Book.objects.count() == 1
+
+
+@pytest.mark.asyncio
+async def test_proxy_update_or_create_creates_when_pk_does_not_exist():
+    """``QuerysetProxy.update_or_create`` (m2m / reverse-fk) duplicates
+    the same get/create logic and must also create when given a missing
+    pk instead of raising ``NoMatch``.
+    """
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            library = await Library.objects.create(name="Main")
+
+            book = await library.books.update_or_create(
+                id=123, isbn="978-0-00-000000-9", title="Created"
+            )
+            assert book.id == 123
+            assert book.isbn == "978-0-00-000000-9"
+            assert await UniqueBook.objects.count() == 1
 
 
 @pytest.mark.asyncio

@@ -1181,6 +1181,13 @@ class QuerySet(Generic[T]):
         and if `NoMatch` exception is raised
         it creates a new one with given kwargs and _defaults.
 
+        If a concurrent caller wins the race and creates a matching row
+        between this call's ``get`` and ``create``, the ``create`` raises
+        ``sqlalchemy.exc.IntegrityError`` and ``get`` is retried once.
+        If the retry still finds no row, the original ``IntegrityError`` is
+        re-raised because the violation isn't a race but a legitimate
+        constraint conflict (e.g. a different unique key).
+
         Passing a criteria is actually calling filter(*args, **kwargs) method described
         below.
 
@@ -1194,12 +1201,24 @@ class QuerySet(Generic[T]):
         try:
             return await self.get(*args, **kwargs), False
         except NoMatch:
-            _defaults = _defaults or {}
+            pass
+
+        _defaults = _defaults or {}
+        try:
             return await self.create(**{**kwargs, **_defaults}), True
+        except sqlalchemy.exc.IntegrityError as integrity_error:
+            try:
+                return await self.get(*args, **kwargs), False
+            except NoMatch:
+                raise integrity_error from None
 
     async def update_or_create(self, **kwargs: Any) -> "T":
         """
         Updates the model, or in case there is no match in database creates a new one.
+
+        If a pk is supplied but no row exists with that pk, a new row is
+        created with the supplied pk and field values rather than raising
+        ``NoMatch``.
 
         :param kwargs: fields names and proper value types
         :type kwargs: Any
@@ -1211,7 +1230,10 @@ class QuerySet(Generic[T]):
             kwargs[pk_name] = kwargs.pop("pk")
         if pk_name not in kwargs or kwargs.get(pk_name) is None:
             return await self.create(**kwargs)
-        model = await self.get(pk=kwargs[pk_name])
+        try:
+            model = await self.get(pk=kwargs[pk_name])
+        except NoMatch:
+            return await self.create(**kwargs)
         return await model.update(**kwargs)
 
     async def all(self, *args: Any, **kwargs: Any) -> list["T"]:  # noqa: A003
