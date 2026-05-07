@@ -12,12 +12,10 @@ if TYPE_CHECKING:  # pragma: nocover
 
 class OrderAction(QueryAction):
     """
-    Order Actions is populated by queryset when order_by() is called.
+    Represents a single ORDER BY directive on a queryset.
 
-    All required params are extracted but kept raw until actual filter clause value
-    is required -> then the action is converted into text() clause.
-
-    Extracted in order to easily change table prefixes on complex relations.
+    Created when ``order_by(...)`` or ``Field.asc()`` / ``Field.desc()`` is
+    used, and internally to apply the default primary-key ordering.
     """
 
     def __init__(
