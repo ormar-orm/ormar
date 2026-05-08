@@ -3,14 +3,10 @@ import decimal
 import uuid
 from typing import Callable, Optional
 
+import orjson as json
 import ormar_rust_utils
 import pydantic
 from pydantic_core import SchemaValidator, core_schema
-
-try:
-    import orjson as json
-except ImportError:  # pragma: no cover
-    import json  # type: ignore
 
 
 def parse_bool(value: str) -> bool:

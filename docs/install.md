@@ -46,14 +46,6 @@ pip install ormar[sqlite]
 
 Will install also `aiosqlite`.
 
-### Orjson
-
-```py
-pip install ormar[orjson]
-```
-
-Will install also `orjson` that is much faster than builtin json parser.
-
 ### Crypto
 
 ```py
