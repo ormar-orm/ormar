@@ -14,6 +14,9 @@ documentation = "https://ormar-orm.github.io/ormar/"
 packages = [
     { include="ormar" }
 ]
+include = [
+    { path = "tests/**/*.py", format = "sdist" },
+]
 keywords = [
     "orm",
     "sqlalchemy",
