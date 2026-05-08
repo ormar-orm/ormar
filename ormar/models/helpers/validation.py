@@ -2,11 +2,6 @@ import decimal
 import numbers
 from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
-try:
-    import orjson as json
-except ImportError:  # pragma: no cover
-    import json  # type: ignore  # noqa: F401
-
 import pydantic
 
 from ormar.models.helpers.models import config_field_not_set

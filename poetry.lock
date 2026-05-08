@@ -1713,10 +1713,9 @@ files = [
 name = "orjson"
 version = "3.11.9"
 description = "Fast, correct Python JSON library supporting dataclasses, datetimes, and numpy"
-optional = true
+optional = false
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "extra == \"orjson\" or extra == \"all\""
 files = [
     {file = "orjson-3.11.9-cp310-cp310-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl", hash = "sha256:135869ef917b8704ea0a94e01620e0c05021c15c52036e4663baffe75e72f8ce"},
     {file = "orjson-3.11.9-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:115ab5f5f4a0f203cc2a5f0fb09aee503a3f771aa08392949ab5ca230c4fbdbd"},
@@ -3129,10 +3128,9 @@ test = ["gevent (>=20.6.2)"]
 
 [extras]
 aiopg = ["aiopg", "psycopg2-binary"]
-all = ["PyMySQL", "aiomysql", "aiopg", "aiosqlite", "asyncpg", "cryptography", "mysqlclient", "orjson", "psycopg2-binary"]
+all = ["PyMySQL", "aiomysql", "aiopg", "aiosqlite", "asyncpg", "cryptography", "mysqlclient", "psycopg2-binary"]
 crypto = ["cryptography"]
 mysql = ["PyMySQL", "aiomysql"]
-orjson = ["orjson"]
 postgres = ["asyncpg", "psycopg2-binary"]
 postgresql = ["asyncpg", "psycopg2-binary"]
 sqlite = ["aiosqlite"]
@@ -3140,4 +3138,4 @@ sqlite = ["aiosqlite"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10.0"
-content-hash = "24c5baf41b4913764cb9686979371e82d0dc18f3e4cff5f9da27e7648a4a179c"
+content-hash = "0d53cffb9d62686adedba131d270c93777c4d08a5dca330151ac65f39daa572b"
