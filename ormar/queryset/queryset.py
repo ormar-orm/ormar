@@ -694,14 +694,23 @@ class QuerySet(Generic[T]):
             return await self.fields(columns=fields).values(
                 _as_dict=_as_dict, _flatten=_flatten, exclude_through=exclude_through
             )
-        expr = self.build_select_expression()
+        excludable = self._excludable.with_projection_exclusions(
+            source_model=self.model,
+            select_related=self._select_related,
+        )
+        projected = (
+            self
+            if excludable is self._excludable
+            else self.rebuild_self(excludable=excludable)
+        )
+        expr = projected.build_select_expression()
         async with self.model_config.database.get_query_executor() as executor:
             rows = await executor.fetch_all(expr)
         if not rows:
             return []
         alias_resolver = ReverseAliasResolver(
             select_related=self._select_related,
-            excludable=self._excludable,
+            excludable=excludable,
             model_cls=self.model_cls,  # type: ignore
             exclude_through=exclude_through,
         )

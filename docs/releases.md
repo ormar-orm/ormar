@@ -8,6 +8,12 @@
   concurrent callers leaked `IntegrityError`. [#1016](https://github.com/collerek/ormar/issues/1016)
 * Fix `update_or_create` raising `NoMatch` instead of creating when called
   with a pk that doesn't exist in the database.
+* Fix `values()` / `values_list()` leaking columns of related models that
+  were pulled in by a filter (e.g. `filter(project__id=...)`) or by a bare
+  `select_related()` but never named in `fields()`. Such relations - and
+  their through models for m2m - are now excluded from the projected
+  result, matching the columns the caller actually requested.
+  [#800](https://github.com/collerek/ormar/issues/800)
 
 ## 0.25.0
 

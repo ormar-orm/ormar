@@ -134,7 +134,18 @@ assert user == [
 
 Combine select related and fields to select only 3 fields.
 
-Note that we also exclude through model as by definition every model included in a join but without any reference in fields is assumed to be selected in full (all fields included).
+!!!note
+    `values()` and `values_list()` project only the columns referenced in
+    `fields()`. Related models pulled into the query (either via
+    `select_related()` directly, or implicitly by a filter like
+    `filter(category__id=1)`) but never named in `fields()` are dropped
+    from the result - including their through models for many-to-many
+    relations.
+
+    This differs from `fields()` on a regular ORM-loading query (`get`,
+    `all`, etc.), where unmentioned related models in `select_related()`
+    are still loaded in full so model construction does not lose
+    mandatory columns.
 
 !!!note
     Note that in contrary to other queryset methods here you can exclude the
@@ -274,7 +285,18 @@ news = await Category(name="News", sort_order=0, created_by=creator).save()
 
 Combine select related and fields to select only 3 fields.
 
-Note that we also exclude through model as by definition every model included in a join but without any reference in fields is assumed to be selected in full (all fields included).
+!!!note
+    `values()` and `values_list()` project only the columns referenced in
+    `fields()`. Related models pulled into the query (either via
+    `select_related()` directly, or implicitly by a filter like
+    `filter(category__id=1)`) but never named in `fields()` are dropped
+    from the result - including their through models for many-to-many
+    relations.
+
+    This differs from `fields()` on a regular ORM-loading query (`get`,
+    `all`, etc.), where unmentioned related models in `select_related()`
+    are still loaded in full so model construction does not lose
+    mandatory columns.
 
 !!!note
     Note that in contrary to other queryset methods here you can exclude the

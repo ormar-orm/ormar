@@ -284,6 +284,21 @@ class Excludable:
         """
         return (... in self.include or key in self.include) if self.include else True
 
+    def is_explicitly_included(self, key: str) -> bool:
+        """
+        Check whether ``key`` is explicitly named in the include set.
+
+        Unlike :meth:`is_included`, this returns ``False`` for an empty
+        include set rather than ``True`` - callers asking "did the user
+        name this?" want a no when nothing was specified at all.
+
+        :param key: key to check
+        :type key: str
+        :return: True if include is non-empty and contains key (or ``...``)
+        :rtype: bool
+        """
+        return bool(self.include) and self.is_included(key)
+
     def is_excluded(self, key: str) -> bool:
         """
         Check if field in excluded (in set or set is {...}).
@@ -363,6 +378,102 @@ class ExcludableItems:
             )
         return self._flatten_map_cache
 
+    @staticmethod
+    def _make_key(model_cls: type["Model"], alias: str = "") -> str:
+        """
+        Build the items-dict key for ``(alias, model)``. Centralized so
+        every call site shares one definition of "which Excludable is
+        this".
+        """
+        prefix = f"{alias}_" if alias else ""
+        return f"{prefix}{model_cls.get_name(lower=True)}"
+
+    @staticmethod
+    def _resolve_path(
+        source_model: type["Model"],
+        parts_prefix: tuple,
+    ) -> tuple[str, type["Model"]]:
+        """
+        Resolve a dunder path prefix to its target ``(alias, model)``.
+
+        An empty prefix returns ``("", source_model)``. Goes through
+        :func:`get_relationship_alias_model_and_str`, which mutates its
+        ``related_parts`` argument while resolving through models - the
+        prefix tuple is copied to a list to insulate the caller.
+
+        Examples (alias strings are hashes from the alias manager and
+        shown here as ``<...>`` since they are not stable across runs)::
+
+            _resolve_path(Post, ())
+            # => ("", Post)
+
+            _resolve_path(Post, ("category",))
+            # => ("<post_category>", Category)
+
+            _resolve_path(Role, ("users", "categories"))
+            # => ("<usercategory_category>", Category)
+
+        :param source_model: model from which the path is rooted
+        :type source_model: type[Model]
+        :param parts_prefix: pre-split path segments
+        :type parts_prefix: tuple
+        :return: alias and target model at the prefix
+        :rtype: tuple[str, type[Model]]
+        """
+        if not parts_prefix:
+            return "", source_model
+        alias, model, _, _ = get_relationship_alias_model_and_str(
+            source_model=source_model,
+            related_parts=list(parts_prefix),
+        )
+        return alias, model
+
+    def _referenced_at(
+        self,
+        source_model: type["Model"],
+        parts_prefix: tuple,
+    ) -> bool:
+        """
+        Return whether this :class:`ExcludableItems` already carries any
+        include or exclude entry for the model at ``parts_prefix``.
+
+        Used by :meth:`with_projection_exclusions` to detect whether the
+        user's ``fields()`` call referenced a given path - an empty
+        ``Excludable`` (or none at all) means "not referenced".
+
+        Examples, contrasting the same path under two different
+        ``fields()`` specs::
+
+            # Built from Post.objects.fields(["name"])
+            #   items = {"post": Excludable(include={"name"})}
+
+            excludable._referenced_at(Post, ())
+            # => True   (Post has a non-empty include)
+
+            excludable._referenced_at(Post, ("category",))
+            # => False  (no entry for Category)
+
+
+            # Built from Post.objects.fields(["name", "category__name"])
+            #   items = {
+            #       "post": Excludable(include={"name"}),
+            #       "<alias>_category": Excludable(include={"name"}),
+            #   }
+
+            excludable._referenced_at(Post, ("category",))
+            # => True   (Category has a non-empty include)
+
+        :param source_model: model from which the path is rooted
+        :type source_model: type[Model]
+        :param parts_prefix: pre-split path segments to check
+        :type parts_prefix: tuple
+        :return: True if a non-empty entry exists at the prefix
+        :rtype: bool
+        """
+        alias, model = self._resolve_path(source_model, parts_prefix)
+        exc = self.items.get(self._make_key(model, alias))
+        return exc is not None and bool(exc.include or exc.exclude)
+
     def get(self, model_cls: type["Model"], alias: str = "") -> Excludable:
         """
         Return Excludable for given model and alias.
@@ -374,7 +485,7 @@ class ExcludableItems:
         :return: Excludable for given model and alias
         :rtype: ormar.models.excludable.Excludable
         """
-        key = f"{alias + '_' if alias else ''}{model_cls.get_name(lower=True)}"
+        key = self._make_key(model_cls, alias)
         excludable = self.items.get(key)
         if not excludable:
             excludable = Excludable()
@@ -457,7 +568,7 @@ class ExcludableItems:
                 self._flatten_paths.add(path_parts + (item,))
             self._flatten_map_cache = None
 
-        key = f"{alias + '_' if alias else ''}{model_cls.get_name(lower=True)}"
+        key = self._make_key(model_cls, alias)
         excludable = self.items.setdefault(key, Excludable())
         excludable.set_values(value=items, slot=slot)
 
@@ -619,6 +730,63 @@ class ExcludableItems:
                     f"so nested flatten '{join_path(longer)}' is unreachable."
                 )
 
+    def with_projection_exclusions(
+        self,
+        source_model: type["Model"],
+        select_related: list[str],
+    ) -> "ExcludableItems":
+        """
+        Return a copy with relations not referenced by ``fields()`` removed
+        from a flat values projection.
+
+        A filter like ``filter(project__id=...)`` auto-joins ``project``;
+        without this, a flat ``values()`` call leaks every Project column
+        even though only one main-model field was requested. Returns the
+        original instance unchanged when ``fields()`` was never called -
+        the leak is a values-projection problem, not an ORM-load problem.
+
+        :param source_model: model from which relation paths are rooted
+        :type source_model: type[Model]
+        :param select_related: paths joined into the query (dunder strings)
+        :type select_related: list[str]
+        :return: new :class:`ExcludableItems` with implicit excludes added,
+            or ``self`` when no ``fields()`` call had any effect
+        :rtype: ExcludableItems
+        """
+        if self.include_entry_count() == 0:
+            return self
+
+        excludable = ExcludableItems.from_excludable(self)
+
+        for path in select_related:
+            parts = tuple(path.split("__"))
+            # Snapshot which prefixes carry a fields() reference before any
+            # exclusions are added below - the exclude additions would
+            # otherwise show up as "referenced" on the next iteration.
+            referenced = [
+                excludable._referenced_at(source_model, parts[: d + 1])
+                for d in range(len(parts))
+            ]
+            # Walk deepest-first so kept_deeper accumulates inward. Each
+            # segment still needs its own exclude when not kept, because
+            # ReverseAliasResolver only consults the immediate parent.
+            kept_deeper = False
+            for i in reversed(range(len(parts))):
+                kept_deeper = kept_deeper or referenced[i]
+                segment = parts[i]
+                parent_alias, parent_model = excludable._resolve_path(
+                    source_model, parts[:i]
+                )
+                parent_exc = excludable.get(parent_model, alias=parent_alias)
+                if parent_exc.is_explicitly_included(segment) or kept_deeper:
+                    continue
+                field = parent_model.ormar_config.model_fields[segment]
+                parent_exc.exclude.add(segment)
+                if field.is_multi:
+                    parent_exc.exclude.add(field.through.get_name())
+
+        return excludable
+
     def validate_flatten_vs_excludable(self, source_model: type["Model"]) -> None:
         """
         Ensure no flattened relation has sub-field include/exclude on its target.
@@ -635,11 +803,7 @@ class ExcludableItems:
                 source_model=source_model,
                 related_parts=list(parts),
             )
-            child_key = (
-                f"{table_prefix + '_' if table_prefix else ''}"
-                f"{target_model.get_name(lower=True)}"
-            )
-            child = self.items.get(child_key)
+            child = self.items.get(self._make_key(target_model, table_prefix))
             if not child:
                 continue
             conflicts = (child.include | child.exclude) - {...}

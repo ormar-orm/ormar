@@ -361,14 +361,7 @@ async def test_querysetproxy_values():
             .fields({"name": ..., "categories": {"name"}})
             .values(exclude_through=True)
         )
-        assert user == [
-            {
-                "name": "Anonymous",
-                "roles__id": 1,
-                "roles__name": "admin",
-                "categories__name": "News",
-            }
-        ]
+        assert user == [{"name": "Anonymous", "categories__name": "News"}]
 
         user = (
             await role.users.filter(name="Anonymous")
@@ -397,7 +390,7 @@ async def test_querysetproxy_values_list():
             .fields({"name": ..., "categories": {"name"}})
             .values_list(exclude_through=True)
         )
-        assert user == [("Anonymous", "News", 1, "admin")]
+        assert user == [("Anonymous", "News")]
 
         user = (
             await role.users.filter(name="Anonymous")
@@ -416,3 +409,142 @@ async def test_querysetproxy_values_list():
             .values_list(exclude_through=True, flatten=True)
         )
         assert user == ["Anonymous"]
+
+
+@pytest.mark.asyncio
+async def test_filter_related_does_not_leak_columns_in_values_list():
+    async with base_ormar_config.database:
+        posts = await Post.objects.filter(category__id=1).fields(["name"]).values_list()
+        assert posts == [
+            ("Ormar strikes again!",),
+            ("Why don't you use ormar yet?",),
+            ("Check this out, ormar now for free",),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_values_list_fields_kwarg_does_not_leak_related_columns():
+    async with base_ormar_config.database:
+        posts = await Post.objects.filter(category__id=1).values_list(fields=["name"])
+        assert posts == [
+            ("Ormar strikes again!",),
+            ("Why don't you use ormar yet?",),
+            ("Check this out, ormar now for free",),
+        ]
+
+
+@pytest.mark.asyncio
+async def test_filter_related_does_not_leak_columns_in_values():
+    async with base_ormar_config.database:
+        posts = await Post.objects.filter(category__id=1).fields(["name"]).values()
+        assert posts == [
+            {"name": "Ormar strikes again!"},
+            {"name": "Why don't you use ormar yet?"},
+            {"name": "Check this out, ormar now for free"},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_explicit_select_related_with_only_main_fields_excludes_related():
+    async with base_ormar_config.database:
+        posts = await Post.objects.select_related("category").fields(["name"]).values()
+        assert posts == [
+            {"name": "Ormar strikes again!"},
+            {"name": "Why don't you use ormar yet?"},
+            {"name": "Check this out, ormar now for free"},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_nested_fields_keep_referenced_relation():
+    async with base_ormar_config.database:
+        posts = await (
+            Post.objects.select_related("category")
+            .fields(["name", "category__name"])
+            .values()
+        )
+        assert posts == [
+            {"name": "Ormar strikes again!", "category__name": "News"},
+            {"name": "Why don't you use ormar yet?", "category__name": "News"},
+            {"name": "Check this out, ormar now for free", "category__name": "News"},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_m2m_relation_and_through_excluded_when_only_main_fields():
+    async with base_ormar_config.database:
+        roles = await (
+            Role.objects.select_related("users__categories").fields(["name"]).values()
+        )
+        assert roles == [{"name": "admin"}, {"name": "editor"}]
+
+
+@pytest.mark.asyncio
+async def test_relation_name_in_fields_keeps_relation_columns():
+    async with base_ormar_config.database:
+        posts = await (
+            Post.objects.select_related("category")
+            .fields({"name", "category"})
+            .values()
+        )
+        assert posts == [
+            {
+                "name": "Ormar strikes again!",
+                "category": 1,
+                "category__id": 1,
+                "category__name": "News",
+                "category__sort_order": 0,
+                "category__created_by": 1,
+            },
+            {
+                "name": "Why don't you use ormar yet?",
+                "category": 1,
+                "category__id": 1,
+                "category__name": "News",
+                "category__sort_order": 0,
+                "category__created_by": 1,
+            },
+            {
+                "name": "Check this out, ormar now for free",
+                "category": 1,
+                "category__id": 1,
+                "category__name": "News",
+                "category__sort_order": 0,
+                "category__created_by": 1,
+            },
+        ]
+
+
+@pytest.mark.asyncio
+async def test_filter_related_without_fields_keeps_all_columns():
+    async with base_ormar_config.database:
+        posts = await Post.objects.filter(category__id=1).values()
+        assert posts == [
+            {
+                "id": 1,
+                "name": "Ormar strikes again!",
+                "category": 1,
+                "category__id": 1,
+                "category__name": "News",
+                "category__sort_order": 0,
+                "category__created_by": 1,
+            },
+            {
+                "id": 2,
+                "name": "Why don't you use ormar yet?",
+                "category": 1,
+                "category__id": 1,
+                "category__name": "News",
+                "category__sort_order": 0,
+                "category__created_by": 1,
+            },
+            {
+                "id": 3,
+                "name": "Check this out, ormar now for free",
+                "category": 1,
+                "category__id": 1,
+                "category__name": "News",
+                "category__sort_order": 0,
+                "category__created_by": 1,
+            },
+        ]
