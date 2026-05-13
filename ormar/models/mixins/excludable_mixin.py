@@ -110,6 +110,10 @@ class ExcludableMixin(RelationMixin):
         :rtype: list[str]
         """
         model_excludable = excludable.get(model_cls=model, alias=alias)  # type: ignore
+        if model_excludable.pk_only:
+            if not add_pk_columns:
+                return []
+            return cls._populate_pk_column(model=model, columns=[], use_alias=use_alias)
         has_include = bool(model_excludable.include)
         has_exclude = bool(model_excludable.exclude)
 

@@ -14,6 +14,14 @@
   their through models for m2m - are now excluded from the projected
   result, matching the columns the caller actually requested.
   [#800](https://github.com/collerek/ormar/issues/800)
+* Fix `values()` / `values_list()` leaking main-model columns when
+  `fields()` named only nested fields (e.g.
+  `values_list("garage__owner", flatten=True)`). The flat projection now
+  drops every column from any model the caller never named - including
+  the parent FK column and any in-between models the path passes through
+  - so `flatten=True` returns the requested nested value instead of the
+  first leaked main-model column.
+  [#1060](https://github.com/collerek/ormar/issues/1060)
 
 ## 0.25.0
 

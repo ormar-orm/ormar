@@ -548,3 +548,73 @@ async def test_filter_related_without_fields_keeps_all_columns():
                 "category__created_by": 1,
             },
         ]
+
+
+@pytest.mark.asyncio
+async def test_nested_only_fields_drops_main_columns_in_values():
+    async with base_ormar_config.database:
+        posts = await (
+            Post.objects.select_related("category").fields(["category__name"]).values()
+        )
+        assert posts == [
+            {"category__name": "News"},
+            {"category__name": "News"},
+            {"category__name": "News"},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_nested_only_fields_drops_main_columns_in_values_list():
+    async with base_ormar_config.database:
+        posts = await (
+            Post.objects.select_related("category")
+            .fields(["category__name"])
+            .values_list()
+        )
+        assert posts == [("News",), ("News",), ("News",)]
+
+
+@pytest.mark.asyncio
+async def test_nested_only_fields_flatten_returns_nested_value():
+    """
+    Reproducer for issue #1060. Without the fix, flatten=True picks up
+    Post.id (the first leaked main-model column) instead of the nested
+    value the caller actually requested.
+    """
+    async with base_ormar_config.database:
+        names = await (
+            Post.objects.select_related("category")
+            .fields(["category__name"])
+            .values_list(flatten=True)
+        )
+        assert names == ["News", "News", "News"]
+
+
+@pytest.mark.asyncio
+async def test_deeper_nested_only_fields_drops_main_columns():
+    async with base_ormar_config.database:
+        posts = await (
+            Post.objects.select_related("category__created_by")
+            .fields(["category__created_by__name"])
+            .values()
+        )
+        assert posts == [
+            {"category__created_by__name": "Anonymous"},
+            {"category__created_by__name": "Anonymous"},
+            {"category__created_by__name": "Anonymous"},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_main_referenced_keeps_main_columns():
+    async with base_ormar_config.database:
+        posts = await (
+            Post.objects.select_related("category")
+            .fields(["name", "category__name"])
+            .values()
+        )
+        assert posts == [
+            {"name": "Ormar strikes again!", "category__name": "News"},
+            {"name": "Why don't you use ormar yet?", "category__name": "News"},
+            {"name": "Check this out, ormar now for free", "category__name": "News"},
+        ]
