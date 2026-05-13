@@ -241,11 +241,17 @@ class Excludable:
     """
     Class that keeps sets of fields to include, exclude, and flatten for a single
     model at a given alias/relation level.
+
+    ``pk_only`` is a short-circuit consulted by :meth:`own_table_columns`: when
+    set, only the primary-key column is projected for this model and the
+    ``include``/``exclude`` sets are ignored. Producers should not combine
+    ``pk_only=True`` with a non-empty ``include``/``exclude`` - the flag wins.
     """
 
     include: set = field(default_factory=set)
     exclude: set = field(default_factory=set)
     flatten: set = field(default_factory=set)
+    pk_only: bool = False
 
     def get_copy(self) -> "Excludable":
         """
@@ -258,6 +264,7 @@ class Excludable:
         _copy.include = {x for x in self.include}
         _copy.exclude = {x for x in self.exclude}
         _copy.flatten = {x for x in self.flatten}
+        _copy.pk_only = self.pk_only
         return _copy
 
     def set_values(self, value: set, slot: Slot) -> None:
@@ -758,6 +765,10 @@ class ExcludableItems:
 
         excludable = ExcludableItems.from_excludable(self)
 
+        # If fields() never names the source model, project only its PK.
+        if not excludable._referenced_at(source_model, ()):
+            excludable.get(source_model).pk_only = True
+
         for path in select_related:
             parts = tuple(path.split("__"))
             # Snapshot which prefixes carry a fields() reference before any
@@ -778,7 +789,16 @@ class ExcludableItems:
                     source_model, parts[:i]
                 )
                 parent_exc = excludable.get(parent_model, alias=parent_alias)
-                if parent_exc.is_explicitly_included(segment) or kept_deeper:
+                if parent_exc.is_explicitly_included(segment):
+                    continue
+                if kept_deeper:
+                    # Intermediate relation: keep the join but project
+                    # PK-only when this segment was never explicitly named.
+                    if not referenced[i]:
+                        target_alias, target_model = excludable._resolve_path(
+                            source_model, parts[: i + 1]
+                        )
+                        excludable.get(target_model, alias=target_alias).pk_only = True
                     continue
                 field = parent_model.ormar_config.model_fields[segment]
                 parent_exc.exclude.add(segment)
