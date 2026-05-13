@@ -31,11 +31,15 @@ Following methods allow you to load data from the database.
 
 `get(*args, **kwargs) -> Model`
 
-Gets the first row from the db meeting the criteria set by kwargs.
+Gets a single row from the db matching the criteria set by args/kwargs.
 
-If no criteria set it will return the last row in db sorted by pk column.
+When criteria are set (either through args/kwargs or via a chained `filter`/`exclude`)
+the query fetches every matching row and asserts that exactly one row comes back.
 
-Passing a criteria is actually calling filter(*args, **kwargs) method described below.
+If no criteria are set, `get()` falls back to returning the last row of the table
+ordered by primary key descending.
+
+Passing a criteria is equivalent to calling `filter(*args, **kwargs).get()`.
 
 ```python
 class Track(ormar.Model):
@@ -57,13 +61,15 @@ track = await Track.objects.get(name='The Bird')
 track2 = track = await Track.objects.get()
 track == track2
 # True since it's the only row in db in our example
-# and get without arguments return first row by pk column desc 
+# and get without arguments returns the last row by pk column desc
 ```
 
-!!!warning 
+!!!warning
     If no row meets the criteria `NoMatch` exception is raised.
 
-    If there are multiple rows meeting the criteria the `MultipleMatches` exception is raised.
+    If criteria are set (via `filter`/`exclude` or args/kwargs) and more than
+    one row matches them, the `MultipleMatches` exception is raised. The no-criteria
+    fallback always returns a single row and cannot raise `MultipleMatches`.
 
 ## get_or_none
 
@@ -123,6 +129,14 @@ assert album == album2
 
 Gets the first row from the db ordered by primary key column ascending.
 
+Passing args and/or kwargs is a shortcut and equals to calling
+`filter(*args, **kwargs).first()`.
+
+The query is always executed with `LIMIT 1` so at most one row is fetched —
+unlike `get()`, `first()` does not assert that the criteria match exactly one
+row and never raises `MultipleMatches`. Use `get()` when you want that
+assertion.
+
 ```python
 class Album(ormar.Model):
     ormar_config = base_ormar_config.copy(tablename="album")
@@ -138,6 +152,9 @@ album = await Album.objects.first()
 # first row by primary_key column asc
 assert album.name == 'The Cat'
 ```
+
+!!!warning
+    If no row meets the criteria `NoMatch` exception is raised.
 
 ## first_or_none
 
@@ -176,8 +193,9 @@ assert album.name == 'The Dog'
 ```
 
 !!!warning
-    Same as `first()` — raises `NoMatch` if no rows and `MultipleMatches` if
-    somehow more than one row matches.
+    Same as `first()` — raises `NoMatch` if no rows match. Like `first()`,
+    `last()` always runs with `LIMIT 1` and never raises `MultipleMatches`;
+    use `get()` if you want that assertion.
 
 ## last_or_none
 
