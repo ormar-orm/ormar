@@ -2890,14 +2890,14 @@ urllib3 = ">=2"
 
 [[package]]
 name = "types-toml"
-version = "0.10.8.20260508"
+version = "0.10.8.20260518"
 description = "Typing stubs for toml"
 optional = false
 python-versions = ">=3.10"
 groups = ["dev"]
 files = [
-    {file = "types_toml-0.10.8.20260508-py3-none-any.whl", hash = "sha256:144d615419051493ab1e5e71b6477f7c56fadc78f0856407775e75c8e2916140"},
-    {file = "types_toml-0.10.8.20260508.tar.gz", hash = "sha256:93aaa72365bd9bc8c2ce1ca3502b0470d8d428376bada020e1a4956b8b82fdda"},
+    {file = "types_toml-0.10.8.20260518-py3-none-any.whl", hash = "sha256:0e564ab05f6fde62a315b3b5a9b6624fda569399795d30a37e64705a70459303"},
+    {file = "types_toml-0.10.8.20260518.tar.gz", hash = "sha256:80e10facd24fdeda9d5c672187d72be3ac284843788d67f5aae59e3e016db6fe"},
 ]
 
 [[package]]
