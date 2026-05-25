@@ -46,7 +46,9 @@ classifiers = [
 
 [tool.poetry.dependencies]
 python = "^3.10.0"
-pydantic = ">=2.11.9,<3.0.0"
+# Pinned below 2.14 because ormar relies on pydantic internals; bump the
+# upper bound manually after verifying compatibility with each new release.
+pydantic = ">=2.11.9,<2.14"
 SQLAlchemy = {version = "^2.0.40", extras = ["asyncio"]}
 cryptography = { version = ">=44.0.1,<49.0.0", optional = true }
 # Async database drivers
