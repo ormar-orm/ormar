@@ -632,17 +632,26 @@ def get_serializer() -> Callable:
         Serialize a value if it's not expired weak reference.
         """
         try:
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore", message="Pydantic serializer warnings"
-                )
-                return handler(value)
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore", message="Pydantic serializer warnings"
+                    )
+                    return handler(value)
+            except ValueError as exc:
+                if not str(exc).startswith("Circular reference"):
+                    raise exc
+                # Pydantic >= 2.13 dispatches the wrap serializer with
+                # broader value types (e.g. QuerysetProxy for M2M reverse
+                # accessors) where 2.12 unwrapped to Model first. Earlier
+                # pydantic versions never reach this branch with a non-
+                # Model value, so the None return is uncovered on the
+                # 2.11 floor pinned in CI.
+                if value is None or not hasattr(value, "ormar_config"):
+                    return None  # pragma: no cover
+                return {value.ormar_config.pkname: value.pk}
         except ReferenceError:
             return None
-        except ValueError as exc:
-            if not str(exc).startswith("Circular reference"):
-                raise exc
-            return {value.ormar_config.pkname: value.pk} if value else None
 
     return serialize
 
@@ -753,9 +762,23 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
                             None,
                         )
                     )
-                    new_model.model_rebuild(force=True)
-
                 new_model.pk = PkDescriptor(name=new_model.ormar_config.pkname)
+
+            if not (
+                new_model.ormar_config.abstract
+                or new_model.ormar_config.proxy
+                or new_model.ormar_config.requires_ref_update
+            ):
+                # Pydantic >= 2.13 changed how TypeAdapter(Annotated[T,
+                # FieldInfo(...)]) resolves nested schemas — it now uses
+                # the cached child snapshot instead of walking the live
+                # model. Reverse-relation fields added by
+                # expand_reverse_relationships above become invisible
+                # from nested dumps unless we invalidate the cached
+                # schema. Mark incomplete so the next access (or the
+                # FastAPI-style TypeAdapter wrapper) recompiles afresh
+                # without the stale snapshot.
+                new_model.__pydantic_complete__ = False  # type: ignore[attr-defined]
 
         return new_model
 

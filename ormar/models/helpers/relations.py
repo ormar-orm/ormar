@@ -192,20 +192,28 @@ def add_field_serializer_for_reverse_relations(
         by excluding the children.
         """
         try:
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore", message="Pydantic serializer warnings"
-                )
-                return handler(children)
-        except ValueError as exc:  # pragma: no cover
-            if not str(exc).startswith("Circular reference"):
-                raise exc
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings(
+                        "ignore", message="Pydantic serializer warnings"
+                    )
+                    return handler(children)
+            except ValueError as exc:  # pragma: no cover
+                if not str(exc).startswith("Circular reference"):
+                    raise exc
 
-            result = []
-            for child in children:
-                # If there is one circular ref dump all children as pk only
-                result.append({child.ormar_config.pkname: child.pk})
-            return result
+                result = []
+                for child in children:
+                    if not hasattr(child, "ormar_config"):
+                        continue
+                    # If there is one circular ref dump all children as pk only
+                    result.append({child.ormar_config.pkname: child.pk})
+                return result
+        except ReferenceError:
+            # Pydantic >= 2.13 may invoke this serializer with weakref
+            # children whose referent is already gone (e.g. when ormar's
+            # late metaclass rebuild changed dispatch ordering).
+            return None
 
     decorator = field_serializer(related_name, mode="wrap", check_fields=False)(
         serialize
