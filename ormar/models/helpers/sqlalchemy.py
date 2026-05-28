@@ -358,6 +358,7 @@ def populate_config_sqlalchemy_table_if_required(config: "OrmarConfig") -> None:
             *config.columns,
             *config.constraints,
             schema=config.schema,
+            comment=config.comment,
         )
         config.table = table
 

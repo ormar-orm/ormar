@@ -22,6 +22,7 @@ class OrmarConfig:
         engine: AsyncEngine
         tablename: str
         schema: Optional[str]
+        comment: Optional[str]
         order_by: list[str]
         abstract: bool
         proxy: bool
@@ -36,6 +37,7 @@ class OrmarConfig:
         engine: Optional[AsyncEngine] = None,
         tablename: Optional[str] = None,
         schema: Optional[str] = None,
+        comment: Optional[str] = None,
         order_by: Optional[list[str]] = None,
         abstract: bool = False,
         proxy: bool = False,
@@ -50,6 +52,7 @@ class OrmarConfig:
         self.engine = engine  # type: ignore
         self.tablename = tablename  # type: ignore
         self.schema = schema
+        self.comment = comment
         self.orders_by = order_by or []
         self.columns: list[sqlalchemy.Column] = []
         self.constraints = constraints or []
@@ -74,6 +77,7 @@ class OrmarConfig:
         engine: Optional[AsyncEngine] = None,
         tablename: Optional[str] = None,
         schema: Union[str, None, PydanticUndefinedType] = PydanticUndefined,
+        comment: Union[str, None, PydanticUndefinedType] = PydanticUndefined,
         order_by: Optional[list[str]] = None,
         abstract: Optional[bool] = None,
         proxy: Optional[bool] = None,
@@ -87,12 +91,16 @@ class OrmarConfig:
         resolved_schema = (
             self.schema if isinstance(schema, PydanticUndefinedType) else schema
         )
+        resolved_comment = (
+            self.comment if isinstance(comment, PydanticUndefinedType) else comment
+        )
         return OrmarConfig(
             metadata=metadata or self.metadata,
             database=database or self.database,
             engine=engine or self.engine,
             tablename=tablename,
             schema=resolved_schema,
+            comment=resolved_comment,
             order_by=order_by,
             abstract=abstract or self.abstract,
             proxy=proxy if proxy is not None else self.proxy,

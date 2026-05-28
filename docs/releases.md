@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### ✨ Features
+
+* Add `OrmarConfig(comment=...)` to attach a SQL `COMMENT ON TABLE` value to a
+  model — forwarded to the underlying SQLAlchemy `Table` and emitted by
+  `metadata.create_all()` on dialects that support table comments (PostgreSQL,
+  MySQL; SQLite ignores it). [#1240](https://github.com/collerek/ormar/issues/1240)
+
 ### 🐛 Fixes
 
 * Fix race in `get_or_create` (and the m2m / reverse-fk variant) where
