@@ -300,6 +300,27 @@ explicitly to opt out, or pass a different value to override.
     issue `CREATE SCHEMA <name>` (PostgreSQL) or `CREATE DATABASE <name>` (MySQL)
     before tables can be created in those schemas.
 
+### Table Comment
+
+You can attach a SQL `COMMENT ON TABLE` value to a model by passing `comment=` to
+`OrmarConfig` (or `OrmarConfig.copy()`). The value is forwarded to the underlying
+SQLAlchemy `Table` and emitted by `metadata.create_all()` on dialects that
+support table comments (PostgreSQL and MySQL; SQLite ignores it).
+
+```python
+class Book(ormar.Model):
+    ormar_config = base_ormar_config.copy(
+        tablename="books",
+        comment="Library catalogue entries.",
+    )
+
+    id: int = ormar.Integer(primary_key=True)
+    title: str = ormar.String(max_length=200)
+```
+
+`copy()` inherits the parent config's comment by default; pass `comment=None`
+explicitly to opt out, or pass a different value to override.
+
 ### Constraints
 
 On a model level you can also set model-wise constraints on sql columns.
