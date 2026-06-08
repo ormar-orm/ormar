@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, ForwardRef
+from typing import TYPE_CHECKING, Any, ForwardRef
 
 import ormar_rust_utils
 import pydantic
@@ -124,6 +124,38 @@ def group_related_list(list_: list) -> dict:
     :rtype: dict[str, list]
     """
     return ormar_rust_utils.group_related_list(list_)
+
+
+def ordered_join_paths(related_tree: Any, prefix: str = "") -> list[str]:
+    """
+    Flattens a grouped relation tree (as produced by :func:`group_related_list`)
+    into the depth-first order in which the join builder walks the relations, with
+    shared prefixes visited only once.
+
+    Sample: {'people': {'houses': [], 'cars': ['models', 'colors']}}
+    will become:
+    ["people", "people__houses", "people__cars", "people__cars__models",
+    "people__cars__colors"]
+
+    :param related_tree: grouped relation tree (nested dict or list of leaf names)
+    :type related_tree: Any
+    :param prefix: relation path accumulated from the parent levels
+    :type prefix: str
+    :return: depth-first ordered list of relation paths
+    :rtype: list[str]
+    """
+    items = (
+        related_tree.items()
+        if isinstance(related_tree, dict)
+        else [(name, None) for name in related_tree]
+    )
+    paths: list[str] = []
+    for name, subtree in items:
+        path = f"{prefix}__{name}" if prefix else name
+        paths.append(path)
+        if subtree:
+            paths.extend(ordered_join_paths(subtree, path))
+    return paths
 
 
 def config_field_not_set(model: type["Model"], field_name: str) -> bool:
