@@ -108,7 +108,7 @@ jobs:
       run: bash scripts/test.sh
 
     - name: Upload coverage
-      uses: codecov/codecov-action@v6.0.1
+      uses: codecov/codecov-action@v7.0.0
       with:
         name: codecov-umbrella
         token: ${{ secrets.CODCOV_TOKEN }}
