@@ -1,6 +1,6 @@
 # Release notes
 
-## Unreleased
+## 0.26.0
 
 ### ✨ Features
 
@@ -11,6 +11,18 @@
 
 ### 🐛 Fixes
 
+* Fix an unexpected cartesian product (cross join) when filtering on two
+  foreign keys that reach the same target table through the same relation
+  (e.g. `a_port__switch__name` and `z_port__switch__name`). The filter now
+  resolves complex join aliases in the same depth-first order as the join
+  builder, and ignores complex aliases left in the globally shared alias
+  manager by earlier queries, so a repeated query is no longer corrupted.
+  [#1706](https://github.com/collerek/ormar/issues/1706)
+* Require [`ormar-utils`](https://pypi.org/project/ormar-utils/) `>=0.2.0`,
+  which ships CPython stable-ABI (`abi3`) wheels. A single wheel now works on
+  Python 3.10+ — including 3.14 and future releases — so installing ormar no
+  longer fails for lack of a matching `ormar-utils` wheel on a new Python.
+  [#1702](https://github.com/collerek/ormar/issues/1702)
 * Fix race in `get_or_create` (and the m2m / reverse-fk variant) where
   concurrent callers leaked `IntegrityError`. [#1016](https://github.com/collerek/ormar/issues/1016)
 * Fix `update_or_create` raising `NoMatch` instead of creating when called
