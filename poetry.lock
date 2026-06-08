@@ -7,7 +7,7 @@ description = "MySQL driver for asyncio."
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"mysql\""
+markers = "extra == \"mysql\" or extra == \"all\""
 files = [
     {file = "aiomysql-0.3.2-py3-none-any.whl", hash = "sha256:c82c5ba04137d7afd5c693a258bea8ead2aad77101668044143a991e04632eb2"},
     {file = "aiomysql-0.3.2.tar.gz", hash = "sha256:72d15ef5cfc34c03468eb41e1b90adb9fd9347b0b589114bd23ead569a02ac1a"},
@@ -47,7 +47,7 @@ description = "asyncio bridge to the standard sqlite3 module"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"sqlite\""
+markers = "extra == \"sqlite\" or extra == \"all\""
 files = [
     {file = "aiosqlite-0.22.1-py3-none-any.whl", hash = "sha256:21c002eb13823fad740196c5a2e9d8e62f6243bd9e7e4a1f87fb5e44ecb4fceb"},
     {file = "aiosqlite-0.22.1.tar.gz", hash = "sha256:043e0bd78d32888c0a9ca90fc788b38796843360c855a7262a532813133a0650"},
@@ -167,7 +167,7 @@ description = "Timeout context manager for asyncio programs"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "extra == \"aiopg\" or extra == \"all\" or (extra == \"all\" or extra == \"postgres\" or extra == \"postgresql\" or extra == \"aiopg\") and python_version < \"3.11.0\""
+markers = "extra == \"aiopg\" or extra == \"all\" or (extra == \"postgresql\" or extra == \"postgres\" or extra == \"all\" or extra == \"aiopg\") and python_version < \"3.11.0\""
 files = [
     {file = "async-timeout-4.0.3.tar.gz", hash = "sha256:4640d96be84d82d02ed59ea2b7105a0f7b33abe8703703cd0ab0bf87c427522f"},
     {file = "async_timeout-4.0.3-py3-none-any.whl", hash = "sha256:7405140ff1230c310e51dc27b3145b9092d659ce68ff733fb0cefe3ee42be028"},
@@ -180,7 +180,7 @@ description = "An asyncio PostgreSQL driver"
 optional = true
 python-versions = ">=3.9.0"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"postgres\" or extra == \"postgresql\""
+markers = "extra == \"postgresql\" or extra == \"postgres\" or extra == \"all\""
 files = [
     {file = "asyncpg-0.31.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:831712dd3cf117eec68575a9b50da711893fd63ebe277fc155ecae1c6c9f0f61"},
     {file = "asyncpg-0.31.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:0b17c89312c2f4ccea222a3a6571f7df65d4ba2c0e803339bfc7bed46a96d3be"},
@@ -314,7 +314,7 @@ description = "Foreign Function Interface for Python calling C code."
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "(extra == \"all\" or extra == \"crypto\") and platform_python_implementation != \"PyPy\""
+markers = "(extra == \"crypto\" or extra == \"all\") and platform_python_implementation != \"PyPy\""
 files = [
     {file = "cffi-2.0.0-cp310-cp310-macosx_10_13_x86_64.whl", hash = "sha256:0cf2d91ecc3fcc0625c2c530fe004f82c110405f101548512cce44322fa8ac44"},
     {file = "cffi-2.0.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:f73b96c41e3b2adedc34a7356e64c8eb96e03a3782b535e043a986276ce12a49"},
@@ -690,7 +690,7 @@ description = "cryptography is a package which provides cryptographic recipes an
 optional = true
 python-versions = "!=3.9.0,!=3.9.1,>=3.9"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"crypto\""
+markers = "extra == \"crypto\" or extra == \"all\""
 files = [
     {file = "cryptography-48.0.0-cp311-abi3-macosx_10_9_universal2.whl", hash = "sha256:0c558d2cdffd8f4bbb30fc7134c74d2ca9a476f830bb053074498fbc86f41ed6"},
     {file = "cryptography-48.0.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:f5333311663ea94f75dd408665686aaf426563556bb5283554a3539177e03b8c"},
@@ -1795,32 +1795,18 @@ files = [
 
 [[package]]
 name = "ormar-utils"
-version = "0.1.1"
+version = "0.2.0"
 description = "Rust-accelerated utility functions for the ormar ORM"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "ormar_utils-0.1.1-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:e1abb5494942a937c317aac909979c422aac745c58121042216ba4163f22ef47"},
-    {file = "ormar_utils-0.1.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:1f80e577d840ae0f2e6455b84e6e6e6351a776a514af8b6ff1f809f24a71f432"},
-    {file = "ormar_utils-0.1.1-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:522f6fe1f68f4cd90a77a0851e2bcffbd7d473cb5eb492f53a79ecd249b4a95a"},
-    {file = "ormar_utils-0.1.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:77bcfffbef6f81a61192290834b2b80fbfeaa64242a8fbcdefe00051b9f5e70d"},
-    {file = "ormar_utils-0.1.1-cp310-cp310-win_amd64.whl", hash = "sha256:3e316b727853f0d722663e8af74aca8f9572f8340a76694ebd8a377fc6d6bfbe"},
-    {file = "ormar_utils-0.1.1-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:a5468770de8d01b36702fe96aa553efb30da46313304b97d113871519d4fec5b"},
-    {file = "ormar_utils-0.1.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:047f5e113e3adb68e4dc7d3915d999ed44a3e6914a5a0a8162cfc0f1bcc24a24"},
-    {file = "ormar_utils-0.1.1-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:9b510c48557a1809e53a851b7acee4bac8fb7adac12ce738d3911b6ed85dc7bb"},
-    {file = "ormar_utils-0.1.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:530c46dcfcfb26067abd6e148b2c2337cfcefa1945cbffcae8a8b73ee816a101"},
-    {file = "ormar_utils-0.1.1-cp311-cp311-win_amd64.whl", hash = "sha256:d1cec4877a86d7f654d795f3f49bb4f8d81843032dc05f5a741ce471672f5c5d"},
-    {file = "ormar_utils-0.1.1-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:85e83277179776bd8d4915ce4a5e30e68054be22f3d4e4428e2f0a5515b113e1"},
-    {file = "ormar_utils-0.1.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:2736d32eeeb403f7883a4ffcc67b716e492ef38940d9ca42b9be7f1c958a458a"},
-    {file = "ormar_utils-0.1.1-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:b69e0a1903c1eb8c63f284eec96aa550e44a417d79e673254b83d73b290c4c60"},
-    {file = "ormar_utils-0.1.1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:da04622f42cc33dd88a94f21dda0f04ff7ff0773e3e3a176ef8d9bad5e60a1c1"},
-    {file = "ormar_utils-0.1.1-cp312-cp312-win_amd64.whl", hash = "sha256:a803c9f3b314eb54220bace76f7c49d091f305bba2fa591c19eead33ef5b1741"},
-    {file = "ormar_utils-0.1.1-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:f8635e83857b85e2521db8cf55c1c659169912713632b9bc8f7cb617df3235df"},
-    {file = "ormar_utils-0.1.1-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:4892b801969cbb402748a12920b8c285707fdb2540fe423b6c96bcbd6004aa98"},
-    {file = "ormar_utils-0.1.1-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:fae770725f88168f8dcecfafaca27375397a62a97776c2818b5a99c6d4baeb8d"},
-    {file = "ormar_utils-0.1.1-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b5bd489da692e9b94f27a577acf30465b30e94932f01f2745830cb94b1b413ce"},
-    {file = "ormar_utils-0.1.1-cp313-cp313-win_amd64.whl", hash = "sha256:405ed56e66cff421f293509d3e0a86af7da88663420a2d3ea5719e755421bb2a"},
+    {file = "ormar_utils-0.2.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:e164f5d3636a660cec8df91cc1a0e2159bbb429f55d990272c096b1eef9d6c59"},
+    {file = "ormar_utils-0.2.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:40f3d45737017309cea3c62569394cc56e4c1558f9926f1dded580eeb6f730bb"},
+    {file = "ormar_utils-0.2.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f93299eda3e3a72fdbf5ff4ce8c82ff801247bba616debc52dbb48915480d3ce"},
+    {file = "ormar_utils-0.2.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:55c7ec5e002b0cc5394830c2b8c109a5b492d518fc95367dcf6b1da57c8510e4"},
+    {file = "ormar_utils-0.2.0-cp310-abi3-win_amd64.whl", hash = "sha256:122c7dd9f2eb52342be4862beda0737f98e7813c01751793f0fa53715f5b3959"},
+    {file = "ormar_utils-0.2.0.tar.gz", hash = "sha256:e2bf1ff71fbb820cac192b33583d58fac29e838a79804995336ef2bee02cc9ae"},
 ]
 
 [[package]]
@@ -1957,7 +1943,7 @@ description = "psycopg2 - Python-PostgreSQL Database Adapter"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"aiopg\" or extra == \"all\" or extra == \"postgres\" or extra == \"postgresql\""
+markers = "extra == \"aiopg\" or extra == \"all\" or extra == \"postgresql\" or extra == \"postgres\""
 files = [
     {file = "psycopg2_binary-2.9.12-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:9b818ceff717f98851a64bffd4c5eb5b3059ae280276dcecc52ac658dcf006a4"},
     {file = "psycopg2_binary-2.9.12-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:d2fa0d7caca8635c56e373055094eeda3208d901d55dd0ff5abc1d4e47f82b56"},
@@ -2047,7 +2033,7 @@ description = "C parser in Python"
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "(extra == \"all\" or extra == \"crypto\") and platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\""
+markers = "(extra == \"crypto\" or extra == \"all\") and platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\""
 files = [
     {file = "pycparser-2.22-py3-none-any.whl", hash = "sha256:c3702b6d3dd8c7abc1afa565d7e63d53a1d0bd86cdc24edd75470f4de499cfcc"},
     {file = "pycparser-2.22.tar.gz", hash = "sha256:491c8be9c040f5390f5bf44a5b07752bd07f56edf992381b05c701439eec10f6"},
@@ -2277,7 +2263,7 @@ description = "Pure Python MySQL Driver"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"all\" or extra == \"mysql\""
+markers = "extra == \"mysql\" or extra == \"all\""
 files = [
     {file = "pymysql-1.2.0-py3-none-any.whl", hash = "sha256:62169ce6d5510f08e140c5e7990ee884a9764024e4a9a27b2cc11f1099322ae0"},
     {file = "pymysql-1.2.0.tar.gz", hash = "sha256:6c7b17ca686988104d7426c27895b455cdeea3e9d3ceb1270f0c3704fead8c33"},
@@ -3138,4 +3124,4 @@ sqlite = ["aiosqlite"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10.0"
-content-hash = "31f5c84a4759a7f246acaff94513208abe99933f9eb843b27149be8434f710cc"
+content-hash = "ee20c99bf036c0659e078adcfc74a957a5569edf0f3abf1c6c60e46e4530d804"

@@ -1,4 +1,3 @@
-import itertools
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Generator, Optional, Union
@@ -7,6 +6,7 @@ import sqlalchemy
 from sqlalchemy import ColumnElement
 
 import ormar  # noqa I100
+from ormar.models.helpers.models import group_related_list, ordered_join_paths
 from ormar.queryset.actions.filter_action import FilterAction
 from ormar.queryset.utils import get_relationship_alias_model_and_str
 
@@ -195,6 +195,7 @@ class QueryClause:
 
         self.model_cls = model_cls
         self.table = self.model_cls.ormar_config.table
+        self._complex_dup_keys: set[str] = set()
 
     def prepare_filter(  # noqa: A003
         self, _own_only: bool = False, **kwargs: Any
@@ -263,30 +264,41 @@ class QueryClause:
         Checks if duplicate aliases are presented which can happen in self relation
         or when two joins end with the same pair of models.
 
-        If there are duplicates, the all duplicated joins are registered as source
-        model and whole relation key (not just last relation name).
+        Mirrors the join builder (:meth:`ormar.queryset.join.SqlJoin._forward_join`):
+        relation paths are walked in the same depth-first order the join uses, the
+        first path to reach a given basic alias keeps it, and every later path that
+        would reuse the same alias is registered as a complex duplicate keyed on the
+        whole relation string (not just the last relation name).
+
+        The keys registered for *this* query are stored on
+        :attr:`_complex_dup_keys` so that :meth:`_verify_prefix_and_switch` only
+        reroutes filters that are genuinely duplicated here, ignoring complex
+        aliases that linger in the globally shared alias manager from earlier
+        queries.
 
         :param select_related: list of relation strings
         :type select_related: list[str]
         :return: None
         :rtype: None
         """
-        prefixes = self._parse_related_prefixes(select_related=select_related)
-
         manager = self.model_cls.ormar_config.alias_manager
-        filtered_prefixes = sorted(prefixes, key=lambda x: x.table_prefix)
-        grouped = itertools.groupby(filtered_prefixes, key=lambda x: x.table_prefix)
-        for _, group in grouped:
-            sorted_group = sorted(
-                group, key=lambda x: len(x.relation_str), reverse=True
-            )
-            for prefix in sorted_group[:-1]:
+        self._complex_dup_keys = set()
+        seen_prefixes: set[str] = set()
+        for prefix in self._parse_related_prefixes(select_related=select_related):
+            if prefix.table_prefix in seen_prefixes:
+                self._complex_dup_keys.add(prefix.alias_key)
                 if prefix.alias_key not in manager:
                     manager.add_alias(alias_key=prefix.alias_key)
+            else:
+                seen_prefixes.add(prefix.table_prefix)
 
     def _parse_related_prefixes(self, select_related: list[str]) -> list[Prefix]:
         """
         Walks all relation strings and parses the target models and prefixes.
+
+        Relation strings are expanded into the depth-first order of joined tables
+        (shared prefixes visited once) so the duplicate detection matches the join
+        builder exactly.
 
         :param select_related: list of relation strings
         :type select_related: list[str]
@@ -294,7 +306,7 @@ class QueryClause:
         :rtype: list[Prefix]
         """
         prefixes: list[Prefix] = []
-        for related in select_related:
+        for related in ordered_join_paths(group_related_list(select_related)):
             prefix = Prefix(
                 self.model_cls,
                 *get_relationship_alias_model_and_str(
@@ -327,11 +339,19 @@ class QueryClause:
 
     def _verify_prefix_and_switch(self, action: "FilterAction") -> None:
         """
-        Helper to switch prefix to complex relation one if required
+        Helper to switch prefix to complex relation one if required.
+
+        Only reroutes filters whose relation string is a complex duplicate
+        registered for this query (see :meth:`_register_complex_duplicates`), so a
+        complex alias left in the shared alias manager by an earlier query cannot
+        hijack a filter that is not duplicated here.
+
         :param action: action to switch prefix in
         :type action: ormar.queryset.actions.filter_action.FilterAction
         """
         manager = self.model_cls.ormar_config.alias_manager
-        new_alias = manager.resolve_relation_alias(self.model_cls, action.related_str)
-        if "__" in action.related_str and new_alias:
-            action.table_prefix = new_alias
+        alias_key = f"{self.model_cls.get_name()}_{action.related_str}"
+        if "__" in action.related_str and alias_key in self._complex_dup_keys:
+            action.table_prefix = manager.resolve_relation_alias(
+                self.model_cls, action.related_str
+            )
