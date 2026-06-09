@@ -5,8 +5,16 @@ on:
     tags:
       - '**'
   workflow_dispatch:
-    tags:
-      - '**'
+    inputs:
+      version:
+        description: 'Docs version to deploy (e.g. 0.26.0)'
+        required: true
+
+# Serialize deploys so two runs never race on pushing the gh-pages branch.
+concurrency:
+  group: deploy-docs
+  cancel-in-progress: false
+
 jobs:
   build:
     name: Build and Deploy Documentation
@@ -14,9 +22,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout Master
+      - name: Checkout
         uses: actions/checkout@v6
-      - name: Set up Python 3.9
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
@@ -30,16 +38,26 @@ jobs:
           poetry install --extras "all"
         env:
           POETRY_VIRTUALENVS_CREATE: false
-      - name: Set env
-        run: echo "RELEASE_VERSION=${GITHUB_REF#refs/*/}" >> $GITHUB_ENV
-      - name: Test
+      - name: Set release version
         run: |
-          echo $RELEASE_VERSION
-          echo ${{ env.RELEASE_VERSION }}
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "RELEASE_VERSION=${{ github.event.inputs.version }}" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_ENV"
+          fi
+      - name: Show version
+        run: echo "Deploying docs version ${{ env.RELEASE_VERSION }}"
       - name: Configure Git
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+      - name: Fetch existing docs branch
+        # The checkout above is shallow and only fetches the pushed tag, so the
+        # origin/gh-pages remote-tracking ref does not exist locally. mike's
+        # update_from_upstream() then no-ops, mike commits an orphan gh-pages,
+        # and the push is rejected as a non-fast-forward. Fetching the branch
+        # into the remote-tracking ref lets mike base the new commit on the
+        # current docs and fast-forward.
+        run: git fetch origin gh-pages:refs/remotes/origin/gh-pages || echo "gh-pages branch does not exist yet"
       - name: Deploy
-        run: |
-          mike deploy --push --update-aliases ${{ env.RELEASE_VERSION }} latest
+        run: mike deploy --push --update-aliases "$RELEASE_VERSION" latest
