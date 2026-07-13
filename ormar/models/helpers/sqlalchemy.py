@@ -1,5 +1,6 @@
 import logging
-from typing import TYPE_CHECKING, ForwardRef, Optional, Union
+import re
+from typing import TYPE_CHECKING, Any, ForwardRef, Optional, Union
 
 import sqlalchemy
 
@@ -363,6 +364,20 @@ def populate_config_sqlalchemy_table_if_required(config: "OrmarConfig") -> None:
         config.table = table
 
 
+def index_name_fragment(expression: Any) -> str:
+    """
+    Returns an identifier-safe name fragment for an index column or SQL
+    expression, so auto-generated index names work for functional indexes
+    (e.g. LOWER(name)) as well as plain columns.
+
+    :param expression: an index column name or SQL expression element
+    :type expression: Any
+    :return: sanitized fragment containing only alphanumerics and underscores
+    :rtype: str
+    """
+    return re.sub(r"[^0-9a-zA-Z]+", "_", str(expression)).strip("_")
+
+
 def set_constraint_names(config: "OrmarConfig") -> None:
     """
     Populates the names on IndexColumns and UniqueColumns and CheckColumns constraints.
@@ -382,7 +397,7 @@ def set_constraint_names(config: "OrmarConfig") -> None:
         ):
             constraint.name = (
                 f"ix_{config.tablename}_"
-                f"{'_'.join([col for col in constraint._pending_colargs])}"
+                f"{'_'.join(index_name_fragment(e) for e in constraint.expressions)}"
             )
         elif isinstance(constraint, sqlalchemy.CheckConstraint) and not constraint.name:
             sql_condition: str = str(constraint.sqltext).replace(" ", "_")
