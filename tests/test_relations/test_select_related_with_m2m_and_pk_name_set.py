@@ -16,7 +16,7 @@ base_ormar_config = create_config()
 class Role(ormar.Model):
     ormar_config = base_ormar_config.copy()
 
-    name: str = ormar.String(primary_key=True, max_length=1000)
+    name: str = ormar.String(primary_key=True, max_length=768)
     order: int = ormar.Integer(default=0, name="sort_order")
     description: str = ormar.Text()
 
@@ -24,7 +24,7 @@ class Role(ormar.Model):
 class Company(ormar.Model):
     ormar_config = base_ormar_config.copy()
 
-    name: str = ormar.String(primary_key=True, max_length=1000)
+    name: str = ormar.String(primary_key=True, max_length=768)
 
 
 class UserRoleCompany(ormar.Model):
@@ -34,7 +34,7 @@ class UserRoleCompany(ormar.Model):
 class User(ormar.Model):
     ormar_config = base_ormar_config.copy()
 
-    registrationnumber: str = ormar.String(primary_key=True, max_length=1000)
+    registrationnumber: str = ormar.String(primary_key=True, max_length=768)
     company: Company = ormar.ForeignKey(Company)
     company2: Company = ormar.ForeignKey(Company, related_name="secondary_users")
     name: str = ormar.Text()
