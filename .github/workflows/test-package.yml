@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
     services:
       mysql:
-        image: mysql:5.7
+        image: mysql:8.0
         env:
           MYSQL_USER: username
           MYSQL_PASSWORD: password
