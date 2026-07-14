@@ -123,3 +123,10 @@ async def test_order_by_annotation():
             .values_list("name", flatten=True)
         )
         assert names == ["Alice", "Bob", "Carol"]
+
+        names_asc = (
+            await User.objects.annotate(task_count=ormar.Count("tasks"))
+            .order_by("task_count")
+            .values_list("name", flatten=True)
+        )
+        assert names_asc == ["Carol", "Bob", "Alice"]

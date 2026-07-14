@@ -94,6 +94,11 @@ class Query:
         column by its label, since annotation labels do not correspond to
         real model columns and cannot be resolved through ``OrderAction``.
 
+        The identifier is quoted with the dialect's own identifier preparer
+        (mirroring ``OrderAction.get_text_clause``), since a hardcoded
+        double-quote is interpreted as a string literal rather than a column
+        reference on dialects without ANSI_QUOTES (e.g. MySQL).
+
         :param name: label of the annotation to order by
         :type name: str
         :param descending: whether to sort in descending order
@@ -101,8 +106,10 @@ class Query:
         :return: order by text clause referencing the annotation label
         :rtype: sqlalchemy.sql.expression.TextClause
         """
+        dialect = self.model_cls.ormar_config.database.dialect
+        quoted_name = dialect.identifier_preparer.quote(name)
         direction = " desc" if descending else ""
-        return sqlalchemy.text(f'"{name}"{direction}')
+        return sqlalchemy.text(f"{quoted_name}{direction}")
 
     def _apply_default_model_sorting(self) -> None:
         """
