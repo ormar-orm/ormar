@@ -88,6 +88,22 @@ class Query:
         if not current_table_sorted:
             self._apply_default_model_sorting()
 
+    def _quote_annotation_name(self, name: str) -> str:
+        """
+        Quotes an annotation's result column label with the dialect's own
+        identifier preparer (mirroring ``OrderAction.get_text_clause``),
+        since a hardcoded double-quote is interpreted as a string literal
+        rather than a column reference on dialects without ANSI_QUOTES
+        (e.g. MySQL).
+
+        :param name: label of the annotation to quote
+        :type name: str
+        :return: dialect-quoted identifier
+        :rtype: str
+        """
+        dialect = self.model_cls.ormar_config.database.dialect
+        return dialect.identifier_preparer.quote(name)
+
     def _annotations_order_text(
         self, name: str, descending: bool
     ) -> sqlalchemy.sql.expression.TextClause:
@@ -96,11 +112,6 @@ class Query:
         column by its label, since annotation labels do not correspond to
         real model columns and cannot be resolved through ``OrderAction``.
 
-        The identifier is quoted with the dialect's own identifier preparer
-        (mirroring ``OrderAction.get_text_clause``), since a hardcoded
-        double-quote is interpreted as a string literal rather than a column
-        reference on dialects without ANSI_QUOTES (e.g. MySQL).
-
         :param name: label of the annotation to order by
         :type name: str
         :param descending: whether to sort in descending order
@@ -108,8 +119,7 @@ class Query:
         :return: order by text clause referencing the annotation label
         :rtype: sqlalchemy.sql.expression.TextClause
         """
-        dialect = self.model_cls.ormar_config.database.dialect
-        quoted_name = dialect.identifier_preparer.quote(name)
+        quoted_name = self._quote_annotation_name(name)
         direction = " desc" if descending else ""
         return sqlalchemy.text(f"{quoted_name}{direction}")
 
@@ -125,11 +135,6 @@ class Query:
         annotation join is 1:1 with the parent primary key,
         ``min(label) == max(label)`` is always the annotation's own value.
 
-        The identifier is quoted with the dialect's own identifier preparer
-        (mirroring ``OrderAction.get_text_clause``), since a hardcoded
-        double-quote is interpreted as a string literal rather than a column
-        reference on dialects without ANSI_QUOTES (e.g. MySQL).
-
         :param name: label of the annotation to order by
         :type name: str
         :param descending: whether to sort in descending order
@@ -138,8 +143,7 @@ class Query:
             annotation label
         :rtype: sqlalchemy.sql.expression.TextClause
         """
-        dialect = self.model_cls.ormar_config.database.dialect
-        quoted_name = dialect.identifier_preparer.quote(name)
+        quoted_name = self._quote_annotation_name(name)
         func = "max" if descending else "min"
         suffix = " desc" if descending else ""
         return sqlalchemy.text(f"{func}({quoted_name}){suffix}")

@@ -243,6 +243,27 @@ async def test_annotation_with_select_related_and_limit():
             .all()
         )
         assert [u.name for u in users] == ["Alice", "Bob"]
+        # ascending order differs from insertion/pk order (Alice, Bob, Carol),
+        # so this discriminates a genuinely applied sort from an inert one
+        users_asc = (
+            await User.objects.select_related("tasks")
+            .annotate(task_count=ormar.Count("tasks"))
+            .order_by("task_count")
+            .limit(2)
+            .all()
+        )
+        assert [u.name for u in users_asc] == ["Carol", "Bob"]
+        # offset skips the top-ranked row (Alice); an inert ORDER BY combined
+        # with offset would instead skip Bob and keep Alice in the results
+        users_offset = (
+            await User.objects.select_related("tasks")
+            .annotate(task_count=ormar.Count("tasks"))
+            .order_by("-task_count")
+            .offset(1)
+            .limit(2)
+            .all()
+        )
+        assert [u.name for u in users_offset] == ["Bob", "Carol"]
         # values() with limit + annotation order
         rows = (
             await User.objects.annotate(task_count=ormar.Count("tasks"))
