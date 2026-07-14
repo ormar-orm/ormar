@@ -39,6 +39,7 @@ if TYPE_CHECKING:  # pragma no cover
     from ormar.models import T
     from ormar.models.excludable import ExcludableItems, Slot
     from ormar.models.ormar_config import OrmarConfig
+    from ormar.queryset.aggregations import AggregateFunction
 else:
     T = TypeVar("T", bound="Model")
 
@@ -62,6 +63,8 @@ class QuerySet(Generic[T]):
         limit_raw_sql: bool = False,
         proxy_source_model: Optional[type["Model"]] = None,
         reverse_result: bool = False,
+        annotations: Optional[dict] = None,
+        having: Optional[list] = None,
     ) -> None:
         self.proxy_source_model = proxy_source_model
         self.model_cls = model_cls
@@ -75,6 +78,8 @@ class QuerySet(Generic[T]):
         self.order_bys = order_bys or []
         self.limit_sql_raw = limit_raw_sql
         self._reverse_result = reverse_result
+        self._annotations = annotations or {}
+        self._having = having or []
 
     @property
     def model_config(self) -> "OrmarConfig":
@@ -113,6 +118,8 @@ class QuerySet(Generic[T]):
         limit_raw_sql: Optional[bool] = None,
         proxy_source_model: Optional[type["Model"]] = None,
         reverse_result: Optional[bool] = None,
+        annotations: Optional[dict] = None,
+        having: Optional[list] = None,
     ) -> "QuerySet":
         """
         Method that returns new instance of queryset based on passed params,
@@ -125,6 +132,8 @@ class QuerySet(Generic[T]):
             "prefetch_related": "_prefetch_related",
             "limit_raw_sql": "limit_sql_raw",
             "reverse_result": "_reverse_result",
+            "annotations": "_annotations",
+            "having": "_having",
         }
         passed_args = locals()
 
@@ -146,6 +155,8 @@ class QuerySet(Generic[T]):
             limit_raw_sql=replace_if_none("limit_raw_sql"),
             proxy_source_model=replace_if_none("proxy_source_model"),
             reverse_result=replace_if_none("reverse_result"),
+            annotations=replace_if_none("annotations"),
+            having=replace_if_none("having"),
         )
 
     async def _prefetch_related_models(
@@ -292,6 +303,8 @@ class QuerySet(Generic[T]):
             order_bys=order_bys or self.order_bys,
             limit_raw_sql=self.limit_sql_raw,
             limit_count=limit if limit is not None else self.limit_count,
+            annotations=self._annotations,
+            having_clauses=self._having,
         )
         exp = qry.build_select_expression()
         # print("\n", exp.compile(compile_kwargs={"literal_binds": True}))
@@ -665,6 +678,19 @@ class QuerySet(Generic[T]):
         order_bys = self.order_bys + [x for x in orders_by if x not in self.order_bys]
         return self.rebuild_self(order_bys=order_bys)
 
+    def annotate(self, **aggregates: "AggregateFunction") -> "QuerySet[T]":
+        """
+        Adds named aggregate columns computed per parent row via a pre-grouped
+        derived-table join.
+
+        :param aggregates: mapping of result name to aggregate value object
+        :type aggregates: AggregateFunction
+        :return: queryset with the annotations applied
+        :rtype: QuerySet
+        """
+        merged = {**self._annotations, **aggregates}
+        return self.rebuild_self(annotations=merged)
+
     async def values(
         self,
         fields: Union[list, str, set, dict, None] = None,
@@ -715,8 +741,13 @@ class QuerySet(Generic[T]):
             exclude_through=exclude_through,
         )
         column_map = alias_resolver.resolve_columns(columns_names=list(rows[0].keys()))  # type: ignore
+        annotation_names = set(self._annotations.keys())
         result = [
-            {column_map.get(k): v for k, v in dict(x).items() if k in column_map}
+            {
+                (column_map[k] if k in column_map else k): v
+                for k, v in dict(x).items()
+                if k in column_map or k in annotation_names
+            }
             for x in rows
         ]
         if _as_dict:

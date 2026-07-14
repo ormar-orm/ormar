@@ -7,6 +7,7 @@ from sqlalchemy.sql.roles import FromClauseRole
 
 import ormar  # noqa I100
 from ormar.models.helpers.models import group_related_list
+from ormar.queryset.actions.aggregation_action import AggregationAction
 from ormar.queryset.actions.filter_action import FilterAction
 from ormar.queryset.join import SqlJoin
 from ormar.queryset.queries import FilterQuery, LimitQuery, OffsetQuery, OrderQuery
@@ -29,6 +30,8 @@ class Query:
         excludable: "ExcludableItems",
         order_bys: Optional[list["OrderAction"]],
         limit_raw_sql: bool,
+        annotations: Optional[dict] = None,
+        having_clauses: Optional[list] = None,
     ) -> None:
         self.query_offset = offset
         self.limit_count = limit_count
@@ -49,6 +52,9 @@ class Query:
         self._init_sorted_orders()
 
         self.limit_raw_sql = limit_raw_sql
+        self.annotations = annotations or {}
+        self.having_clauses = having_clauses or []
+        self.aggregation_actions: list[AggregationAction] = []
 
     def _init_sorted_orders(self) -> None:
         """
@@ -144,6 +150,15 @@ class Query:
                 self.columns,
                 self.sorted_orders,
             ) = sql_join.build_join()  # type: ignore
+
+        for name, aggregate in self.annotations.items():
+            action = AggregationAction(
+                name=name, aggregate=aggregate, model_cls=self.model_cls
+            )
+            joined = action.apply_join(self.select_from, self.table)  # type: ignore
+            self.select_from = joined  # type: ignore
+            self.columns.append(action.result_column)  # type: ignore
+            self.aggregation_actions.append(action)
 
         if self._pagination_query_required():
             limit_qry, on_clause = self._build_pagination_condition()
