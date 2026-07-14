@@ -1,5 +1,15 @@
 # Release notes
 
+## Unreleased
+
+### ✨ Features
+
+* Add `IndexColumns(..., case_insensitive=True)` to build a case-insensitive
+  unique index (each named column wrapped in `LOWER()`), so values that differ
+  only in case cannot both be stored. `IndexColumns` now also accepts SQLAlchemy
+  expressions for arbitrary functional indexes. On MySQL this needs 8.0.13+.
+  [#615](https://github.com/collerek/ormar/issues/615)
+
 ## 0.26.0
 
 ### ✨ Features
