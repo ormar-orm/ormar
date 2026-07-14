@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Optional, cast
 
 import sqlalchemy
 
+from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.aggregations import AggregateFunction
 from ormar.queryset.utils import get_relationship_alias_model_and_str
 
@@ -119,8 +120,18 @@ class AggregationAction:
         :type parent_table: sqlalchemy.Table
         :return: from-clause extended with the derived-table LEFT JOIN
         :rtype: sqlalchemy.sql.expression.FromClause
+        :raises QueryDefinitionError: when a specific column is aggregated
+            across a many-to-many relation, which is not supported
         """
-        group_key = self._m2m_group_key() if self._is_m2m() else self._child_group_key()
+        is_m2m = self._is_m2m()
+        if is_m2m and self.column_name is not None:
+            raise QueryDefinitionError(
+                "Aggregating a specific column across a many-to-many relation "
+                f"is not supported (relation '{self.relation_name}', column "
+                f"'{self.column_name}'). Only Count('{self.relation_name}') "
+                "over a many-to-many relation is supported."
+            )
+        group_key = self._m2m_group_key() if is_m2m else self._child_group_key()
         target = self._aggregate_target()
         func = getattr(sqlalchemy.func, self.aggregate.function_name)
         use_distinct = self.aggregate.distinct and self.column_name is not None

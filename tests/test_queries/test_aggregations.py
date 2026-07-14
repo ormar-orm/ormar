@@ -221,3 +221,10 @@ async def test_count_m2m_annotation():
             {"title": "p1", "tag_count": 2},
             {"title": "p2", "tag_count": 1},
         ]
+
+
+@pytest.mark.asyncio
+async def test_qualified_m2m_aggregate_raises():
+    async with base_ormar_config.database:
+        with pytest.raises(QueryDefinitionError):
+            await Post.objects.annotate(x=ormar.Sum("tags__id")).values(["title", "x"])
