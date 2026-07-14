@@ -4,6 +4,7 @@ import pytest
 import pytest_asyncio
 
 import ormar
+from ormar.exceptions import QueryDefinitionError
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -130,3 +131,30 @@ async def test_order_by_annotation():
             .values_list("name", flatten=True)
         )
         assert names_asc == ["Carol", "Bob", "Alice"]
+
+
+@pytest.mark.asyncio
+async def test_having_on_annotation():
+    async with base_ormar_config.database:
+        await seed()
+        rows = (
+            await User.objects.annotate(task_count=ormar.Count("tasks"))
+            .having(task_count__gt=1)
+            .values_list("name", flatten=True)
+        )
+        assert rows == ["Alice"]
+
+        rows_zero = (
+            await User.objects.annotate(task_count=ormar.Count("tasks"))
+            .having(task_count__gte=1)
+            .order_by("name")
+            .values_list("name", flatten=True)
+        )
+        assert rows_zero == ["Alice", "Bob"]
+
+
+def test_having_with_unsupported_operator():
+    with pytest.raises(QueryDefinitionError):
+        User.objects.annotate(task_count=ormar.Count("tasks")).having(
+            task_count__contains=1
+        )

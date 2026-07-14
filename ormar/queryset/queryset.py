@@ -5,6 +5,7 @@ from typing import (
     AsyncGenerator,
     Generic,
     Iterable,
+    NamedTuple,
     Optional,
     Sequence,
     TypeVar,
@@ -42,6 +43,14 @@ if TYPE_CHECKING:  # pragma no cover
     from ormar.queryset.aggregations import AggregateFunction
 else:
     T = TypeVar("T", bound="Model")
+
+
+class HavingClause(NamedTuple):
+    """A single parsed ``having`` condition over an annotation label."""
+
+    name: str
+    op: str
+    value: Any
 
 
 class QuerySet(Generic[T]):
@@ -690,6 +699,30 @@ class QuerySet(Generic[T]):
         """
         merged = {**self._annotations, **aggregates}
         return self.rebuild_self(annotations=merged)
+
+    def having(self, **filters: Any) -> "QuerySet[T]":
+        """
+        Filters the queryset by annotated aggregate values.
+
+        Suffixes mirror ``filter``: ``exact`` (default), ``gt``, ``gte``,
+        ``lt``, ``lte``, ``ne``.
+
+        :param filters: mapping of ``name`` or ``name__op`` to value
+        :type filters: Any
+        :return: queryset with the having conditions applied
+        :rtype: QuerySet
+        """
+        allowed = {"exact", "gt", "gte", "lt", "lte", "ne"}
+        clauses = list(self._having)
+        for key, value in filters.items():
+            parts = key.split("__")
+            op = parts[1] if len(parts) > 1 else "exact"
+            if op not in allowed:
+                raise QueryDefinitionError(
+                    f"Unsupported having operator '{op}'. Allowed: {sorted(allowed)}"
+                )
+            clauses.append(HavingClause(name=parts[0], op=op, value=value))
+        return self.rebuild_self(having=clauses)
 
     async def values(
         self,

@@ -1,3 +1,4 @@
+import operator
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 import sqlalchemy
@@ -55,6 +56,7 @@ class Query:
         self.annotations = annotations or {}
         self.having_clauses = having_clauses or []
         self.aggregation_actions: list[AggregationAction] = []
+        self.annotation_columns: dict = {}
 
     def _init_sorted_orders(self) -> None:
         """
@@ -190,6 +192,7 @@ class Query:
             self.select_from = joined  # type: ignore
             self.columns.append(action.result_column)  # type: ignore
             self.aggregation_actions.append(action)
+            self.annotation_columns[name] = action.result_column
 
         if self._pagination_query_required():
             limit_qry, on_clause = self._build_pagination_condition()
@@ -276,10 +279,37 @@ class Query:
         expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
             expr
         )
+        expr = self._apply_having(expr)
         if not self._pagination_query_required():
             expr = LimitQuery(limit_count=self.limit_count).apply(expr)
             expr = OffsetQuery(query_offset=self.query_offset).apply(expr)
         expr = OrderQuery(sorted_orders=self.sorted_orders).apply(expr)
+        return expr
+
+    def _apply_having(self, expr: sqlalchemy.sql.Select) -> sqlalchemy.sql.Select:
+        """
+        Applies ``having`` conditions as WHERE clauses on aggregate columns.
+
+        Since Mode A annotations are real joined columns (not SQL
+        aggregates computed in the outer query), the conditions are plain
+        WHERE clauses rather than a SQL ``HAVING`` clause.
+
+        :param expr: select expression before having clauses are applied
+        :type expr: sqlalchemy.sql.selectable.Select
+        :return: expression with all having clauses applied
+        :rtype: sqlalchemy.sql.selectable.Select
+        """
+        operators = {
+            "exact": operator.eq,
+            "ne": operator.ne,
+            "gt": operator.gt,
+            "gte": operator.ge,
+            "lt": operator.lt,
+            "lte": operator.le,
+        }
+        for clause in self.having_clauses:
+            column = self.annotation_columns[clause.name]
+            expr = expr.where(operators[clause.op](column, clause.value))
         return expr
 
     def _reset_query_parameters(self) -> None:
