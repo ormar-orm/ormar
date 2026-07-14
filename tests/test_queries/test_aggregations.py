@@ -272,3 +272,30 @@ async def test_annotation_with_select_related_and_limit():
             .values(["name", "task_count"])
         )
         assert rows == [{"name": "Alice", "task_count": 2}]
+
+
+@pytest.mark.asyncio
+async def test_annotation_independent_of_outer_relation_filter():
+    async with base_ormar_config.database:
+        u1, _ = await seed()
+        await Task(title="a3", price=50, user=u1).save()  # Alice now has 3 tasks
+        rows = (
+            await User.objects.annotate(task_count=ormar.Count("tasks"))
+            .filter(tasks__price__gt=15)
+            .order_by("name")
+            .values(["name", "task_count"])
+        )
+        # The outer `.filter(tasks__price__gt=15)` joins `tasks` again (aliased)
+        # purely to filter rows; it matches 2 of Alice's tasks (price 20 and
+        # 50), so plain SQL join semantics duplicate her row in the flat
+        # `.values()` result (pre-existing ormar behaviour, unrelated to
+        # annotations - see the `distinct` flag on `QuerySet.count()`).
+        # What this test locks down is that `task_count` is unaffected by
+        # that outer filter: it is computed by a separate derived-table
+        # subquery grouped over the raw child table, so it is `3` (ALL of
+        # Alice's tasks) on every duplicated row, not `2` (only the tasks
+        # matching the outer filter).
+        assert rows == [
+            {"name": "Alice", "task_count": 3},
+            {"name": "Alice", "task_count": 3},
+        ]
