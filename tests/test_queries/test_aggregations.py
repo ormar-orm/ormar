@@ -77,3 +77,37 @@ async def test_annotate_count_via_values():
             {"name": "Bob", "task_count": 1},
             {"name": "Carol", "task_count": 0},
         ]
+
+
+@pytest.mark.asyncio
+async def test_annotate_count_distinct_with_column():
+    async with base_ormar_config.database:
+        await seed()
+        rows = (
+            await User.objects.annotate(
+                task_count=ormar.Count("tasks__id", distinct=True)
+            )
+            .order_by("name")
+            .values(["name", "task_count"])
+        )
+        assert rows == [
+            {"name": "Alice", "task_count": 2},
+            {"name": "Bob", "task_count": 1},
+            {"name": "Carol", "task_count": 0},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_annotate_count_distinct_without_column():
+    async with base_ormar_config.database:
+        await seed()
+        rows = (
+            await User.objects.annotate(task_count=ormar.Count("tasks", distinct=True))
+            .order_by("name")
+            .values(["name", "task_count"])
+        )
+        assert rows == [
+            {"name": "Alice", "task_count": 2},
+            {"name": "Bob", "task_count": 1},
+            {"name": "Carol", "task_count": 0},
+        ]

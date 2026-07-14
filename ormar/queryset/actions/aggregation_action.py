@@ -33,8 +33,8 @@ class AggregationAction:
         parts = aggregate.field.split("__")
         self.relation_name = parts[0]
         self.column_name: Optional[str] = parts[1] if len(parts) > 1 else None
-        _, self.target_model, self.related_str, _ = (
-            get_relationship_alias_model_and_str(model_cls, [self.relation_name])
+        _, self.target_model, _, _ = get_relationship_alias_model_and_str(
+            model_cls, [self.relation_name]
         )
         self.result_column: sqlalchemy.sql.ColumnElement = None  # type: ignore
 
@@ -88,7 +88,8 @@ class AggregationAction:
         group_key = self._child_group_key()
         target = self._aggregate_target()
         func = getattr(sqlalchemy.func, self.aggregate.function_name)
-        expr = func(target.distinct()) if self.aggregate.distinct else func(target)
+        use_distinct = self.aggregate.distinct and self.column_name is not None
+        expr = func(target.distinct()) if use_distinct else func(target)
         derived = (
             sqlalchemy.select(group_key.label("ormar_agg_key"), expr.label(self.name))
             .group_by(group_key)
@@ -105,15 +106,3 @@ class AggregationAction:
         return sqlalchemy.sql.outerjoin(
             select_from, derived, derived.c.ormar_agg_key == parent_pk
         )
-
-    def order_text(self, descending: bool) -> sqlalchemy.sql.expression.TextClause:
-        """
-        Returns an ORDER BY clause referencing the annotation label.
-
-        :param descending: whether to sort in descending order
-        :type descending: bool
-        :return: text clause quoting the annotation label
-        :rtype: sqlalchemy.sql.expression.TextClause
-        """
-        direction = " desc" if descending else ""
-        return sqlalchemy.text(f'"{self.name}"{direction}')
