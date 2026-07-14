@@ -158,3 +158,28 @@ def test_having_with_unsupported_operator():
         User.objects.annotate(task_count=ormar.Count("tasks")).having(
             task_count__contains=1
         )
+
+
+@pytest.mark.asyncio
+async def test_sum_avg_min_max_annotations():
+    async with base_ormar_config.database:
+        await seed()
+        rows = (
+            await User.objects.annotate(
+                total=ormar.Sum("tasks__price"),
+                avg_price=ormar.Avg("tasks__price"),
+                cheapest=ormar.Min("tasks__price"),
+                dearest=ormar.Max("tasks__price"),
+            )
+            .filter(name="Alice")
+            .values(["name", "total", "cheapest", "dearest"])
+        )
+        assert rows == [{"name": "Alice", "total": 30, "cheapest": 10, "dearest": 20}]
+
+        # parent with no children => NULL (not 0) for non-count aggregates
+        carol = (
+            await User.objects.annotate(total=ormar.Sum("tasks__price"))
+            .filter(name="Carol")
+            .values(["name", "total"])
+        )
+        assert carol == [{"name": "Carol", "total": None}]

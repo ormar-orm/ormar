@@ -774,7 +774,10 @@ class QuerySet(Generic[T]):
             exclude_through=exclude_through,
         )
         column_map = alias_resolver.resolve_columns(columns_names=list(rows[0].keys()))  # type: ignore
-        annotation_names = set(self._annotations.keys())
+        own_excludable = self._excludable.get(self.model)
+        annotation_names = {
+            name for name in self._annotations if own_excludable.is_included(name)
+        }
         result = [
             {
                 (column_map[k] if k in column_map else k): v
