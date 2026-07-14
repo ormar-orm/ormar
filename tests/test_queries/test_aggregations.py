@@ -111,3 +111,15 @@ async def test_annotate_count_distinct_without_column():
             {"name": "Bob", "task_count": 1},
             {"name": "Carol", "task_count": 0},
         ]
+
+
+@pytest.mark.asyncio
+async def test_order_by_annotation():
+    async with base_ormar_config.database:
+        await seed()
+        names = (
+            await User.objects.annotate(task_count=ormar.Count("tasks"))
+            .order_by("-task_count")
+            .values_list("name", flatten=True)
+        )
+        assert names == ["Alice", "Bob", "Carol"]

@@ -73,12 +73,36 @@ class Query:
         current_table_sorted = False
         if self.order_columns:
             for clause in self.order_columns:
-                if clause.is_source_model_order:
+                if clause.field_name in self.annotations:
+                    current_table_sorted = True
+                    descending = clause.direction == "desc"
+                    self.sorted_orders[clause] = self._annotations_order_text(
+                        clause.field_name, descending
+                    )
+                elif clause.is_source_model_order:
                     current_table_sorted = True
                     self.sorted_orders[clause] = clause.get_text_clause()
 
         if not current_table_sorted:
             self._apply_default_model_sorting()
+
+    def _annotations_order_text(
+        self, name: str, descending: bool
+    ) -> sqlalchemy.sql.expression.TextClause:
+        """
+        Builds an ORDER BY text clause referencing an annotation's result
+        column by its label, since annotation labels do not correspond to
+        real model columns and cannot be resolved through ``OrderAction``.
+
+        :param name: label of the annotation to order by
+        :type name: str
+        :param descending: whether to sort in descending order
+        :type descending: bool
+        :return: order by text clause referencing the annotation label
+        :rtype: sqlalchemy.sql.expression.TextClause
+        """
+        direction = " desc" if descending else ""
+        return sqlalchemy.text(f'"{name}"{direction}')
 
     def _apply_default_model_sorting(self) -> None:
         """
