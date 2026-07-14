@@ -113,6 +113,37 @@ class Query:
         direction = " desc" if descending else ""
         return sqlalchemy.text(f"{quoted_name}{direction}")
 
+    def _annotation_min_or_max_text(
+        self, name: str, descending: bool
+    ) -> sqlalchemy.sql.expression.TextClause:
+        """
+        Builds a ``min()``/``max()``-wrapped ORDER BY text clause referencing an
+        annotation's result column, for use in the pagination subquery built by
+        ``_build_pagination_condition``. That subquery groups rows by primary
+        key only, so any other column used in its ``ORDER BY`` (including an
+        annotation label) must be wrapped in an aggregate function; since the
+        annotation join is 1:1 with the parent primary key,
+        ``min(label) == max(label)`` is always the annotation's own value.
+
+        The identifier is quoted with the dialect's own identifier preparer
+        (mirroring ``OrderAction.get_text_clause``), since a hardcoded
+        double-quote is interpreted as a string literal rather than a column
+        reference on dialects without ANSI_QUOTES (e.g. MySQL).
+
+        :param name: label of the annotation to order by
+        :type name: str
+        :param descending: whether to sort in descending order
+        :type descending: bool
+        :return: min/max wrapped order by text clause referencing the
+            annotation label
+        :rtype: sqlalchemy.sql.expression.TextClause
+        """
+        dialect = self.model_cls.ormar_config.database.dialect
+        quoted_name = dialect.identifier_preparer.quote(name)
+        func = "max" if descending else "min"
+        suffix = " desc" if descending else ""
+        return sqlalchemy.text(f"{func}({quoted_name}){suffix}")
+
     def _apply_default_model_sorting(self) -> None:
         """
         Applies orders_by from model OrmarConfig (if provided), if it was not provided
@@ -233,11 +264,15 @@ class Query:
         qry_text = sqlalchemy.text(f"{pk_aliased_name}")
         maxes = {}
         for order in list(self.sorted_orders.keys()):
-            if order is not None and order.get_field_name_text() != pk_aliased_name:
+            if order.field_name in self.annotations:
+                descending = order.direction == "desc"
+                maxes[order.field_name] = self._annotation_min_or_max_text(
+                    order.field_name, descending
+                )
+            elif order.get_field_name_text() != pk_aliased_name:
                 aliased_col = order.get_field_name_text()
-                # maxes[aliased_col] = order.get_text_clause()
                 maxes[aliased_col] = order.get_min_or_max()
-            elif order.get_field_name_text() == pk_aliased_name:
+            else:
                 maxes[pk_aliased_name] = order.get_text_clause()
 
         limit_qry: Select[Any] = sqlalchemy.sql.select(qry_text)

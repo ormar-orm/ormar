@@ -228,3 +228,26 @@ async def test_qualified_m2m_aggregate_raises():
     async with base_ormar_config.database:
         with pytest.raises(QueryDefinitionError):
             await Post.objects.annotate(x=ormar.Sum("tags__id")).values(["title", "x"])
+
+
+@pytest.mark.asyncio
+async def test_annotation_with_select_related_and_limit():
+    async with base_ormar_config.database:
+        await seed()
+        # select_related hydrates tasks; annotation count stays correct and 1 row/user
+        users = (
+            await User.objects.select_related("tasks")
+            .annotate(task_count=ormar.Count("tasks"))
+            .order_by("-task_count")
+            .limit(2)
+            .all()
+        )
+        assert [u.name for u in users] == ["Alice", "Bob"]
+        # values() with limit + annotation order
+        rows = (
+            await User.objects.annotate(task_count=ormar.Count("tasks"))
+            .order_by("-task_count")
+            .limit(1)
+            .values(["name", "task_count"])
+        )
+        assert rows == [{"name": "Alice", "task_count": 2}]
