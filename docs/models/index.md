@@ -386,7 +386,7 @@ class Person(ormar.Model):
     Case-insensitive uniqueness is a unique *functional index*, not a `UniqueColumns`
     constraint, because a SQL unique constraint cannot hold expressions like `LOWER()`.
     For other functional indexes you can pass SQLAlchemy expressions directly, e.g.
-    `ormar.IndexColumns(sqlalchemy.func.lower(sqlalchemy.column("name")), unique=True)`.
+    `ormar.IndexColumns(sqlalchemy.func.upper(sqlalchemy.column("name")), unique=True)`.
     On MySQL this requires version 8.0.13 or newer.
 
 #### CheckColumns

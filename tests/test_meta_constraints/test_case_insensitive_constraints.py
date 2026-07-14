@@ -28,7 +28,7 @@ class Tag(ormar.Model):
         tablename="tags",
         constraints=[
             ormar.fields.constraints.IndexColumns(
-                sqlalchemy.func.lower(sqlalchemy.column("name")), unique=True
+                sqlalchemy.func.upper(sqlalchemy.column("name")), unique=True
             )
         ],
     )
@@ -53,7 +53,7 @@ def test_functional_index_expression_gets_safe_autoname():
     assert len(indexes) == 1
     index = indexes[0]
     assert index.unique is True
-    assert index.name == "ix_tags_lower_name"
+    assert index.name == "ix_tags_upper_name"
 
 
 @pytest.mark.asyncio
@@ -65,3 +65,13 @@ async def test_case_insensitive_uniqueness_is_enforced():
 
             with pytest.raises(sqlalchemy.exc.IntegrityError):
                 await Person.objects.create(first_name="JOHN", last_name="DOE")
+
+
+@pytest.mark.asyncio
+async def test_functional_expression_uniqueness_is_enforced():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            await Tag.objects.create(name="Python")
+
+            with pytest.raises(sqlalchemy.exc.IntegrityError):
+                await Tag.objects.create(name="PYTHON")
