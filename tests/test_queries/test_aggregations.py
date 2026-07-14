@@ -27,6 +27,21 @@ class Task(ormar.Model):
     price: Optional[int] = ormar.Integer(nullable=True)
 
 
+class Tag(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="tags")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=100)
+
+
+class Post(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="posts")
+
+    id: int = ormar.Integer(primary_key=True)
+    title: str = ormar.String(max_length=100)
+    tags = ormar.ManyToMany(Tag, related_name="posts")
+
+
 create_test_database = init_tests(base_ormar_config)
 
 
@@ -36,6 +51,8 @@ async def cleanup():
     async with base_ormar_config.database:
         await Task.objects.delete(each=True)
         await User.objects.delete(each=True)
+        await Post.objects.delete(each=True)
+        await Tag.objects.delete(each=True)
 
 
 async def seed():
@@ -183,3 +200,24 @@ async def test_sum_avg_min_max_annotations():
             .values(["name", "total"])
         )
         assert carol == [{"name": "Carol", "total": None}]
+
+
+@pytest.mark.asyncio
+async def test_count_m2m_annotation():
+    async with base_ormar_config.database:
+        t1 = await Tag(name="t1").save()
+        t2 = await Tag(name="t2").save()
+        p1 = await Post(title="p1").save()
+        p2 = await Post(title="p2").save()
+        await p1.tags.add(t1)
+        await p1.tags.add(t2)
+        await p2.tags.add(t1)
+        rows = (
+            await Post.objects.annotate(tag_count=ormar.Count("tags"))
+            .order_by("title")
+            .values(["title", "tag_count"])
+        )
+        assert rows == [
+            {"title": "p1", "tag_count": 2},
+            {"title": "p2", "tag_count": 1},
+        ]

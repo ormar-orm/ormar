@@ -1,6 +1,6 @@
 """Builds the derived-table join that backs a single ``annotate`` aggregate."""
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, cast
 
 import sqlalchemy
 
@@ -8,7 +8,7 @@ from ormar.queryset.aggregations import AggregateFunction
 from ormar.queryset.utils import get_relationship_alias_model_and_str
 
 if TYPE_CHECKING:  # pragma: no cover
-    from ormar import Model
+    from ormar import ManyToManyField, Model
 
 
 class AggregationAction:
@@ -56,6 +56,41 @@ class AggregationAction:
         fk_alias = self.target_model.get_column_alias(related_name)
         return self.target_model.ormar_config.table.columns[fk_alias]
 
+    def _is_m2m(self) -> bool:
+        """
+        Returns whether the annotated relation is a Many-to-Many relation.
+
+        :return: ``True`` if the relation field is a ``ManyToManyField``
+        :rtype: bool
+        """
+        return bool(
+            self.source_model.ormar_config.model_fields[self.relation_name].is_multi
+        )
+
+    def _m2m_group_key(self) -> sqlalchemy.Column:
+        """
+        Returns the through-table FK column pointing back to the parent.
+
+        Mirrors ``SqlJoin._get_to_and_from_keys`` (``ormar/queryset/join.py``)
+        for the ``is_multi`` branch: the relation field exposes its ``through``
+        model and ``default_source_field_name()``, which resolves to the name
+        of the FK field on the through model pointing back to the owner
+        (parent) model. That name is then translated to its database column
+        alias on the through table, so counting can be grouped per parent
+        without joining the far side of the relation at all.
+
+        :return: through table column used as the ``GROUP BY`` key
+        :rtype: sqlalchemy.Column
+        """
+        field = cast(
+            "ManyToManyField",
+            self.source_model.ormar_config.model_fields[self.relation_name],
+        )
+        through = field.through
+        source_name = field.default_source_field_name()
+        fk_alias = through.get_column_alias(source_name)
+        return through.ormar_config.table.columns[fk_alias]
+
     def _aggregate_target(self) -> sqlalchemy.sql.ColumnElement:
         """
         Returns the column the aggregate function is applied to.
@@ -85,7 +120,7 @@ class AggregationAction:
         :return: from-clause extended with the derived-table LEFT JOIN
         :rtype: sqlalchemy.sql.expression.FromClause
         """
-        group_key = self._child_group_key()
+        group_key = self._m2m_group_key() if self._is_m2m() else self._child_group_key()
         target = self._aggregate_target()
         func = getattr(sqlalchemy.func, self.aggregate.function_name)
         use_distinct = self.aggregate.distinct and self.column_name is not None
