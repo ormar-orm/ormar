@@ -275,6 +275,24 @@ async def test_annotation_with_select_related_and_limit():
 
 
 @pytest.mark.asyncio
+async def test_annotate_values_without_field_subset():
+    async with base_ormar_config.database:
+        await seed()
+        rows = (
+            await User.objects.annotate(task_count=ormar.Count("tasks"))
+            .order_by("name")
+            .values()
+        )
+        assert len(rows) == 3
+        by_name = {row["name"]: row for row in rows}
+        assert by_name["Alice"]["task_count"] == 2
+        assert by_name["Bob"]["task_count"] == 1
+        assert by_name["Carol"]["task_count"] == 0
+        # regular (non-annotation) columns are still present too
+        assert "id" in by_name["Alice"]
+
+
+@pytest.mark.asyncio
 async def test_annotation_independent_of_outer_relation_filter():
     async with base_ormar_config.database:
         u1, _ = await seed()
