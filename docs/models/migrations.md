@@ -244,9 +244,7 @@ my_project/
 │   ├── __init__.py
 │   ├── database.py
 │   ├── models/
-│   │   ├── __init__.py
-│   │   ├── authors.py
-│   │   └── books.py
+│   │   └── __init__.py
 │   ├── authors/
 │   │   └── models.py
 │   └── books/
