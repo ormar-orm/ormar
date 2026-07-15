@@ -697,6 +697,14 @@ class QuerySet(Generic[T]):
         :return: queryset with the annotations applied
         :rtype: QuerySet
         """
+        existing_names = self.model.ormar_config.model_fields
+        for name in aggregates:
+            if name in existing_names:
+                raise QueryDefinitionError(
+                    f"Cannot annotate with name '{name}' - "
+                    f"it collides with an existing field or relation on "
+                    f"'{self.model.__name__}'. Choose a different annotation name."
+                )
         merged = {**self._annotations, **aggregates}
         return self.rebuild_self(annotations=merged)
 

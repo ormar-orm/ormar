@@ -293,6 +293,43 @@ async def test_annotate_values_without_field_subset():
 
 
 @pytest.mark.asyncio
+async def test_having_with_select_related_and_limit():
+    async with base_ormar_config.database:
+        await seed()  # Alice (pk 1, 2 tasks), Bob (pk 2, 1 task), Carol (pk 3, 0 tasks)
+        dave = await User(name="Dave").save()  # pk 4
+        for i in range(3):
+            await Task(title=f"d{i}", price=1, user=dave).save()
+        # pk order is Alice(2 tasks), Bob(1 task), Carol(0 tasks), Dave(3 tasks).
+        # Only Alice and Dave satisfy `having(task_count__gt=1)`. A pagination
+        # subquery that picks the first-by-pk 2 parents *before* having is
+        # applied would pick Alice and Bob, then the outer filter would drop
+        # Bob (1 task), silently returning only [Alice] instead of the correct
+        # [Alice, Dave] - this is discriminating against the Fix-1 regression.
+        users = (
+            await User.objects.select_related("tasks")
+            .annotate(task_count=ormar.Count("tasks"))
+            .having(task_count__gt=1)
+            .limit(2)
+            .all()
+        )
+        assert sorted(u.name for u in users) == ["Alice", "Dave"]
+        assert len(users) == 2
+
+
+def test_annotate_name_collision_raises():
+    with pytest.raises(QueryDefinitionError):
+        User.objects.annotate(name=ormar.Count("tasks"))
+
+
+@pytest.mark.asyncio
+async def test_having_on_unannotated_name_raises():
+    async with base_ormar_config.database:
+        await seed()
+        with pytest.raises(QueryDefinitionError):
+            await User.objects.having(missing__gt=1).all()
+
+
+@pytest.mark.asyncio
 async def test_annotation_independent_of_outer_relation_filter():
     async with base_ormar_config.database:
         u1, _ = await seed()

@@ -87,6 +87,10 @@ await User.objects.annotate(
 ).values(["name", "task_count"])
 ```
 
+Passing `distinct=True` to a bare `Count("relation")` (no column) is a no-op:
+distinct only changes anything when it is applied to an explicit column, so use
+`Count("relation__column", distinct=True)` as shown above if you need it.
+
 ### Zero vs. `NULL` for parents with no children
 
 `Count` over a parent with no related rows returns `0` (the derived aggregate is

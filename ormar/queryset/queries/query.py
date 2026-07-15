@@ -7,6 +7,7 @@ from sqlalchemy.sql import Join
 from sqlalchemy.sql.roles import FromClauseRole
 
 import ormar  # noqa I100
+from ormar.exceptions import QueryDefinitionError
 from ormar.models.helpers.models import group_related_list
 from ormar.queryset.actions.aggregation_action import AggregationAction
 from ormar.queryset.actions.filter_action import FilterAction
@@ -296,6 +297,7 @@ class Query:
         limit_qry = FilterQuery(
             filter_clauses=self.exclude_clauses, exclude=True
         ).apply(limit_qry)
+        limit_qry = self._apply_having(limit_qry)
         limit_qry = limit_qry.group_by(qry_text)
         for order_by in maxes.values():
             limit_qry = limit_qry.order_by(order_by)
@@ -348,6 +350,8 @@ class Query:
         :type expr: sqlalchemy.sql.selectable.Select
         :return: expression with all having clauses applied
         :rtype: sqlalchemy.sql.selectable.Select
+        :raises QueryDefinitionError: if a having clause references a name
+            that was not declared through ``annotate()``
         """
         operators = {
             "exact": operator.eq,
@@ -358,6 +362,11 @@ class Query:
             "lte": operator.le,
         }
         for clause in self.having_clauses:
+            if clause.name not in self.annotation_columns:
+                raise QueryDefinitionError(
+                    f"having() references '{clause.name}' which is not an "
+                    f"annotated aggregate; add it via annotate()."
+                )
             column = self.annotation_columns[clause.name]
             expr = expr.where(operators[clause.op](column, clause.value))
         return expr
