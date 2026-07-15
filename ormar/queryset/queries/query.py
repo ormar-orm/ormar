@@ -123,30 +123,41 @@ class Query:
         direction = " desc" if descending else ""
         return sqlalchemy.text(f"{quoted_name}{direction}")
 
-    def _annotation_min_or_max_text(
+    def _annotation_min_or_max_expression(
         self, name: str, descending: bool
-    ) -> sqlalchemy.sql.expression.TextClause:
+    ) -> sqlalchemy.sql.ColumnElement:
         """
-        Builds a ``min()``/``max()``-wrapped ORDER BY text clause referencing an
-        annotation's result column, for use in the pagination subquery built by
-        ``_build_pagination_condition``. That subquery groups rows by primary
-        key only, so any other column used in its ``ORDER BY`` (including an
-        annotation label) must be wrapped in an aggregate function; since the
-        annotation join is 1:1 with the parent primary key,
-        ``min(label) == max(label)`` is always the annotation's own value.
+        Builds a ``min()``/``max()``-wrapped ORDER BY expression over an
+        annotation's own result column, for use in the pagination subquery
+        built by ``_build_pagination_condition``. That subquery groups rows
+        by primary key only, so any other column used in its ``ORDER BY``
+        (including an annotation) must be wrapped in an aggregate function;
+        since the annotation join is 1:1 with the parent primary key,
+        ``min(column) == max(column)`` is always the annotation's own value.
+
+        This reuses ``self.annotation_columns[name]`` (the same expression
+        used in the main query, with e.g. ``Count``'s empty-relation
+        ``COALESCE(..., 0)`` already applied) rather than a bare text label:
+        the label also exists, unqualified, on the raw (un-coalesced)
+        derived-table column already present in ``self.select_from``, and
+        dialects disagree on how a raw ``NULL`` sorts (e.g. PostgreSQL sorts
+        ``NULL`` first on ``DESC`` by default), which would rank
+        empty-relation parents wrongly relative to the coalesced ``0`` used
+        everywhere else.
 
         :param name: label of the annotation to order by
         :type name: str
         :param descending: whether to sort in descending order
         :type descending: bool
-        :return: min/max wrapped order by text clause referencing the
-            annotation label
-        :rtype: sqlalchemy.sql.expression.TextClause
+        :return: min/max wrapped order by expression over the annotation's
+            own (already coalesced, where applicable) result column
+        :rtype: sqlalchemy.sql.ColumnElement
         """
-        quoted_name = self._quote_annotation_name(name)
-        func = "max" if descending else "min"
-        suffix = " desc" if descending else ""
-        return sqlalchemy.text(f"{func}({quoted_name}){suffix}")
+        column = self.annotation_columns[name]
+        wrapped = (
+            sqlalchemy.func.max(column) if descending else sqlalchemy.func.min(column)
+        )
+        return wrapped.desc() if descending else wrapped
 
     def _apply_default_model_sorting(self) -> None:
         """
@@ -266,11 +277,11 @@ class Query:
         pk_alias = self.model_cls.get_column_alias(self.model_cls.ormar_config.pkname)
         pk_aliased_name = f"{self.table.name}.{pk_alias}"
         qry_text = sqlalchemy.text(f"{pk_aliased_name}")
-        maxes = {}
+        maxes: dict[str, Union[TextClause, sqlalchemy.sql.ColumnElement]] = {}
         for order in list(self.sorted_orders.keys()):
             if order.field_name in self.annotations:
                 descending = order.direction == "desc"
-                maxes[order.field_name] = self._annotation_min_or_max_text(
+                maxes[order.field_name] = self._annotation_min_or_max_expression(
                     order.field_name, descending
                 )
             elif order.get_field_name_text() != pk_aliased_name:
