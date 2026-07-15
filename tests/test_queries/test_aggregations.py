@@ -299,3 +299,17 @@ async def test_annotation_independent_of_outer_relation_filter():
             {"name": "Alice", "task_count": 3},
             {"name": "Alice", "task_count": 3},
         ]
+
+        # Same independence property, without the duplication confound:
+        # a scalar-column filter (`name="Alice"`) matches Alice's row once,
+        # so no join-induced duplication occurs, yet `task_count` is still
+        # `3` (ALL of Alice's tasks). A to-many-relation filter duplicates
+        # rows (asserted above); a scalar filter does not (asserted below) -
+        # in both cases `task_count` reflects every task, independent of
+        # the outer filter.
+        scalar_filtered_rows = (
+            await User.objects.annotate(task_count=ormar.Count("tasks"))
+            .filter(name="Alice")
+            .values(["name", "task_count"])
+        )
+        assert scalar_filtered_rows == [{"name": "Alice", "task_count": 3}]
