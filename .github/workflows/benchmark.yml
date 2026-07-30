@@ -37,7 +37,7 @@ jobs:
         run: poetry install --extras "all"
 
       - name: Run benchmarks
-        uses: CodSpeedHQ/action@v4
+        uses: CodSpeedHQ/action@v5
         with:
           mode: walltime
           run: poetry run pytest benchmarks/ --codspeed
