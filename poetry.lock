@@ -1796,18 +1796,20 @@ files = [
 
 [[package]]
 name = "ormar-utils"
-version = "0.2.0"
+version = "0.2.1"
 description = "Rust-accelerated utility functions for the ormar ORM"
 optional = false
 python-versions = ">=3.10"
 groups = ["main"]
 files = [
-    {file = "ormar_utils-0.2.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:e164f5d3636a660cec8df91cc1a0e2159bbb429f55d990272c096b1eef9d6c59"},
-    {file = "ormar_utils-0.2.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:40f3d45737017309cea3c62569394cc56e4c1558f9926f1dded580eeb6f730bb"},
-    {file = "ormar_utils-0.2.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:f93299eda3e3a72fdbf5ff4ce8c82ff801247bba616debc52dbb48915480d3ce"},
-    {file = "ormar_utils-0.2.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:55c7ec5e002b0cc5394830c2b8c109a5b492d518fc95367dcf6b1da57c8510e4"},
-    {file = "ormar_utils-0.2.0-cp310-abi3-win_amd64.whl", hash = "sha256:122c7dd9f2eb52342be4862beda0737f98e7813c01751793f0fa53715f5b3959"},
-    {file = "ormar_utils-0.2.0.tar.gz", hash = "sha256:e2bf1ff71fbb820cac192b33583d58fac29e838a79804995336ef2bee02cc9ae"},
+    {file = "ormar_utils-0.2.1-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:6c8b9ab43393f9988b358146969ed3143a8bef1dfa6c4f934e78c7bf12401fe9"},
+    {file = "ormar_utils-0.2.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:4ef4b7426565c283b657004eb3ca1745c38fb8df4c8b015fa44ed72996419727"},
+    {file = "ormar_utils-0.2.1-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:1a22786fd450ff101bbec943aae12b3f5f86e729986d8e36370e9200d69286a7"},
+    {file = "ormar_utils-0.2.1-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:307e1aa3e0e0340b86d7c11fe53dc0ec4f94fd05cbb775e1d552ae8c273793ec"},
+    {file = "ormar_utils-0.2.1-cp310-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:44b3715d440c611db24a6a3f0f182e5a5cff453e5c753a9ad47358616b3e6900"},
+    {file = "ormar_utils-0.2.1-cp310-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:203d0364d59a034756c10d4e6393ddda16a2909290c5c12f38bebf7082da2d46"},
+    {file = "ormar_utils-0.2.1-cp310-abi3-win_amd64.whl", hash = "sha256:fb4ad6e2bd103786a1c8266d4b383880371852ec79e4637c1773cb7edbc0ea3b"},
+    {file = "ormar_utils-0.2.1.tar.gz", hash = "sha256:7f7e29d3725b3b5b6166c7ddeb69c25cda374593adca0bb3d1951747f7f33489"},
 ]
 
 [[package]]
