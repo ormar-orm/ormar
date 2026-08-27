@@ -90,9 +90,9 @@ codecov = "^2.1.13"
 pytest-asyncio = ">=1.1.0,<2.0"
 fastapi = ">=0.125.0"
 
-ruff = ">=0.5.1,<0.16.4"
+ruff = ">=0.5.1,<0.16.5"
 
-setuptools = ">=78.1.1,<83.0.0"
+setuptools = ">=78.1.1,<85.0.0"
 
 # types
 mypy = ">=1.8,<3.0"
