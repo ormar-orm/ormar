@@ -359,6 +359,36 @@ You can set this parameter by providing `ormar_config` object `constraints` argu
     To set one column index use [`unique`](../fields/common-parameters.md#index) common parameter. 
     Of course, you can set many columns as indexes with this param but each of them will be a separate index.
 
+##### Case-insensitive unique index
+
+To enforce uniqueness while ignoring case (for example so that `John` and `JOHN`
+cannot both exist), pass `case_insensitive=True` together with `unique=True`. Ormar
+wraps each named column in `LOWER()` and builds a unique functional index:
+
+```python
+import ormar
+
+class Person(ormar.Model):
+    ormar_config = base_ormar_config.copy(
+        constraints=[
+            ormar.IndexColumns(
+                "first_name", "last_name", unique=True, case_insensitive=True
+            )
+        ],
+    )
+
+    id: int = ormar.Integer(primary_key=True)
+    first_name: str = ormar.String(max_length=100)
+    last_name: str = ormar.String(max_length=100)
+```
+
+!!!note
+    Case-insensitive uniqueness is a unique *functional index*, not a `UniqueColumns`
+    constraint, because a SQL unique constraint cannot hold expressions like `LOWER()`.
+    For other functional indexes you can pass SQLAlchemy expressions directly, e.g.
+    `ormar.IndexColumns(sqlalchemy.func.upper(sqlalchemy.column("name")), unique=True)`.
+    On MySQL this requires version 8.0.13 or newer.
+
 #### CheckColumns
 
 You can set this parameter by providing `ormar_config` object `constraints` argument.
