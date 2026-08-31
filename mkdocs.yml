@@ -32,6 +32,7 @@ nav:
     - queries/select-columns.md
     - queries/pagination-and-rows-number.md
     - queries/aggregations.md
+    - queries/aggregate-annotations.md
     - Return raw data: queries/raw-data.md
   - Signals: signals.md
   - Transactions: transactions.md

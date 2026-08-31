@@ -76,6 +76,7 @@ from ormar.fields import (
 from ormar.databases.connection import DatabaseConnection
 from ormar.models import ExcludableItems, Extra, Model, OrmarConfig
 from ormar.queryset import NullsOrdering, OrderAction, QuerySet, and_, or_
+from ormar.queryset.aggregations import Avg, Count, Max, Min, Sum
 from ormar.relations import RelationType
 from ormar.signals import Signal
 
@@ -109,6 +110,11 @@ __all__ = [
     "NoMatch",
     "ForeignKey",
     "QuerySet",
+    "Count",
+    "Sum",
+    "Avg",
+    "Min",
+    "Max",
     "RelationType",
     "Undefined",
     "UUID",
