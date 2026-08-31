@@ -17,8 +17,8 @@ jobs:
       id-token: write
     runs-on: codspeed-macro
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
@@ -37,7 +37,7 @@ jobs:
         run: poetry install --extras "all"
 
       - name: Run benchmarks
-        uses: CodSpeedHQ/action@v4
+        uses: CodSpeedHQ/action@v5.2.1
         with:
           mode: walltime
           run: poetry run pytest benchmarks/ --codspeed
