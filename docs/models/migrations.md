@@ -48,55 +48,13 @@ alembic upgrade head
 
 Ormar models are built on SQLAlchemy Core. Each model stores its table on a SQLAlchemy `MetaData` instance that you provide through `OrmarConfig`. Alembic needs that same `MetaData` object so it can discover which tables exist and autogenerate migrations.
 
-The usual pattern is to create one shared `MetaData` object and pass it to every model:
-
-```python
-# my_project/models.py
-import sqlalchemy
-import ormar
-from ormar import DatabaseConnection
-
-database = DatabaseConnection("sqlite+aiosqlite:///db.sqlite")
-metadata = sqlalchemy.MetaData()
-
-
-class Author(ormar.Model):
-    ormar_config = ormar.OrmarConfig(
-        database=database,
-        metadata=metadata,
-        tablename="authors",
-    )
-
-    id: int = ormar.Integer(primary_key=True)
-    name: str = ormar.String(max_length=100)
-
-
-class Book(ormar.Model):
-    ormar_config = ormar.OrmarConfig(
-        database=database,
-        metadata=metadata,
-        tablename="books",
-    )
-
-    id: int = ormar.Integer(primary_key=True)
-    title: str = ormar.String(max_length=100)
-    author: Author = ormar.ForeignKey(Author)
-```
-
-You can then expose `metadata` from the module that defines your models:
-
-```python
-# env.py
-from my_project.models import metadata
-
-target_metadata = metadata
-```
-
-If you prefer, you can also grab the metadata from any model:
+The usual pattern is to create one shared `MetaData` object and pass it to every model in its `OrmarConfig`. You can then expose that metadata from any model:
 
 ```python
 target_metadata = Author.ormar_config.metadata
 ```
+
+or export the shared `metadata` instance from your models module and import it into `env.py`.
 
 The important part is that every model uses the **same** `sqlalchemy.MetaData()` instance. If models live in different files or apps, import them all before Alembic inspects the metadata (see [Multiple apps with models](#multiple-apps-with-models) below).
 
@@ -120,47 +78,63 @@ my_project/
 `my_project/models.py`:
 
 ```python
-import sqlalchemy
-import ormar
-from ormar import DatabaseConnection
-
-database = DatabaseConnection("sqlite+aiosqlite:///db.sqlite")
-metadata = sqlalchemy.MetaData()
-
-
-class Author(ormar.Model):
-    ormar_config = ormar.OrmarConfig(
-        database=database,
-        metadata=metadata,
-        tablename="authors",
-    )
-
-    id: int = ormar.Integer(primary_key=True)
-    name: str = ormar.String(max_length=100)
-
-
-class Book(ormar.Model):
-    ormar_config = ormar.OrmarConfig(
-        database=database,
-        metadata=metadata,
-        tablename="books",
-    )
-
-    id: int = ormar.Integer(primary_key=True)
-    title: str = ormar.String(max_length=100)
-    author: Author = ormar.ForeignKey(Author)
+--8<-- "../docs_src/models/docs019.py"
 ```
 
-`alembic.ini` (only the parts you typically need to change):
+`alembic.ini`:
 
 ```ini
 [alembic]
 script_location = %(here)s/alembic
 
-prepend_sys_path = .
+sqlalchemy.url = sqlite:///%(here)s/db.sqlite
 
-sqlalchemy.url = sqlite:///db.sqlite
+# Logging configuration (required by fileConfig in env.py)
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+qualname =
+
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+datefmt = %H:%M:%S
 ```
+
+!!! note "Async vs. sync database drivers"
+    Ormar communicates with the database using an asynchronous driver (`sqlite+aiosqlite`, `asyncpg`, `aiomysql`), whereas Alembic's default `env.py` runs synchronously. The two connection URLs intentionally point to the same database through different driver protocols:
+
+    | Database | Ormar (`DatabaseConnection`) | Alembic (`sqlalchemy.url`) |
+    |---|---|---|
+    | SQLite | `sqlite+aiosqlite:///db.sqlite` | `sqlite:///%(here)s/db.sqlite` |
+    | PostgreSQL | `postgresql+asyncpg://...` | `postgresql+psycopg2://...` |
+    | MySQL | `mysql+aiomysql://...` | `mysql+pymysql://...` |
+
+    If you prefer to use async drivers throughout, you can initialize Alembic with `alembic init -t async`.
 
 `alembic/env.py`:
 
@@ -180,7 +154,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Import the shared metadata (and models, so the metaclass registers the tables).
-from my_project.models import metadata
+from my_project.models import metadata  # noqa: E402
 
 target_metadata = metadata
 
@@ -192,7 +166,8 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        # Required if you use ormar.UUID().
+        # Required if you use ormar.UUID(); must match alembic's
+        # sqlalchemy_module_prefix option (default "sa.").
         user_module_prefix="sa.",
     )
 
@@ -211,7 +186,8 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            # Required if you use ormar.UUID().
+            # Required if you use ormar.UUID(); must match alembic's
+            # sqlalchemy_module_prefix option (default "sa.").
             user_module_prefix="sa.",
         )
 
@@ -246,8 +222,10 @@ my_project/
 │   ├── models/
 │   │   └── __init__.py
 │   ├── authors/
+│   │   ├── __init__.py
 │   │   └── models.py
 │   └── books/
+│       ├── __init__.py
 │       └── models.py
 └── alembic.ini
 ```
@@ -316,7 +294,7 @@ __all__ = ["Author", "Book", "metadata"]
 Then in `alembic/env.py`:
 
 ```python
-from my_project.models import metadata, Author, Book  # noqa: F401
+from my_project.models import Author, Book, metadata  # noqa: E402, F401
 
 target_metadata = metadata
 ```
@@ -337,7 +315,7 @@ and `run_migrations_online`:
 context.configure(
     connection=connection,
     target_metadata=target_metadata,
-    user_module_prefix='sa.',
+    user_module_prefix="sa.",
     compare_type=True,
 )
 ```
