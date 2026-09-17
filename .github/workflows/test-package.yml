@@ -39,7 +39,7 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         submodules: false
     - name: Set up Python
@@ -108,7 +108,7 @@ jobs:
       run: bash scripts/test.sh
 
     - name: Upload coverage
-      uses: codecov/codecov-action@v7.0.0
+      uses: codecov/codecov-action@v7.1.0
       with:
         name: codecov-umbrella
         token: ${{ secrets.CODCOV_TOKEN }}
