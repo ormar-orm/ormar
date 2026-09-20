@@ -38,102 +38,157 @@ Likewise as with tables, since we base tables on sqlalchemy for migrations pleas
 
 Use command line to reproduce this minimalistic example.
 
-```python
+```bash
 alembic init alembic
 alembic revision --autogenerate -m "made some changes"
 alembic upgrade head
 ```
 
-### Sample env.py file
+### Where does `metadata` come from?
 
-A quick example of alembic migrations should be something similar to:
+Ormar models are built on SQLAlchemy Core. Each model stores its table on a SQLAlchemy `MetaData` instance that you provide through `OrmarConfig`. Alembic needs that same `MetaData` object so it can discover which tables exist and autogenerate migrations.
 
-When you have application structure like:
+The usual pattern is to create one shared `MetaData` object and pass it to every model in its `OrmarConfig`. You can then expose that metadata from any model:
 
-```
--> app
-    -> alembic (initialized folder - so run alembic init alembic inside app folder)
-    -> models (here are the models)
-      -> __init__.py
-      -> my_models.py
+```python
+target_metadata = Author.ormar_config.metadata
 ```
 
-Your `env.py` file (in alembic folder) can look something like:
+or export the shared `metadata` instance from your models module and import it into `env.py`.
+
+The important part is that every model uses the **same** `sqlalchemy.MetaData()` instance. If models live in different files or apps, import them all before Alembic inspects the metadata (see [Multiple apps with models](#multiple-apps-with-models) below).
+
+### Complete project layout
+
+Below is a minimal but complete layout that works with `alembic revision --autogenerate`.
+
+```
+my_project/
+├── alembic/
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/
+├── my_project/
+│   ├── __init__.py
+│   └── models.py
+├── alembic.ini
+└── db.sqlite
+```
+
+`my_project/models.py`:
+
+```python
+--8<-- "../docs_src/models/docs019.py"
+```
+
+`alembic.ini`:
+
+```ini
+[alembic]
+script_location = %(here)s/alembic
+
+sqlalchemy.url = sqlite:///%(here)s/db.sqlite
+
+# Logging configuration (required by fileConfig in env.py)
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+qualname =
+
+[logger_sqlalchemy]
+level = WARN
+handlers =
+qualname = sqlalchemy.engine
+
+[logger_alembic]
+level = INFO
+handlers =
+qualname = alembic
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+datefmt = %H:%M:%S
+```
+
+!!! note "Async vs. sync database drivers"
+    Ormar communicates with the database using an asynchronous driver (`sqlite+aiosqlite`, `asyncpg`, `aiomysql`), whereas Alembic's default `env.py` runs synchronously. The two connection URLs intentionally point to the same database through different driver protocols:
+
+    | Database | Ormar (`DatabaseConnection`) | Alembic (`sqlalchemy.url`) |
+    |---|---|---|
+    | SQLite | `sqlite+aiosqlite:///db.sqlite` | `sqlite:///%(here)s/db.sqlite` |
+    | PostgreSQL | `postgresql+asyncpg://...` | `postgresql+psycopg2://...` |
+    | MySQL | `mysql+aiomysql://...` | `mysql+pymysql://...` |
+
+    If you prefer to use async drivers throughout, you can initialize Alembic with `alembic init -t async`.
+
+`alembic/env.py`:
 
 ```python
 from logging.config import fileConfig
-from sqlalchemy import create_engine
+from pathlib import Path
+import sys
 
+from sqlalchemy import engine_from_config, pool
 from alembic import context
-import sys, os
 
-# add app folder to system path (alternative is running it from parent folder with python -m ...)
-myPath = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, myPath + '/../../')
+# Add the project root to sys.path so `my_project` can be imported.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
-fileConfig(config.config_file_name)
+# Import the shared metadata (and models, so the metaclass registers the tables).
+from my_project.models import metadata  # noqa: E402
 
-# add your model's MetaData object here (the one used in ormar)
-# for 'autogenerate' support
-from app.models.my_models import metadata
 target_metadata = metadata
 
 
-# set your url here or import from settings
-# note that by default url is in saved sqlachemy.url variable in alembic.ini file
-URL = "sqlite:///test.db"
-
-
-def run_migrations_offline():
-    """Run migrations in 'offline' mode.
-
-    This configures the context with just a URL
-    and not an Engine, though an Engine is acceptable
-    here as well.  By skipping the Engine creation
-    we don't even need a DBAPI to be available.
-
-    Calls to context.execute() here emit the given string to the
-    script output.
-
-    """
+def run_migrations_offline() -> None:
+    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=URL,
+        url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        # if you use UUID field set also this param
-        # the prefix has to match sqlalchemy import name in alembic
-        # that can be set by sqlalchemy_module_prefix option (default 'sa.')
-        user_module_prefix='sa.'
+        # Required if you use ormar.UUID(); must match alembic's
+        # sqlalchemy_module_prefix option (default "sa.").
+        user_module_prefix="sa.",
     )
 
     with context.begin_transaction():
         context.run_migrations()
 
 
-def run_migrations_online():
-    """Run migrations in 'online' mode.
-
-    In this scenario we need to create an Engine
-    and associate a connection with the context.
-
-    """
-    connectable = create_engine(URL)
+def run_migrations_online() -> None:
+    connectable = engine_from_config(
+        config.get_section(config.config_ini_section, {}),
+        prefix="sqlalchemy.",
+        poolclass=pool.NullPool,
+    )
 
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            # if you use UUID field set also this param
-            # the prefix has to match sqlalchemy import name in alembic
-            # that can be set by sqlalchemy_module_prefix option (default 'sa.')
-            user_module_prefix='sa.'
+            # Required if you use ormar.UUID(); must match alembic's
+            # sqlalchemy_module_prefix option (default "sa.").
+            user_module_prefix="sa.",
         )
 
         with context.begin_transaction():
@@ -144,8 +199,107 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
+```
+
+Then generate and run your first migration:
+
+```bash
+alembic revision --autogenerate -m "initial"
+alembic upgrade head
+```
+
+### Multiple apps with models
+
+If your models are split across several packages, the metadata must still be shared and every model must be imported before Alembic reads the metadata. A common layout:
 
 ```
+my_project/
+├── alembic/
+│   └── env.py
+├── my_project/
+│   ├── __init__.py
+│   ├── database.py
+│   ├── models/
+│   │   └── __init__.py
+│   ├── authors/
+│   │   ├── __init__.py
+│   │   └── models.py
+│   └── books/
+│       ├── __init__.py
+│       └── models.py
+└── alembic.ini
+```
+
+`my_project/database.py`:
+
+```python
+import sqlalchemy
+from ormar import DatabaseConnection
+
+database = DatabaseConnection("sqlite+aiosqlite:///db.sqlite")
+metadata = sqlalchemy.MetaData()
+```
+
+`my_project/authors/models.py`:
+
+```python
+import ormar
+from my_project.database import database, metadata
+
+
+class Author(ormar.Model):
+    ormar_config = ormar.OrmarConfig(
+        database=database,
+        metadata=metadata,
+        tablename="authors",
+    )
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=100)
+```
+
+`my_project/books/models.py`:
+
+```python
+import ormar
+from my_project.authors.models import Author
+from my_project.database import database, metadata
+
+
+class Book(ormar.Model):
+    ormar_config = ormar.OrmarConfig(
+        database=database,
+        metadata=metadata,
+        tablename="books",
+    )
+
+    id: int = ormar.Integer(primary_key=True)
+    title: str = ormar.String(max_length=100)
+    author: Author = ormar.ForeignKey(Author)
+```
+
+`my_project/models/__init__.py` acts as a central import point:
+
+```python
+# Import every model so the metaclass registers its table on the shared metadata.
+from my_project.authors.models import Author
+from my_project.books.models import Book
+
+# Re-export the shared metadata so env.py can import it from one place.
+from my_project.database import metadata
+
+__all__ = ["Author", "Book", "metadata"]
+```
+
+Then in `alembic/env.py`:
+
+```python
+from my_project.models import Author, Book, metadata  # noqa: E402, F401
+
+target_metadata = metadata
+```
+
+Importing the models is required: if a model class is never defined/imported, its table is never attached to `metadata` and Alembic will not see it.
 
 ### Detecting column type changes (`compare_type`)
 
@@ -161,7 +315,7 @@ and `run_migrations_online`:
 context.configure(
     connection=connection,
     target_metadata=target_metadata,
-    user_module_prefix='sa.',
+    user_module_prefix="sa.",
     compare_type=True,
 )
 ```
@@ -196,13 +350,13 @@ def include_object(object, name, type_, reflected, compare_to):
 And you pass it into context like (both in online and offline):
 ```python
 context.configure(
-        url=URL,
-        target_metadata=target_metadata,
-        literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
-        user_module_prefix='sa.',
-        include_object=include_object
-    )
+    url=config.get_main_option("sqlalchemy.url"),
+    target_metadata=target_metadata,
+    literal_binds=True,
+    dialect_opts={"paramstyle": "named"},
+    user_module_prefix="sa.",
+    include_object=include_object,
+)
 ```
 
 !!!info
