@@ -19,10 +19,32 @@ Each of the `Fields` has assigned both `sqlalchemy` column class and python type
         regex: str = None,)` has a required `max_length` parameter.  
 
 * Sqlalchemy column: `sqlalchemy.String`  
-* Type (used for pydantic): `str` 
+* Type (used for pydantic): `str`, or `typing.Literal[...]` when string `choices` are provided
 
 !!!tip
     For explanation of other parameters check [pydantic](https://pydantic-docs.helpmanual.io/usage/schema/#field-customisation) documentation.
+
+You can also constrain string values with `choices` while keeping a varchar column:
+
+```python
+from typing import Literal
+
+import ormar
+
+
+class Account(ormar.Model):
+    ormar_config = ...
+
+    id: int = ormar.Integer(primary_key=True)
+    mode: Literal["user", "manager", "admin"] = ormar.String(
+        max_length=32,
+        choices=("user", "manager", "admin"),
+    )
+```
+
+For the strongest static typing, keep the explicit field annotation. If you rely on
+inference from the `choices` argument alone, type checkers are more likely to infer a
+`str` type instead of the appropriate literal.
 
 ### Text
 
@@ -219,7 +241,6 @@ So which one to use depends on the backend you use and on the column/ data type 
 
 * Sqlalchemy column: `sqlalchemy.Enum`  
 * Type (used for pydantic): `type[Enum]`
-
 
 [relations]: ../relations/index.md
 [queries]: ../queries.md
