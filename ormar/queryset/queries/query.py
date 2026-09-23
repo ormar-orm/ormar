@@ -1,3 +1,4 @@
+import operator
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 import sqlalchemy
@@ -6,7 +7,9 @@ from sqlalchemy.sql import Join
 from sqlalchemy.sql.roles import FromClauseRole
 
 import ormar  # noqa I100
+from ormar.exceptions import QueryDefinitionError
 from ormar.models.helpers.models import group_related_list
+from ormar.queryset.actions.aggregation_action import AggregationAction
 from ormar.queryset.actions.filter_action import FilterAction
 from ormar.queryset.join import SqlJoin
 from ormar.queryset.queries import FilterQuery, LimitQuery, OffsetQuery, OrderQuery
@@ -29,6 +32,8 @@ class Query:
         excludable: "ExcludableItems",
         order_bys: Optional[list["OrderAction"]],
         limit_raw_sql: bool,
+        annotations: Optional[dict] = None,
+        having_clauses: Optional[list] = None,
     ) -> None:
         self.query_offset = offset
         self.limit_count = limit_count
@@ -49,6 +54,10 @@ class Query:
         self._init_sorted_orders()
 
         self.limit_raw_sql = limit_raw_sql
+        self.annotations = annotations or {}
+        self.having_clauses = having_clauses or []
+        self.aggregation_actions: list[AggregationAction] = []
+        self.annotation_columns: dict = {}
 
     def _init_sorted_orders(self) -> None:
         """
@@ -67,12 +76,89 @@ class Query:
         current_table_sorted = False
         if self.order_columns:
             for clause in self.order_columns:
-                if clause.is_source_model_order:
+                if clause.field_name in self.annotations:
+                    current_table_sorted = True
+                    descending = clause.direction == "desc"
+                    self.sorted_orders[clause] = self._annotations_order_text(
+                        clause.field_name, descending
+                    )
+                elif clause.is_source_model_order:
                     current_table_sorted = True
                     self.sorted_orders[clause] = clause.get_text_clause()
 
         if not current_table_sorted:
             self._apply_default_model_sorting()
+
+    def _quote_annotation_name(self, name: str) -> str:
+        """
+        Quotes an annotation's result column label with the dialect's own
+        identifier preparer (mirroring ``OrderAction.get_text_clause``),
+        since a hardcoded double-quote is interpreted as a string literal
+        rather than a column reference on dialects without ANSI_QUOTES
+        (e.g. MySQL).
+
+        :param name: label of the annotation to quote
+        :type name: str
+        :return: dialect-quoted identifier
+        :rtype: str
+        """
+        dialect = self.model_cls.ormar_config.database.dialect
+        return dialect.identifier_preparer.quote(name)
+
+    def _annotations_order_text(
+        self, name: str, descending: bool
+    ) -> sqlalchemy.sql.expression.TextClause:
+        """
+        Builds an ORDER BY text clause referencing an annotation's result
+        column by its label, since annotation labels do not correspond to
+        real model columns and cannot be resolved through ``OrderAction``.
+
+        :param name: label of the annotation to order by
+        :type name: str
+        :param descending: whether to sort in descending order
+        :type descending: bool
+        :return: order by text clause referencing the annotation label
+        :rtype: sqlalchemy.sql.expression.TextClause
+        """
+        quoted_name = self._quote_annotation_name(name)
+        direction = " desc" if descending else ""
+        return sqlalchemy.text(f"{quoted_name}{direction}")
+
+    def _annotation_min_or_max_expression(
+        self, name: str, descending: bool
+    ) -> sqlalchemy.sql.ColumnElement:
+        """
+        Builds a ``min()``/``max()``-wrapped ORDER BY expression over an
+        annotation's own result column, for use in the pagination subquery
+        built by ``_build_pagination_condition``. That subquery groups rows
+        by primary key only, so any other column used in its ``ORDER BY``
+        (including an annotation) must be wrapped in an aggregate function;
+        since the annotation join is 1:1 with the parent primary key,
+        ``min(column) == max(column)`` is always the annotation's own value.
+
+        This reuses ``self.annotation_columns[name]`` (the same expression
+        used in the main query, with e.g. ``Count``'s empty-relation
+        ``COALESCE(..., 0)`` already applied) rather than a bare text label:
+        the label also exists, unqualified, on the raw (un-coalesced)
+        derived-table column already present in ``self.select_from``, and
+        dialects disagree on how a raw ``NULL`` sorts (e.g. PostgreSQL sorts
+        ``NULL`` first on ``DESC`` by default), which would rank
+        empty-relation parents wrongly relative to the coalesced ``0`` used
+        everywhere else.
+
+        :param name: label of the annotation to order by
+        :type name: str
+        :param descending: whether to sort in descending order
+        :type descending: bool
+        :return: min/max wrapped order by expression over the annotation's
+            own (already coalesced, where applicable) result column
+        :rtype: sqlalchemy.sql.ColumnElement
+        """
+        column = self.annotation_columns[name]
+        wrapped = (
+            sqlalchemy.func.max(column) if descending else sqlalchemy.func.min(column)
+        )
+        return wrapped.desc() if descending else wrapped
 
     def _apply_default_model_sorting(self) -> None:
         """
@@ -145,6 +231,16 @@ class Query:
                 self.sorted_orders,
             ) = sql_join.build_join()  # type: ignore
 
+        for name, aggregate in self.annotations.items():
+            action = AggregationAction(
+                name=name, aggregate=aggregate, model_cls=self.model_cls
+            )
+            joined = action.apply_join(self.select_from, self.table)  # type: ignore
+            self.select_from = joined  # type: ignore
+            self.columns.append(action.result_column)  # type: ignore
+            self.aggregation_actions.append(action)
+            self.annotation_columns[name] = action.result_column
+
         if self._pagination_query_required():
             limit_qry, on_clause = self._build_pagination_condition()
             self.select_from = sqlalchemy.sql.join(
@@ -182,13 +278,17 @@ class Query:
         pk_alias = self.model_cls.get_column_alias(self.model_cls.ormar_config.pkname)
         pk_aliased_name = f"{self.table.name}.{pk_alias}"
         qry_text = sqlalchemy.text(f"{pk_aliased_name}")
-        maxes = {}
+        maxes: dict[str, Union[TextClause, sqlalchemy.sql.ColumnElement]] = {}
         for order in list(self.sorted_orders.keys()):
-            if order is not None and order.get_field_name_text() != pk_aliased_name:
+            if order.field_name in self.annotations:
+                descending = order.direction == "desc"
+                maxes[order.field_name] = self._annotation_min_or_max_expression(
+                    order.field_name, descending
+                )
+            elif order.get_field_name_text() != pk_aliased_name:
                 aliased_col = order.get_field_name_text()
-                # maxes[aliased_col] = order.get_text_clause()
                 maxes[aliased_col] = order.get_min_or_max()
-            elif order.get_field_name_text() == pk_aliased_name:
+            else:
                 maxes[pk_aliased_name] = order.get_text_clause()
 
         limit_qry: Select[Any] = sqlalchemy.sql.select(qry_text)
@@ -197,6 +297,7 @@ class Query:
         limit_qry = FilterQuery(
             filter_clauses=self.exclude_clauses, exclude=True
         ).apply(limit_qry)
+        limit_qry = self._apply_having(limit_qry)
         limit_qry = limit_qry.group_by(qry_text)
         for order_by in maxes.values():
             limit_qry = limit_qry.order_by(order_by)
@@ -230,10 +331,44 @@ class Query:
         expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
             expr
         )
+        expr = self._apply_having(expr)
         if not self._pagination_query_required():
             expr = LimitQuery(limit_count=self.limit_count).apply(expr)
             expr = OffsetQuery(query_offset=self.query_offset).apply(expr)
         expr = OrderQuery(sorted_orders=self.sorted_orders).apply(expr)
+        return expr
+
+    def _apply_having(self, expr: sqlalchemy.sql.Select) -> sqlalchemy.sql.Select:
+        """
+        Applies ``having`` conditions as WHERE clauses on aggregate columns.
+
+        Since Mode A annotations are real joined columns (not SQL
+        aggregates computed in the outer query), the conditions are plain
+        WHERE clauses rather than a SQL ``HAVING`` clause.
+
+        :param expr: select expression before having clauses are applied
+        :type expr: sqlalchemy.sql.selectable.Select
+        :return: expression with all having clauses applied
+        :rtype: sqlalchemy.sql.selectable.Select
+        :raises QueryDefinitionError: if a having clause references a name
+            that was not declared through ``annotate()``
+        """
+        operators = {
+            "exact": operator.eq,
+            "ne": operator.ne,
+            "gt": operator.gt,
+            "gte": operator.ge,
+            "lt": operator.lt,
+            "lte": operator.le,
+        }
+        for clause in self.having_clauses:
+            if clause.name not in self.annotation_columns:
+                raise QueryDefinitionError(
+                    f"having() references '{clause.name}' which is not an "
+                    f"annotated aggregate; add it via annotate()."
+                )
+            column = self.annotation_columns[clause.name]
+            expr = expr.where(operators[clause.op](column, clause.value))
         return expr
 
     def _reset_query_parameters(self) -> None:

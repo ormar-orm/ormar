@@ -620,6 +620,7 @@ asyncio.run(cleanup_database())
 *  `min(columns: list[str]) -> Any`
 *  `avg(columns: list[str]) -> Any`
 *  `sum(columns: list[str]) -> Any`
+*  `annotate(**aggregates) -> QuerySet` / `having(**filters) -> QuerySet` - per-parent `Count`/`Sum`/`Avg`/`Min`/`Max` annotations and filtering on them
 *  `fields(columns: Union[list, str, set, dict]) -> QuerySet`
 *  `exclude_fields(columns: Union[list, str, set, dict]) -> QuerySet`
 *  `order_by(columns:Union[list, str]) -> QuerySet`
