@@ -42,10 +42,12 @@ class Transaction:
 
         # If this is the outermost transaction, get a new connection.
         # This uses the main engine (not the AUTOCOMMIT view used by
-        # standalone queries) so ``connection.begin()`` and the nested
-        # ``begin_nested()`` savepoints below both work.
+        # standalone queries) with its default isolation restored, so
+        # ``connection.begin()`` and the nested ``begin_nested()`` savepoints
+        # below both work.
         if self._depth == 0:
             self._connection = await self._database.engine.connect().__aenter__()
+            await self._database.restore_transaction_isolation(self._connection)
             self._database.set_transaction_connection(self._connection)
             self._transaction = await self._connection.begin()
             # SQLite requires an explicit BEGIN before SAVEPOINTs to prevent
