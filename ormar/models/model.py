@@ -120,11 +120,16 @@ class Model(ModelRow):
         ):
             self_fields.pop(self.ormar_config.pkname, None)
         self_fields = self.populate_default_values(self_fields)
+        # Values taken from ``__dict__`` are already set, re-assigning them only
+        # costs a validation and two hash recomputations per field.
+        current_values = self.__dict__
+        related_names = self.extract_related_names()
         self.update_from_dict(
             {
                 k: v
                 for k, v in self_fields.items()
-                if k not in self.extract_related_names()
+                if k not in related_names
+                and (k not in current_values or current_values[k] is not v)
             }
         )
 
