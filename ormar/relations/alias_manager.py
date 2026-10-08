@@ -1,5 +1,6 @@
 import string
 import uuid
+from functools import lru_cache
 from random import choices
 from typing import TYPE_CHECKING, Any, Optional, Union
 
@@ -11,6 +12,37 @@ if TYPE_CHECKING:  # pragma: no cover
     from ormar import Model
     from ormar.fields import ForeignKeyField
     from ormar.models import ModelRow
+
+
+@lru_cache(maxsize=2048)
+def build_prefixed_columns(
+    alias: str, table: sqlalchemy.Table, fields: Optional[frozenset[str]]
+) -> tuple[Label[Any], ...]:
+    """
+    Builds labelled columns of a table, cached as labels are immutable and the
+    same model/alias/fields combination is selected over and over.
+
+    :param alias: alias of given table
+    :type alias: str
+    :param table: table from which fields should be aliased
+    :type table: sqlalchemy.Table
+    :param fields: column names (ormar aliases) to include, None for all
+    :type fields: Optional[frozenset[str]]
+    :return: tuple of labelled columns
+    :rtype: tuple[Label[Any], ...]
+    """
+    alias = f"{alias}_" if alias else ""
+    aliased_fields = {f"{alias}{x}" for x in fields} if fields else set()
+    all_columns = (
+        table.columns
+        if not fields
+        else [
+            col
+            for col in table.columns
+            if col.name in fields or col.name in aliased_fields
+        ]
+    )
+    return tuple(column.label(f"{alias}{column.name}") for column in all_columns)
 
 
 def get_table_alias() -> str:
@@ -78,18 +110,9 @@ class AliasManager:
         :return: list of sqlalchemy text clauses with "column name as aliased name"
         :rtype: list[text]
         """
-        alias = f"{alias}_" if alias else ""
-        aliased_fields = [f"{alias}{x}" for x in fields] if fields else []
-        all_columns = (
-            table.columns
-            if not fields
-            else [
-                col
-                for col in table.columns
-                if col.name in fields or col.name in aliased_fields
-            ]
+        return list(
+            build_prefixed_columns(alias, table, frozenset(fields) if fields else None)
         )
-        return [column.label(f"{alias}{column.name}") for column in all_columns]
 
     def prefixed_table_name(
         self, alias: str, table: sqlalchemy.Table
