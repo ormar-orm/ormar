@@ -229,7 +229,8 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         :rtype: Dict
         """
         for key, value in kwargs.items():
-            if isinstance(value, ormar.Model) and hasattr(value, "_json_fields"):
+            # hasattr first, as isinstance on pydantic model metaclass is slow
+            if hasattr(value, "_json_fields") and isinstance(value, ormar.Model):
                 value.dump_all_json_fields_to_str(value.__dict__)
         return kwargs
 
