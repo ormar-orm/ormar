@@ -176,6 +176,7 @@ ignore = ["E402"]
 [tool.ruff.format]
 indent-style = "space"
 docstring-code-format = true
+exclude = ["*.md"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["ormar"]
