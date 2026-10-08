@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 try:
@@ -37,6 +38,40 @@ class RowExtractionPlan:
 
 
 PlanCache = dict[tuple[type, str, int], RowExtractionPlan]
+
+
+@lru_cache(maxsize=2048)
+def build_shared_row_plan(
+    model_cls: type["ModelRow"],
+    table_prefix: str,
+    include: frozenset,
+    exclude: frozenset,
+    pk_only: bool,
+) -> RowExtractionPlan:
+    """
+    Builds a row extraction plan shared between querysets. A plan only depends
+    on the model, the table prefix and the model's own include/exclude/pk_only
+    settings, so those are the cache key.
+
+    :param model_cls: model the plan is built for
+    :type model_cls: type[ModelRow]
+    :param table_prefix: prefix of the table from AliasManager
+    :type table_prefix: str
+    :param include: fields to include for this model
+    :type include: frozenset
+    :param exclude: fields to exclude for this model
+    :type exclude: frozenset
+    :param pk_only: flag if only the primary key is selected
+    :type pk_only: bool
+    :return: extraction plan for this row position
+    :rtype: RowExtractionPlan
+    """
+    excludable = ExcludableItems()
+    model_excludable = excludable.get(model_cls=model_cls, alias=table_prefix)  # type: ignore
+    model_excludable.include = set(include)
+    model_excludable.exclude = set(exclude)
+    model_excludable.pk_only = pk_only
+    return model_cls.build_row_extraction_plan(table_prefix, excludable)
 
 
 class ModelRow(NewBaseModel):
@@ -417,9 +452,9 @@ class ModelRow(NewBaseModel):
         plan_cache: Optional[PlanCache],
     ) -> RowExtractionPlan:
         """
-        Return a cached plan for the given key, or build and cache one. When
-        ``plan_cache`` is ``None`` (legacy / external caller) the plan is
-        built fresh on every call so behavior matches the pre-cache shape.
+        Return a plan from the per-queryset cache, falling back to the plans
+        shared between querysets. When ``plan_cache`` is ``None`` (legacy /
+        external caller) only the shared plans are used.
 
         :param table_prefix: prefix of the table from AliasManager
         :type table_prefix: str
@@ -432,13 +467,37 @@ class ModelRow(NewBaseModel):
         :rtype: RowExtractionPlan
         """
         if plan_cache is None:
-            return cls.build_row_extraction_plan(table_prefix, excludable)
+            return cls.get_shared_row_plan(table_prefix, excludable)
         key = (cls, table_prefix, id(excludable))
         plan = plan_cache.get(key)
         if plan is None:
-            plan = cls.build_row_extraction_plan(table_prefix, excludable)
+            plan = cls.get_shared_row_plan(table_prefix, excludable)
             plan_cache[key] = plan
         return plan
+
+    @classmethod
+    def get_shared_row_plan(
+        cls, table_prefix: str, excludable: ExcludableItems
+    ) -> RowExtractionPlan:
+        """
+        Return a plan shared between querysets for the model's own
+        include/exclude/pk_only settings at the given table prefix.
+
+        :param table_prefix: prefix of the table from AliasManager
+        :type table_prefix: str
+        :param excludable: structure of fields to include and exclude
+        :type excludable: ExcludableItems
+        :return: extraction plan for this row position
+        :rtype: RowExtractionPlan
+        """
+        model_excludable = excludable.get(model_cls=cls, alias=table_prefix)  # type: ignore
+        return build_shared_row_plan(
+            cls,
+            table_prefix,
+            frozenset(model_excludable.include),
+            frozenset(model_excludable.exclude),
+            model_excludable.pk_only,
+        )
 
     @staticmethod
     def apply_row_plan(
