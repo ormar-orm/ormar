@@ -112,6 +112,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         _related_names_hash: str
         _quick_access_fields: set
         _json_fields: set
+        _loaded_json_fields: set
         _bytes_fields: set
         _onupdate_fields: set
         _pydantic_field_names: Optional[frozenset[str]]
@@ -231,7 +232,13 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
     ) -> typing_extensions.Self:
         """
         Constructs model instance and nullifies excluded fields post-construction.
-        Used when loading partial results from the database.
+        Used when loading results from the database.
+
+        Values of plain JSON fields are already decoded by the sqlalchemy column
+        type, so they are kept aside during validation and assigned afterwards
+        instead of being encoded back to a string only for pydantic to parse them
+        again. JSON fields with an overwritten pydantic type or encryption still
+        go through validation.
 
         :param excluded: collection of field names to nullify after construction
         :type excluded: AbstractSet[str]
@@ -240,7 +247,13 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         :return: constructed model instance
         :rtype: Self
         """
+        loaded_json = {
+            name: kwargs[name] for name in cls._loaded_json_fields if name in kwargs
+        }
+        for name in loaded_json:
+            kwargs[name] = None
         instance = cls(**kwargs)
+        instance.__dict__.update(loaded_json)
         for field_to_nullify in excluded:
             instance.__dict__[field_to_nullify] = None
         return instance
