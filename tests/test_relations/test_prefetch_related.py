@@ -356,3 +356,20 @@ async def test_prefetch_related_with_select_related_and_fields():
             assert album.shops[0].name is None
             assert album.shops[0].division is not None
             assert album.shops[0].division.name is None
+
+
+@pytest.mark.asyncio
+async def test_prefetch_related_with_order_by_reusable_queryset():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            album = await Album.objects.create(name="Malibu")
+            await Cover.objects.create(title="Cover1", album=album, artist="Artist 1")
+            await Cover.objects.create(title="Cover2", album=album, artist="Artist 2")
+
+            queryset = Album.objects.prefetch_related("cover_pictures").order_by(
+                "-cover_pictures__artist"
+            )
+            for _ in range(2):
+                albums = await queryset.all()
+                assert len(albums) == 1
+                assert albums[0].cover_pictures[0].artist == "Artist 2"
