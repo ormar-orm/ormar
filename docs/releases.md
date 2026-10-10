@@ -10,6 +10,14 @@
   expressions for arbitrary functional indexes. On MySQL this needs 8.0.13+.
   [#615](https://github.com/collerek/ormar/issues/615)
 
+### 🐛 Fixes
+
+* Fix `clear()` on a self-referencing many-to-many relation deleting through
+  rows by the wrong column. It now removes only the rows of the side being
+  cleared (e.g. `person.friends.clear()` no longer touches `person.friend_of`),
+  and the relation is emptied only after the delete succeeds.
+  [#1820](https://github.com/collerek/ormar/issues/1820)
+
 ## 0.26.0
 
 ### ✨ Features

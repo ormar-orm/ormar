@@ -269,18 +269,25 @@ class QuerysetProxy(Generic[T]):
         """
         if self.type_ == ormar.RelationType.MULTIPLE:
             queryset = ormar.QuerySet(model_cls=self.relation.through)  # type: ignore
-            owner_column = self._owner.get_name()
+            if self.related_field.self_reference and (  # type: ignore
+                self.relation.field_name != self.related_field.self_reference_primary  # type: ignore
+            ):
+                owner_column = self.related_field.default_source_field_name()  # type: ignore
+            else:
+                owner_column = self.related_field.default_target_field_name()  # type: ignore
         else:
             queryset = ormar.QuerySet(model_cls=self.relation.to)  # type: ignore
             owner_column = self.related_field_name
         kwargs = {owner_column: self._owner}
-        self._clean_items_on_load()
         if keep_reversed and self.type_ == ormar.RelationType.REVERSE:
             update_kwrgs = {f"{owner_column}": None}
-            return await queryset.filter(_exclude=False, **kwargs).update(
+            result = await queryset.filter(_exclude=False, **kwargs).update(
                 each=False, **update_kwrgs
             )
-        return await queryset.delete(**kwargs)  # type: ignore
+        else:
+            result = await queryset.delete(**kwargs)  # type: ignore
+        self._clean_items_on_load()
+        return result
 
     async def values(
         self,
