@@ -71,6 +71,7 @@ async def test_adding_child_with_default_pk_inserts_it():
         pet = Pet(name="Rex")
 
         await owner.pets.add(pet)
+        assert pet in owner.pets
         assert await Pet.objects.filter(id=pet.id).count() == 1
         assert (await Pet.objects.get(id=pet.id)).owner.pk == owner.pk
 
@@ -94,3 +95,17 @@ async def test_adding_existing_child_updates_it():
         await owner.pets.add(pet)
         assert await Pet.objects.filter(id=pet.id).count() == 1
         assert (await Pet.objects.get(id=pet.id)).owner.pk == owner.pk
+
+
+@pytest.mark.asyncio
+async def test_adding_fresh_instance_with_existing_pk_updates_it():
+    async with base_ormar_config.database:
+        owner1 = await Owner(name="Ann").save()
+        owner2 = await Owner(name="Bob").save()
+        await owner1.tags.add(Tag(id=5, name="red"))
+
+        await owner2.tags.add(Tag(id=5, name="blue"))
+        assert await Tag.objects.filter(id=5).count() == 1
+        tag = await Tag.objects.get(id=5)
+        assert tag.name == "blue"
+        assert tag.owner.pk == owner2.pk
