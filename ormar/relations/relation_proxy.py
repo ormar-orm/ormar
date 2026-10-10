@@ -367,7 +367,7 @@ class RelationProxy(Generic[T], list[T]):
             setattr(self._owner, self.field_name, item)
         else:
             setattr(item, relation_name, self._owner)
-            await item.upsert()
+            await item.upsert(__force_save__=True)
         self._relation_cache[item.__hash__()] = new_idx
         await self._owner.signals.post_relation_add.send(
             sender=self._owner.__class__,
