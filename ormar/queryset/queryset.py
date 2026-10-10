@@ -881,10 +881,13 @@ class QuerySet(Generic[T]):
         """
         for clause in self.filter_clauses + self.exclude_clauses:
             actions = clause._iter() if isinstance(clause, FilterGroup) else [clause]
-            if any(action.related_parts for action in actions):
-                raise QueryDefinitionError(
-                    f"{operation}() does not support filters on related models."
-                )
+            for action in actions:
+                if action.related_parts:
+                    raise QueryDefinitionError(
+                        f"{operation}() does not support filters on related models "
+                        f"('{action.query_str}'). Filter on the relation itself "
+                        f"(e.g. category=<id>) or select the pks first and use pk__in."
+                    )
 
     async def update(self, each: bool = False, **kwargs: Any) -> int:
         """

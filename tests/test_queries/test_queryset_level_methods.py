@@ -258,8 +258,20 @@ async def test_update_and_delete_with_related_filter_raise():
             with pytest.raises(QueryDefinitionError):
                 await Note.objects.delete(category__name="x")
 
+            with pytest.raises(QueryDefinitionError):
+                await Note.objects.filter(
+                    ormar.and_(ormar.or_(category__name__icontains="x"))
+                ).delete()
+            with pytest.raises(QueryDefinitionError):
+                await Note.objects.exclude(category__name="x").delete()
+
             assert await Note.objects.filter(text="z").count() == 0
             assert await Note.objects.count() == 2
+
+            assert await Note.objects.filter(category=category).update(text="z") == 1
+            assert await Note.objects.filter(text="z").count() == 1
+            assert await Note.objects.filter(category=category).delete() == 1
+            assert await Note.objects.count() == 1
 
 
 @pytest.mark.asyncio
