@@ -18,7 +18,7 @@ class Item(ormar.Model):
 create_test_database = init_tests(base_ormar_config)
 
 
-async def _create_items():
+async def create_items():
     for name, kind in [("a", "x"), ("b", "y"), ("c", "z"), ("d", "x")]:
         await Item.objects.create(name=name, kind=kind)
 
@@ -27,7 +27,7 @@ async def _create_items():
 async def test_chained_excludes_all_apply():
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
-            await _create_items()
+            await create_items()
 
             items = await Item.objects.exclude(kind="x").exclude(name="b").all()
             assert [item.name for item in items] == ["c"]
@@ -43,7 +43,7 @@ async def test_chained_excludes_all_apply():
 async def test_chained_excludes_update_and_delete():
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
-            await _create_items()
+            await create_items()
 
             qs = Item.objects.exclude(kind="x").exclude(name="b")
             assert await qs.update(kind="ZZ") == 1
