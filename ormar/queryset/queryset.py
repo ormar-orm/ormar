@@ -341,6 +341,8 @@ class QuerySet(Generic[T]):
             own_clauses, select_related = qryclause.prepare_filter(
                 _own_only=True, **kwargs
             )
+            if not own_clauses and not filter_groups:
+                return self.rebuild_self(select_related=select_related)
             exclude_group = FilterGroup(*filter_groups)
             exclude_group.actions = own_clauses
             return self.rebuild_self(
