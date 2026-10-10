@@ -871,6 +871,24 @@ class QuerySet(Generic[T]):
             columns = [columns]
         return await self._query_aggr_function(func_name="avg", columns=columns)
 
+    def _verify_no_related_filters(self, operation: str) -> None:
+        """
+        Raises if any filter or exclude clause targets a related model, as
+        UPDATE and DELETE statements do not join the related tables.
+
+        :param operation: name of the operation, used in the error message
+        :type operation: str
+        """
+        for clause in self.filter_clauses + self.exclude_clauses:
+            actions = clause._iter() if isinstance(clause, FilterGroup) else [clause]
+            for action in actions:
+                if action.related_parts:
+                    raise QueryDefinitionError(
+                        f"{operation}() does not support filters on related models "
+                        f"('{action.query_str}'). Filter on the relation itself "
+                        f"(e.g. category=<id>) or select the pks first and use pk__in."
+                    )
+
     async def update(self, each: bool = False, **kwargs: Any) -> int:
         """
         Updates the model table after applying the filters from kwargs.
@@ -891,6 +909,7 @@ class QuerySet(Generic[T]):
                 "If you want to update all rows use update(each=True, **kwargs)"
             )
 
+        self._verify_no_related_filters("update")
         self_fields = self.model.extract_db_own_fields().union(
             self.model.extract_related_names()
         )
@@ -929,6 +948,7 @@ class QuerySet(Generic[T]):
                 "You cannot delete without filtering the queryset first. "
                 "If you want to delete all rows use delete(each=True)"
             )
+        self._verify_no_related_filters("delete")
         expr = FilterQuery(filter_clauses=self.filter_clauses).apply(
             self.table.delete()  # type: ignore
         )

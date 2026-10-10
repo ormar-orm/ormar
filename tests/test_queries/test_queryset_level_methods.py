@@ -240,6 +240,41 @@ async def test_get_or_create_with_defaults():
 
 
 @pytest.mark.asyncio
+async def test_update_and_delete_with_related_filter_raise():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            category = await Category.objects.create(name="x")
+            await Note.objects.create(text="a", category=category)
+            await Note.objects.create(text="b")
+
+            with pytest.raises(QueryDefinitionError):
+                await Note.objects.filter(category__name="x").update(text="z")
+            with pytest.raises(QueryDefinitionError):
+                await Note.objects.exclude(category__name="x").update(text="z")
+            with pytest.raises(QueryDefinitionError):
+                await Note.objects.filter(
+                    ormar.or_(category__name="x", text="b")
+                ).delete()
+            with pytest.raises(QueryDefinitionError):
+                await Note.objects.delete(category__name="x")
+
+            with pytest.raises(QueryDefinitionError):
+                await Note.objects.filter(
+                    ormar.and_(ormar.or_(category__name__icontains="x"))
+                ).delete()
+            with pytest.raises(QueryDefinitionError):
+                await Note.objects.exclude(category__name="x").delete()
+
+            assert await Note.objects.filter(text="z").count() == 0
+            assert await Note.objects.count() == 2
+
+            assert await Note.objects.filter(category=category).update(text="z") == 1
+            assert await Note.objects.filter(text="z").count() == 1
+            assert await Note.objects.filter(category=category).delete() == 1
+            assert await Note.objects.count() == 1
+
+
+@pytest.mark.asyncio
 async def test_update_or_create():
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):

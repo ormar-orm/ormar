@@ -10,6 +10,14 @@
   expressions for arbitrary functional indexes. On MySQL this needs 8.0.13+.
   [#615](https://github.com/collerek/ormar/issues/615)
 
+### 🐛 Fixes
+
+* Raise `QueryDefinitionError` when `update()` or `delete()` is called on a
+  queryset filtered or excluded by a related model's field (e.g.
+  `filter(category__name="x")`), instead of generating an invalid statement
+  that ignores or fails on the missing join.
+  [#1817](https://github.com/collerek/ormar/issues/1817)
+
 ## 0.26.0
 
 ### ✨ Features
