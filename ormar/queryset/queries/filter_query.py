@@ -30,14 +30,14 @@ class FilterQuery:
         :rtype: sqlalchemy.sql.selectable.Select
         """
         if self.filter_clauses:
-            if len(self.filter_clauses) == 1:
-                clause: Union[TextClause, ColumnElement[Any]] = self.filter_clauses[
-                    0
-                ].get_text_clause()
-            else:
-                clause = sqlalchemy.sql.and_(
-                    *[x.get_text_clause() for x in self.filter_clauses]
-                )
-            clause = sqlalchemy.sql.not_(clause) if self.exclude else clause
+            clauses: list[Union[TextClause, ColumnElement[Any]]] = [
+                x.get_text_clause() for x in self.filter_clauses
+            ]
+            if self.exclude:
+                # every exclude() call is its own NOT, all of them are ANDed
+                clauses = [sqlalchemy.sql.not_(x) for x in clauses]
+            clause: Union[TextClause, ColumnElement[Any]] = (
+                clauses[0] if len(clauses) == 1 else sqlalchemy.sql.and_(*clauses)
+            )
             expr = expr.where(clause)
         return expr

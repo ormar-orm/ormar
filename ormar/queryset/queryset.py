@@ -337,14 +337,19 @@ class QuerySet(Generic[T]):
             select_related=select_related,
             filter_clauses=self.filter_clauses,
         )
+        if _exclude:
+            own_clauses, select_related = qryclause.prepare_filter(
+                _own_only=True, **kwargs
+            )
+            exclude_group = FilterGroup(*filter_groups)
+            exclude_group.actions = own_clauses
+            return self.rebuild_self(
+                exclude_clauses=self.exclude_clauses + [exclude_group],
+                select_related=select_related,
+            )
         filter_clauses, select_related = qryclause.prepare_filter(**kwargs)
         filter_clauses = filter_clauses + filter_groups  # type: ignore
-        if _exclude:
-            exclude_clauses = filter_clauses
-            filter_clauses = self.filter_clauses
-        else:
-            exclude_clauses = self.exclude_clauses
-            filter_clauses = filter_clauses
+        exclude_clauses = self.exclude_clauses
 
         return self.rebuild_self(
             filter_clauses=filter_clauses,
