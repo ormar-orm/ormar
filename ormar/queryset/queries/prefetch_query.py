@@ -1,4 +1,5 @@
 import abc
+import copy
 import logging
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any, Sequence, Union, cast
@@ -300,6 +301,7 @@ class LoadNode(Node):
                 order_by.target_model == self.relation_field.to
                 and order_by.related_str.endswith(f"{own_path}")
             ):
+                order_by = copy.copy(order_by)
                 order_by.is_source_model_order = True
                 order_by.table_prefix = self.table_prefix
                 own_order_bys.append(order_by)
