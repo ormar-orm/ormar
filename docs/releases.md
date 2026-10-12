@@ -24,6 +24,11 @@
   self-referencing many-to-many relation storing the link in the wrong direction
   (e.g. `member.followers.add(other)` added `other` to `member.follows`).
   [#1836](https://github.com/ormar-orm/ormar/issues/1836)
+* Fix `add()` of an already linked child on a many-to-many relation inserting
+  a duplicate through row (it now updates the existing link with passed through
+  fields, if any), and `remove()` emptying the in-memory relation before the
+  through rows were deleted. `remove()` now deletes all matching through rows.
+  [#1821](https://github.com/ormar-orm/ormar/issues/1821)
 
 ## 0.26.0
 
