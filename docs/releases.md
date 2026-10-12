@@ -34,6 +34,11 @@
   fields, if any), and `remove()` emptying the in-memory relation before the
   through rows were deleted. `remove()` now deletes all matching through rows.
   [#1821](https://github.com/ormar-orm/ormar/issues/1821)
+* Raise `QueryDefinitionError` when `update()` or `delete()` is called on a
+  queryset filtered or excluded by a related model's field (e.g.
+  `filter(category__name="x")`), instead of generating an invalid statement
+  that ignores or fails on the missing join
+  — thanks @moneebullah25 [#1817](https://github.com/ormar-orm/ormar/issues/1817)
 
 ## 0.26.0
 
