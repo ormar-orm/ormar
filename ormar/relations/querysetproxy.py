@@ -113,6 +113,18 @@ class QuerysetProxy(Generic[T]):
             for item in self.relation.related_models[:]:
                 self.relation.remove(item)
 
+    def _get_through_columns(self) -> tuple[str, str]:
+        """
+        Returns names of the through model columns pointing to the owner and
+        the child, resolving the side of self-referencing m2m relations.
+
+        :return: owner column name and child column name
+        :rtype: tuple[str, str]
+        """
+        owner_column: str = self.related_field.get_relation_name()  # type: ignore
+        child_column: str = self.related_field.get_related_field_name()  # type: ignore
+        return owner_column, child_column
+
     async def create_through_instance(self, child: "T", **kwargs: Any) -> None:
         """
         Crete a through model instance in the database for m2m relations.
@@ -123,8 +135,7 @@ class QuerysetProxy(Generic[T]):
         :type child: Model
         """
         model_cls = self.relation.through
-        owner_column = self.related_field.default_target_field_name()  # type: ignore
-        child_column = self.related_field.default_source_field_name()  # type: ignore
+        owner_column, child_column = self._get_through_columns()
         rel_kwargs = {owner_column: self._owner.pk, child_column: child.pk}
         final_kwargs = {**rel_kwargs, **kwargs}
         if child.pk is None:
@@ -145,8 +156,7 @@ class QuerysetProxy(Generic[T]):
         :type child: Model
         """
         model_cls = self.relation.through
-        owner_column = self.related_field.default_target_field_name()  # type: ignore
-        child_column = self.related_field.default_source_field_name()  # type: ignore
+        owner_column, child_column = self._get_through_columns()
         rel_kwargs = {owner_column: self._owner.pk, child_column: child.pk}
         through_model = await model_cls.objects.get(**rel_kwargs)
         await through_model.update(**kwargs)
@@ -174,8 +184,7 @@ class QuerysetProxy(Generic[T]):
         :type child: Model
         """
         queryset = ormar.QuerySet(model_cls=self.relation.through)  # type: ignore
-        owner_column = self.related_field.default_target_field_name()  # type: ignore
-        child_column = self.related_field.default_source_field_name()  # type: ignore
+        owner_column, child_column = self._get_through_columns()
         kwargs = {owner_column: self._owner, child_column: child}
         link_instance = await queryset.filter(**kwargs).get()  # type: ignore
         await link_instance.delete()
@@ -269,18 +278,20 @@ class QuerysetProxy(Generic[T]):
         """
         if self.type_ == ormar.RelationType.MULTIPLE:
             queryset = ormar.QuerySet(model_cls=self.relation.through)  # type: ignore
-            owner_column = self._owner.get_name()
+            owner_column = self.related_field.get_relation_name()  # type: ignore
         else:
             queryset = ormar.QuerySet(model_cls=self.relation.to)  # type: ignore
             owner_column = self.related_field_name
         kwargs = {owner_column: self._owner}
-        self._clean_items_on_load()
         if keep_reversed and self.type_ == ormar.RelationType.REVERSE:
             update_kwrgs = {f"{owner_column}": None}
-            return await queryset.filter(_exclude=False, **kwargs).update(
+            result = await queryset.filter(_exclude=False, **kwargs).update(
                 each=False, **update_kwrgs
             )
-        return await queryset.delete(**kwargs)  # type: ignore
+        else:
+            result = await queryset.delete(**kwargs)  # type: ignore
+        self._clean_items_on_load()
+        return result
 
     async def values(
         self,
