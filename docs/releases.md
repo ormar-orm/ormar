@@ -15,6 +15,11 @@
 * Fix `add()` on a reverse ForeignKey relation silently not inserting a child
   that already had a primary key set (a `uuid` pk with a default or an explicit
   id on a non-autoincrement pk) — thanks @moneebullah25 [#1819](https://github.com/ormar-orm/ormar/issues/1819)
+* Fix querying through a self-referencing many-to-many relation resolving the
+  wrong table alias - e.g. `member.followers.all()` / `.count()` returned every
+  row, and filters, `order_by()`, `values()` and default `orders_by` on such
+  relations failed or produced cross joins.
+  [#1837](https://github.com/ormar-orm/ormar/issues/1837)
 
 ## 0.26.0
 
