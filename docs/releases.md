@@ -15,6 +15,10 @@
 * Fix `add()` on a reverse ForeignKey relation silently not inserting a child
   that already had a primary key set (a `uuid` pk with a default or an explicit
   id on a non-autoincrement pk) — thanks @moneebullah25 [#1819](https://github.com/ormar-orm/ormar/issues/1819)
+* Fix `add()`, `remove()` and through model updates on the reverse side of a
+  self-referencing many-to-many relation storing the link in the wrong direction
+  (e.g. `member.followers.add(other)` added `other` to `member.follows`).
+  [#1836](https://github.com/ormar-orm/ormar/issues/1836)
 
 ## 0.26.0
 
