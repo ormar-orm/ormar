@@ -3,11 +3,12 @@ import random
 import string
 from datetime import datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Any, Optional
 
 import nest_asyncio
 import pytest
 import pytest_asyncio
+from sqlalchemy import event
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -137,10 +138,29 @@ def make_document_payload() -> dict:
 create_test_database = init_tests(base_ormar_config, scope="function")
 
 
+def disable_sqlite_disk_sync(dbapi_conn: Any, connection_record: Any) -> None:
+    """
+    Keeps the SQLite journal in memory and skips fsync on commit, so benchmarks
+    writing rows one by one measure ormar overhead instead of disk latency.
+
+    :param dbapi_conn: raw DBAPI connection
+    :type dbapi_conn: Any
+    :param connection_record: pool connection record
+    :type connection_record: Any
+    """
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA synchronous=OFF")
+    cursor.execute("PRAGMA journal_mode=MEMORY")
+    cursor.close()
+
+
 @pytest_asyncio.fixture(autouse=True, scope="function")
 async def connect_database(create_test_database):
     if not base_ormar_config.database.is_connected:
         await base_ormar_config.database.connect()
+        engine = base_ormar_config.database.engine
+        if engine.dialect.name == "sqlite":
+            event.listen(engine.sync_engine, "connect", disable_sqlite_disk_sync)
 
     yield
 
