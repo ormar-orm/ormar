@@ -24,6 +24,11 @@
   self-referencing many-to-many relation storing the link in the wrong direction
   (e.g. `member.followers.add(other)` added `other` to `member.follows`).
   [#1836](https://github.com/ormar-orm/ormar/issues/1836)
+* Fix querying through a self-referencing many-to-many relation resolving the
+  wrong table alias - e.g. `member.followers.all()` / `.count()` returned every
+  row, and filters, `order_by()`, `values()` and default `orders_by` on such
+  relations failed or produced cross joins.
+  [#1837](https://github.com/ormar-orm/ormar/issues/1837)
 * Fix `add()` of an already linked child on a many-to-many relation inserting
   a duplicate through row (it now updates the existing link with passed through
   fields, if any), and `remove()` emptying the in-memory relation before the
