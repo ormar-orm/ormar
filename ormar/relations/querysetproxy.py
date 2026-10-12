@@ -172,13 +172,13 @@ class QuerysetProxy(Generic[T]):
         )
         await through_model.update(**kwargs)
 
-    async def add_through_instance(self, child: "T", **kwargs: Any) -> None:
+    async def upsert_through_instance(self, child: "T", **kwargs: Any) -> None:
         """
-        Links child to the owner for m2m relations.
+        Updates a through model instance in the database for m2m relations if
+        it already exists, else creates one.
 
-        Creates a through model instance if the link does not exist yet, otherwise
-        updates the existing one with passed kwargs (if any), so adding the same
-        child twice does not duplicate the link.
+        Existing through instance is updated only if kwargs are passed, so
+        linking an already linked child does not duplicate the link.
 
         :param kwargs: dict of additional keyword arguments for through instance
         :type kwargs: Any
@@ -193,21 +193,6 @@ class QuerysetProxy(Generic[T]):
             await self.create_through_instance(child, **kwargs)
         elif kwargs:
             await through_model.update(**kwargs)
-
-    async def upsert_through_instance(self, child: "T", **kwargs: Any) -> None:
-        """
-        Updates a through model instance in the database for m2m relations if
-        it already exists, else creates one.
-
-        :param kwargs: dict of additional keyword arguments for through instance
-        :type kwargs: Any
-        :param child: child model instance
-        :type child: Model
-        """
-        try:
-            await self.update_through_instance(child=child, **kwargs)
-        except NoMatch:
-            await self.create_through_instance(child=child, **kwargs)
 
     async def delete_through_instance(self, child: "T") -> None:
         """

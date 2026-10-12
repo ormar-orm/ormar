@@ -368,7 +368,7 @@ class RelationProxy(Generic[T], list[T]):
         )
         self._check_if_model_saved()
         if self.type_ == ormar.RelationType.MULTIPLE:
-            await self.queryset_proxy.add_through_instance(item, **kwargs)
+            await self.queryset_proxy.upsert_through_instance(item, **kwargs)
             setattr(self._owner, self.field_name, item)
         else:
             setattr(item, relation_name, self._owner)
