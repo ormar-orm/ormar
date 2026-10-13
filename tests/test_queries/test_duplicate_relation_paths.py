@@ -1,4 +1,3 @@
-import warnings
 from typing import ForwardRef, Optional
 
 import pytest
@@ -103,10 +102,15 @@ async def create_orders():
         await Order.objects.create(id=order_id, zbuyer=buyer, aseller=seller)
 
 
+def has_cartesian_product(queryset) -> bool:
+    """A comma in the FROM clause means an unjoined (cross-product) table."""
+    sql = str(queryset.build_select_expression().compile())
+    return "," in sql.split("FROM", 1)[1].split("WHERE")[0]
+
+
 async def order_ids(queryset):
-    with warnings.catch_warnings():
-        warnings.filterwarnings("error", message=".*cartesian product.*")
-        return sorted(order.id for order in await queryset.all())
+    assert not has_cartesian_product(queryset)
+    return sorted(order.id for order in await queryset.all())
 
 
 @pytest.mark.asyncio

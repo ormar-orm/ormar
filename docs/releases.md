@@ -12,6 +12,18 @@
 
 ### 🐛 Fixes
 
+* Fix queries over two relation paths ending in the same relation (e.g.
+  `order.buyer.city` and `order.seller.city`): filters, `exclude()`,
+  `order_by()`, `fields()`, `exclude_fields()`, `values()` and
+  `prefetch_related()` could target the wrong table, produce cross joins or
+  load fields of the other path, depending on the order of the calls. Table
+  aliases are now derived from the relation path and stable between queries;
+  internally the relation alias registry of `AliasManager` was removed.
+* Fix chained `exclude()` calls applying only the last one; an empty
+  `exclude()` is now a no-op — thanks @moneebullah25 for the initial
+  implementation in #1826 [#1816](https://github.com/ormar-orm/ormar/issues/1816)
+* Fix `select_related()` crashing when a column alias (`name=`) on the related
+  model equals the relation name [#1827](https://github.com/ormar-orm/ormar/issues/1827)
 * Fix `add()` on a reverse ForeignKey relation silently not inserting a child
   that already had a primary key set (a `uuid` pk with a default or an explicit
   id on a non-autoincrement pk) — thanks @moneebullah25 [#1819](https://github.com/ormar-orm/ormar/issues/1819)
