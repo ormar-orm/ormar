@@ -51,6 +51,14 @@ class Book(ormar.Model):
     year: int = ormar.Integer(nullable=True)
 
 
+class Transfer(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="transfers")
+
+    id: int = ormar.Integer(primary_key=True)
+    from_book: Book = ormar.ForeignKey(Book, related_name="outgoing_transfers")
+    to_book: Book = ormar.ForeignKey(Book, related_name="incoming_transfers")
+
+
 DEFAULT_TEXT = "Moo,Foo,Baa,Waa,Moo,Foo,Baa,Waa,Moo,Foo,Baa,Waa"
 DEFAULT_JSON = {"a": 1, "b": "b", "c": [2], "d": {"e": 3}, "f": True}
 
