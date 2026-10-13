@@ -1,3 +1,4 @@
+import hashlib
 import string
 import uuid
 from functools import lru_cache
@@ -43,6 +44,26 @@ def build_prefixed_columns(
         ]
     )
     return tuple(column.label(f"{alias}{column.name}") for column in all_columns)
+
+
+@lru_cache(maxsize=4096)
+def alias_for(relation_path: str) -> str:
+    """
+    Returns the table alias for a relation path.
+
+    The path is the dunder separated chain of relation names from the root model
+    of a single sql statement, so the alias is unique within that statement and
+    stable between queries and processes. Through tables of many to many
+    relations use the relation path followed by the through model name.
+
+    :param relation_path: dunder separated relation path, empty for the root model
+    :type relation_path: str
+    :return: alias of the table joined under that path, empty for the root model
+    :rtype: str
+    """
+    if not relation_path:
+        return ""
+    return "t" + hashlib.blake2s(relation_path.encode(), digest_size=3).hexdigest()
 
 
 def get_table_alias() -> str:
