@@ -23,7 +23,8 @@
   `exclude()` is now a no-op — thanks @moneebullah25 for the initial
   implementation in #1826 [#1816](https://github.com/ormar-orm/ormar/issues/1816)
 * Fix `select_related()` crashing when a column alias (`name=`) on the related
-  model equals the relation name [#1827](https://github.com/ormar-orm/ormar/issues/1827)
+  model equals the relation name — thanks @moneebullah25 for the fix and tests
+  in #1829 [#1827](https://github.com/ormar-orm/ormar/issues/1827)
 * Fix `add()` on a reverse ForeignKey relation silently not inserting a child
   that already had a primary key set (a `uuid` pk with a default or an explicit
   id on a non-autoincrement pk) — thanks @moneebullah25 [#1819](https://github.com/ormar-orm/ormar/issues/1819)
