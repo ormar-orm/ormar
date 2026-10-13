@@ -223,7 +223,7 @@ class ModelRow(NewBaseModel):
                 proxy_source_model=proxy_source_model,
                 plan_cache=plan_cache,
             )
-            item[model_cls.get_column_name_from_alias(related)] = child
+            item[related] = child
             if (
                 field.is_multi
                 and child
