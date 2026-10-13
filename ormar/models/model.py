@@ -70,6 +70,10 @@ class Model(ModelRow):
         If the pk field is filled it's an update, otherwise the save is performed.
         For save kwargs are ignored, used only in update if provided.
 
+        When ``__force_save__`` is passed and the pk is filled, the database is
+        checked for an existing row first, so a model with a preset pk
+        (i.e. uuid default) is inserted instead of updated.
+
         :param kwargs: list of fields to update
         :type kwargs: Any
         :return: saved Model
@@ -77,15 +81,14 @@ class Model(ModelRow):
         """
 
         force_save = kwargs.pop("__force_save__", False)
+        if not self.pk:
+            return await self.save()
+
         if force_save:
             expr = self.ormar_config.table.select().where(self.pk_column == self.pk)
             row = await self._execute_query(expr, is_select=True)
             if not row:
                 return await self.save()
-            return await self.update(**kwargs)
-
-        if not self.pk:
-            return await self.save()
         return await self.update(**kwargs)
 
     async def save(self: T) -> T:

@@ -473,7 +473,7 @@ def get_relationship_alias_model_and_str(
             )
         if related_field.is_multi:
             previous_model = related_field.through
-            relation = related_field.default_target_field_name()  # type: ignore
+            relation = related_field.get_relation_name()  # type: ignore
         table_prefix = manager.resolve_relation_alias(
             from_model=previous_model, relation_name=relation
         )

@@ -364,7 +364,7 @@ class SqlJoin:
                 from_model=self.target_field.through,
                 relation_name=cast(
                     "ManyToManyField", self.target_field
-                ).default_target_field_name(),
+                ).get_relation_name(),
             )
             model = self.target_field.to
         else:

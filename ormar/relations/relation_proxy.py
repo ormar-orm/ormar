@@ -291,7 +291,8 @@ class RelationProxy(Generic[T], list[T]):
         """
         Removes the related from relation with parent.
 
-        Through models are automatically deleted for m2m relations.
+        Through models are automatically deleted for m2m relations, before the
+        child is removed from the relation in memory.
 
         For reverse FK relations keep_reversed flag marks if the reversed models
         should be kept or deleted from the database too (False means that models
@@ -314,6 +315,9 @@ class RelationProxy(Generic[T], list[T]):
             relation_name=self.field_name,
         )
 
+        if self.type_ == ormar.RelationType.MULTIPLE:
+            await self.queryset_proxy.delete_through_instance(item)
+
         index_to_remove = self._relation_cache[item.__hash__()]
         self.pop(index_to_remove)
 
@@ -326,9 +330,7 @@ class RelationProxy(Generic[T], list[T]):
         if relation:
             relation.remove(self._owner)
         self.relation.remove(item)
-        if self.type_ == ormar.RelationType.MULTIPLE:
-            await self.queryset_proxy.delete_through_instance(item)
-        else:
+        if self.type_ != ormar.RelationType.MULTIPLE:
             if keep_reversed:
                 setattr(item, relation_name, None)
                 await item.update()
@@ -345,7 +347,10 @@ class RelationProxy(Generic[T], list[T]):
         """
         Adds child model to relation.
 
-        For ManyToMany relations through instance is automatically created.
+        For ManyToMany relations through instance is automatically created,
+        adding an already linked child updates the existing through instance.
+        For reverse ForeignKey relations child is inserted if it does not exist
+        in the database yet (also when its pk is already set), otherwise updated.
 
         :param kwargs: dict of additional keyword arguments for through instance
         :type kwargs: Any
@@ -363,11 +368,11 @@ class RelationProxy(Generic[T], list[T]):
         )
         self._check_if_model_saved()
         if self.type_ == ormar.RelationType.MULTIPLE:
-            await self.queryset_proxy.create_through_instance(item, **kwargs)
+            await self.queryset_proxy.upsert_through_instance(item, **kwargs)
             setattr(self._owner, self.field_name, item)
         else:
             setattr(item, relation_name, self._owner)
-            await item.upsert()
+            await item.upsert(__force_save__=True)
         self._relation_cache[item.__hash__()] = new_idx
         await self._owner.signals.post_relation_add.send(
             sender=self._owner.__class__,
