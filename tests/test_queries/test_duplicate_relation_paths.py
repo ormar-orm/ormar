@@ -3,7 +3,7 @@ from typing import ForwardRef, Optional
 import pytest
 
 import ormar
-from ormar.exceptions import QueryDefinitionError
+from ormar.exceptions import QueryDefinitionError, RelationshipInstanceError
 from ormar.relations.relation_proxy import RelationProxy
 from tests.lifespan import init_tests
 from tests.settings import create_config
@@ -303,3 +303,11 @@ async def test_alias_collision_raises(monkeypatch):
         queryset = Order.objects.select_related(["zbuyer", "aseller"])
         with pytest.raises(QueryDefinitionError, match="collides"):
             queryset.build_select_expression()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("related", ["itemtag", "tags__itemtag"])
+async def test_select_related_on_through_field_is_rejected(related):
+    async with base_ormar_config.database:
+        with pytest.raises(RelationshipInstanceError, match="through model"):
+            await Item.objects.select_related(related).all()

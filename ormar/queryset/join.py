@@ -145,7 +145,14 @@ class SqlJoin:
 
         :return: list of used aliases, select from, list of aliased columns, sort orders
         :rtype: tuple[list[str], Join, list[TextClause], dict]
+        :raises RelationshipInstanceError: if a through model is selected directly
         """
+        if self.target_field.is_through:
+            raise RelationshipInstanceError(
+                f"Relation '{self.relation_str}' points to a through model, "
+                "select the many to many relation instead - "
+                "the through model is loaded with it."
+            )
         if self.target_field.is_multi:
             self._process_m2m_through_table()
 
