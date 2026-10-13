@@ -39,7 +39,6 @@ from ormar.models.helpers import (
     populate_config_sqlalchemy_table_if_required,
     populate_config_tablename_columns_and_pk,
     populate_default_options_values,
-    register_relation_in_alias_manager,
     sqlalchemy_columns_from_model_fields,
 )
 from ormar.models.ormar_config import OrmarConfig
@@ -687,7 +686,6 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
 
         * populate sqlalchemy columns, pkname and tables from model_fields
         * register reverse relationships on related models
-        * registers all relations in alias manager that populates table_prefixes
         * exposes alias manager on each Model
         * creates QuerySet for each model and exposes it on a class
         * sets custom serializers for relation models
@@ -746,7 +744,6 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
                 populate_config_sqlalchemy_table_if_required(new_model.ormar_config)
                 expand_reverse_relationships(new_model)
                 for field_name, field in new_model.ormar_config.model_fields.items():
-                    register_relation_in_alias_manager(field=field)
                     add_field_descriptor(
                         name=field_name, field=field, new_model=new_model
                     )
