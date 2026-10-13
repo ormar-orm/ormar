@@ -1,14 +1,19 @@
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional
 
 import sqlalchemy
 from sqlalchemy import TextClause, text
 
 import ormar  # noqa I100
-from ormar.exceptions import ModelDefinitionError, RelationshipInstanceError
+from ormar.exceptions import (
+    ModelDefinitionError,
+    QueryDefinitionError,
+    RelationshipInstanceError,
+)
 from ormar.relations import AliasManager
+from ormar.relations.alias_manager import alias_for
 
 if TYPE_CHECKING:  # pragma no cover
-    from ormar import ManyToManyField, Model
+    from ormar import Model
     from ormar.models.excludable import ExcludableItems
     from ormar.queryset import OrderAction
 
@@ -27,7 +32,6 @@ class SqlJoin:
         relation_str: str,
         related_models: Any = None,
         own_alias: str = "",
-        source_model: Optional[type["Model"]] = None,
         already_sorted: Optional[dict] = None,
     ) -> None:
         self.relation_name = relation_name
@@ -51,7 +55,6 @@ class SqlJoin:
         self._next_alias: Optional[str] = None
 
         self.relation_str = relation_str
-        self.source_model = source_model
 
     @property
     def next_model(self) -> type["Model"]:
@@ -147,32 +150,27 @@ class SqlJoin:
             self._process_m2m_through_table()
 
         self.next_model = self.target_field.to
-        self._forward_join()
+        self._forward_join(relation_path=self.relation_str)
 
         self._process_following_joins()
 
         return (self.used_aliases, self.select_from, self.columns, self.sorted_orders)
 
-    def _forward_join(self) -> None:
+    def _forward_join(self, relation_path: str) -> None:
         """
-        Process actual join.
-        Registers complex relation join on encountering of the duplicated alias.
+        Process actual join, the joined table is aliased by its relation path.
+
+        :param relation_path: path of the joined table from the query root model
+        :type relation_path: str
+        :raises QueryDefinitionError: if two joined tables would share an alias
         """
-        self.next_alias = self.alias_manager.resolve_relation_alias(
-            from_model=self.target_field.owner, relation_name=self.relation_name
-        )
-        if self.next_alias not in self.used_aliases:
-            self._process_join()
-        else:
-            if "__" in self.relation_str and self.source_model:
-                relation_key = f"{self.source_model.get_name()}_{self.relation_str}"
-                if relation_key not in self.alias_manager:
-                    self.next_alias = self.alias_manager.add_alias(
-                        alias_key=relation_key
-                    )
-                else:
-                    self.next_alias = self.alias_manager[relation_key]
-                self._process_join()
+        self.next_alias = alias_for(relation_path)
+        if self.next_alias in self.used_aliases:
+            raise QueryDefinitionError(
+                f"Alias '{self.next_alias}' of relation '{relation_path}' collides "
+                "with an already joined relation."
+            )
+        self._process_join()
 
     def _process_following_joins(self) -> None:
         """
@@ -216,7 +214,6 @@ class SqlJoin:
             related_models=remainder,
             relation_str="__".join([self.relation_str, related_name]),
             own_alias=self.next_alias,
-            source_model=self.source_model or self.main_model,
             already_sorted=self.already_sorted,
         )
         (
@@ -244,7 +241,9 @@ class SqlJoin:
         new_part = self._process_m2m_related_name_change()
 
         self.next_model = self.target_field.through
-        self._forward_join()
+        self._forward_join(
+            relation_path=f"{self.relation_str}__{self.target_field.through.get_name()}"
+        )
 
         self.relation_name = new_part
         self.own_alias = self.next_alias
@@ -360,17 +359,10 @@ class SqlJoin:
             alias = self.next_alias
             model = self.target_field.owner
         elif self.target_field.is_multi:
-            alias = self.alias_manager.resolve_relation_alias(
-                from_model=self.target_field.through,
-                relation_name=cast(
-                    "ManyToManyField", self.target_field
-                ).get_relation_name(),
-            )
+            alias = alias_for(self.relation_str)
             model = self.target_field.to
         else:
-            alias = self.alias_manager.resolve_relation_alias(
-                from_model=self.target_field.owner, relation_name=self.target_field.name
-            )
+            alias = alias_for(self.relation_str)
             model = self.target_field.to
 
         return alias, model

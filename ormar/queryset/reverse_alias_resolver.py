@@ -1,8 +1,10 @@
 from typing import TYPE_CHECKING, cast
 
+from ormar.relations.alias_manager import alias_for
+
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import ForeignKeyField, Model
-    from ormar.models.excludable import Excludable, ExcludableItems
+    from ormar.models.excludable import ExcludableItems
 
 
 class ReverseAliasResolver:
@@ -20,15 +22,12 @@ class ReverseAliasResolver:
     ) -> None:
         self.select_related = select_related
         self.model_cls = model_cls
-        self.reversed_aliases = (
-            self.model_cls.ormar_config.alias_manager.reversed_aliases
-        )
         self.excludable = excludable
         self.exclude_through = exclude_through
 
         self._fields: dict[str, "ForeignKeyField"] = dict()
         self._prefixes: dict[str, str] = dict()
-        self._previous_prefixes: list[str] = [""]
+        self._parent_aliases: dict[str, str] = dict()
         self._resolved_names: dict[str, str] = dict()
 
     def resolve_columns(self, columns_names: list[str]) -> dict:
@@ -45,7 +44,7 @@ class ReverseAliasResolver:
         for column_name in columns_names:
             column_parts = column_name.split("_")
             potential_prefix = column_parts[0]
-            if potential_prefix in self.reversed_aliases:
+            if potential_prefix in self._prefixes:
                 self._resolve_column_with_prefix(
                     column_name=column_name, prefix=potential_prefix
                 )
@@ -72,12 +71,8 @@ class ReverseAliasResolver:
         :param prefix: extracted prefix
         :type prefix: str
         """
-        relation = self.reversed_aliases.get(prefix, None)
-        assert relation is not None, "Prefix not found in reversed aliases"
-        relation_str = self._prefixes.get(relation, None)
-        field = self._fields.get(relation, None)
-        if relation_str is None or field is None:
-            return
+        relation_str = self._prefixes[prefix]
+        field = self._fields[prefix]
         is_through = field.is_multi and field.through.get_name() in relation_str
         if self._check_if_field_is_excluded(
             prefix=prefix, field=field, is_through=is_through
@@ -102,18 +97,8 @@ class ReverseAliasResolver:
     ) -> bool:
         """
         Checks if given relation is excluded in current query.
-
-        Note that in contrary to other queryset methods here you can exclude the
-        in-between models but keep the end columns, which does not make sense
-        when parsing the raw data into models.
-
-        So in relation category -> category_x_post -> post -> user you can exclude
-        category_x_post and post models but can keep the user one. (in ormar model
-        context that is not possible as if you would exclude through and post model
-        there would be no way to reach user model).
-
-        Exclusions happen on a model before the current one, so we need to move back
-        in chain of model by one or by two (m2m relations have through model in between)
+        Exclusions are stored on the model owning the relation, which is the model
+        joined under the parent path of the current table.
 
         :param prefix: table alias
         :type prefix: str
@@ -124,106 +109,63 @@ class ReverseAliasResolver:
         :return: result of the check
         :rtype: bool
         """
-        shift, field_name = 1, field.name
-        if is_through:
-            field_name = field.through.get_name()
-        elif field.is_multi:
-            shift = 2
-        previous_excludable = self._get_previous_excludable(
-            prefix=prefix, field=field, shift=shift
+        field_name = field.through.get_name() if is_through else field.name
+        parent_excludable = self.excludable.get(
+            field.owner, alias=self._parent_aliases[prefix]
         )
-        return previous_excludable.is_excluded(field_name)
-
-    def _get_previous_excludable(
-        self, prefix: str, field: "ForeignKeyField", shift: int = 1
-    ) -> "Excludable":
-        """
-        Returns excludable related to model previous in chain of models.
-        Used to check if current model should be excluded.
-
-        :param prefix: prefix of a current table
-        :type prefix: str
-        :param field: field with relation
-        :type field: ForeignKeyField
-        :param shift: how many model back to go - for m2m it's 2 due to through models
-        :type shift: int
-        :return: excludable for previous model
-        :rtype: Excludable
-        """
-        if prefix not in self._previous_prefixes:
-            self._previous_prefixes.append(prefix)
-        previous_prefix_ind = self._previous_prefixes.index(prefix)
-        previous_prefix = (
-            self._previous_prefixes[previous_prefix_ind - shift]
-            if previous_prefix_ind > (shift - 1)
-            else ""
-        )
-        return self.excludable.get(field.owner, alias=previous_prefix)
+        return parent_excludable.is_excluded(field_name)
 
     def _create_prefixes_map(self) -> None:
         """
-        Creates a map of alias manager aliases keys to relation strings.
-        I.e in alias manager you can have alias user_roles: xas12ad
-
-        This method will create entry user_roles: roles, where roles is a name of
-        relation on user model.
-
-        Will also keep the relation field in separate dictionary so we can later
-        extract field names and owner models.
-
+        Creates a map of table aliases to relation strings used as column labels,
+        together with the relation field and the alias of the parent table.
+        Through tables of many to many relations are labelled with the through
+        model name following the parent relation string.
         """
         for related in self.select_related:
             model_cls = self.model_cls
-            related_split = related.split("__")
             related_str = ""
-            for relation in related_split:
-                previous_related_str = f"{related_str}__" if related_str else ""
-                new_related_str = previous_related_str + relation
-                field = model_cls.ormar_config.model_fields[relation]
-                field = cast("ForeignKeyField", field)
-                prefix_name = self._handle_through_fields_and_prefix(
-                    model_cls=model_cls,
-                    field=field,
-                    previous_related_str=previous_related_str,
-                    relation=relation,
+            for relation in related.split("__"):
+                parent_str = related_str
+                related_str = f"{parent_str}__{relation}" if parent_str else relation
+                field = cast(
+                    "ForeignKeyField", model_cls.ormar_config.model_fields[relation]
                 )
-
-                self._prefixes[prefix_name] = new_related_str
-                self._fields[prefix_name] = field
+                if field.is_multi and not self.exclude_through:
+                    through_name = field.through.get_name()
+                    self._register_prefix(
+                        alias=alias_for(f"{related_str}__{through_name}"),
+                        label=(
+                            f"{parent_str}__{through_name}"
+                            if parent_str
+                            else through_name
+                        ),
+                        field=field,
+                        parent_str=parent_str,
+                    )
+                self._register_prefix(
+                    alias=alias_for(related_str),
+                    label=related_str,
+                    field=field,
+                    parent_str=parent_str,
+                )
                 model_cls = field.to
-                related_str = new_related_str
 
-    def _handle_through_fields_and_prefix(
-        self,
-        model_cls: type["Model"],
-        field: "ForeignKeyField",
-        previous_related_str: str,
-        relation: str,
-    ) -> str:
+    def _register_prefix(
+        self, alias: str, label: str, field: "ForeignKeyField", parent_str: str
+    ) -> None:
         """
-        Registers through models for m2m relations and switches prefix for
-        the one linking from through model to target model.
+        Registers a joined table alias with its label, field and parent alias.
 
-        For other relations returns current model name + relation name as prefix.
-        Nested relations are a chain of relation names with __ in between.
-
-        :param model_cls: model of current relation
-        :type model_cls: type["Model"]
-        :param field: field with relation
+        :param alias: alias of the joined table
+        :type alias: str
+        :param label: relation string used to label the table columns
+        :type label: str
+        :param field: relation field leading to the table
         :type field: ForeignKeyField
-        :param previous_related_str: concatenated chain linked with "__"
-        :type previous_related_str: str
-        :param relation: name of the current relation in chain
-        :type relation: str
-        :return: name of prefix to populate
-        :rtype: str
+        :param parent_str: relation path of the model owning the relation
+        :type parent_str: str
         """
-        prefix_name = f"{model_cls.get_name()}_{relation}"
-        if field.is_multi:
-            through_name = field.through.get_name()
-            if not self.exclude_through:
-                self._fields[prefix_name] = field
-                new_through_str = previous_related_str + through_name
-                self._prefixes[prefix_name] = new_through_str
-            prefix_name = f"{through_name}_{field.get_relation_name()}"
-        return prefix_name
+        self._prefixes[alias] = label
+        self._fields[alias] = field
+        self._parent_aliases[alias] = alias_for(parent_str)

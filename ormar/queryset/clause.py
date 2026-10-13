@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Generator, Optional, Union
 
@@ -6,9 +5,7 @@ import sqlalchemy
 from sqlalchemy import ColumnElement
 
 import ormar  # noqa I100
-from ormar.models.helpers.models import group_related_list, ordered_join_paths
 from ormar.queryset.actions.filter_action import FilterAction
-from ormar.queryset.utils import get_relationship_alias_model_and_str
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
@@ -168,20 +165,6 @@ def and_(*args: FilterGroup, **kwargs: Any) -> FilterGroup:
     return FilterGroup(_filter_type=FilterType.AND, *args, **kwargs)
 
 
-@dataclass
-class Prefix:
-    source_model: type["Model"]
-    table_prefix: str
-    model_cls: type["Model"]
-    relation_str: str
-    is_through: bool
-
-    @property
-    def alias_key(self) -> str:
-        source_model_name = self.source_model.get_name()
-        return f"{source_model_name}_{self.relation_str}"
-
-
 class QueryClause:
     """
     Constructs FilterActions from strings passed as arguments
@@ -195,7 +178,6 @@ class QueryClause:
 
         self.model_cls = model_cls
         self.table = self.model_cls.ormar_config.table
-        self._complex_dup_keys: set[str] = set()
 
     def prepare_filter(  # noqa: A003
         self, _own_only: bool = False, **kwargs: Any
@@ -251,107 +233,6 @@ class QueryClause:
 
             own_filter_clauses.append(filter_action)
 
-        self._register_complex_duplicates(select_related)
-        filter_clauses = self._switch_filter_action_prefixes(
-            filter_clauses=filter_clauses + own_filter_clauses
-        )
         if _own_only:
             return own_filter_clauses, select_related
-        return filter_clauses, select_related
-
-    def _register_complex_duplicates(self, select_related: list[str]) -> None:
-        """
-        Checks if duplicate aliases are presented which can happen in self relation
-        or when two joins end with the same pair of models.
-
-        Mirrors the join builder (:meth:`ormar.queryset.join.SqlJoin._forward_join`):
-        relation paths are walked in the same depth-first order the join uses, the
-        first path to reach a given basic alias keeps it, and every later path that
-        would reuse the same alias is registered as a complex duplicate keyed on the
-        whole relation string (not just the last relation name).
-
-        The keys registered for *this* query are stored on
-        :attr:`_complex_dup_keys` so that :meth:`_verify_prefix_and_switch` only
-        reroutes filters that are genuinely duplicated here, ignoring complex
-        aliases that linger in the globally shared alias manager from earlier
-        queries.
-
-        :param select_related: list of relation strings
-        :type select_related: list[str]
-        :return: None
-        :rtype: None
-        """
-        manager = self.model_cls.ormar_config.alias_manager
-        self._complex_dup_keys = set()
-        seen_prefixes: set[str] = set()
-        for prefix in self._parse_related_prefixes(select_related=select_related):
-            if prefix.table_prefix in seen_prefixes:
-                self._complex_dup_keys.add(prefix.alias_key)
-                if prefix.alias_key not in manager:
-                    manager.add_alias(alias_key=prefix.alias_key)
-            else:
-                seen_prefixes.add(prefix.table_prefix)
-
-    def _parse_related_prefixes(self, select_related: list[str]) -> list[Prefix]:
-        """
-        Walks all relation strings and parses the target models and prefixes.
-
-        Relation strings are expanded into the depth-first order of joined tables
-        (shared prefixes visited once) so the duplicate detection matches the join
-        builder exactly.
-
-        :param select_related: list of relation strings
-        :type select_related: list[str]
-        :return: list of parsed prefixes
-        :rtype: list[Prefix]
-        """
-        prefixes: list[Prefix] = []
-        for related in ordered_join_paths(group_related_list(select_related)):
-            prefix = Prefix(
-                self.model_cls,
-                *get_relationship_alias_model_and_str(
-                    self.model_cls, related.split("__")
-                ),
-            )
-            prefixes.append(prefix)
-        return prefixes
-
-    def _switch_filter_action_prefixes(
-        self, filter_clauses: list[FilterAction]
-    ) -> list[FilterAction]:
-        """
-        Substitutes aliases for filter action if the complex key (whole relation str) is
-        present in alias_manager.
-
-        :param filter_clauses: raw list of actions
-        :type filter_clauses: list[FilterAction]
-        :return: list of actions with aliases changed if needed
-        :rtype: list[FilterAction]
-        """
-
-        for action in filter_clauses:
-            if isinstance(action, FilterGroup):
-                for action2 in action._iter():
-                    self._verify_prefix_and_switch(action2)
-            else:
-                self._verify_prefix_and_switch(action)
-        return filter_clauses
-
-    def _verify_prefix_and_switch(self, action: "FilterAction") -> None:
-        """
-        Helper to switch prefix to complex relation one if required.
-
-        Only reroutes filters whose relation string is a complex duplicate
-        registered for this query (see :meth:`_register_complex_duplicates`), so a
-        complex alias left in the shared alias manager by an earlier query cannot
-        hijack a filter that is not duplicated here.
-
-        :param action: action to switch prefix in
-        :type action: ormar.queryset.actions.filter_action.FilterAction
-        """
-        manager = self.model_cls.ormar_config.alias_manager
-        alias_key = f"{self.model_cls.get_name()}_{action.related_str}"
-        if "__" in action.related_str and alias_key in self._complex_dup_keys:
-            action.table_prefix = manager.resolve_relation_alias(
-                self.model_cls, action.related_str
-            )
+        return filter_clauses + own_filter_clauses, select_related
