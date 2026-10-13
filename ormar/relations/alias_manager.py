@@ -1,13 +1,10 @@
 import hashlib
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Optional
+from typing import Any, Optional
 
 import sqlalchemy
 from sqlalchemy import Label
 from sqlalchemy.sql.selectable import NamedFromClause
-
-if TYPE_CHECKING:  # pragma: no cover
-    pass
 
 
 @lru_cache(maxsize=2048)

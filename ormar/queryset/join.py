@@ -52,7 +52,7 @@ class SqlJoin:
         ]
 
         self._next_model: Optional[type["Model"]] = None
-        self._next_alias: Optional[str] = None
+        self.next_alias = ""
 
         self.relation_str = relation_str
 
@@ -67,16 +67,6 @@ class SqlJoin:
     @next_model.setter
     def next_model(self, value: type["Model"]) -> None:
         self._next_model = value
-
-    @property
-    def next_alias(self) -> str:
-        if not self._next_alias:  # pragma: nocover
-            raise RelationshipInstanceError("Alias for given relation not found.")
-        return self._next_alias
-
-    @next_alias.setter
-    def next_alias(self, value: str) -> None:
-        self._next_alias = value
 
     @property
     def alias_manager(self) -> AliasManager:
@@ -363,16 +353,8 @@ class SqlJoin:
         """
         if self.target_field.is_multi and "__" in order_by:
             self._verify_allowed_order_field(order_by=order_by)
-            alias = self.next_alias
-            model = self.target_field.owner
-        elif self.target_field.is_multi:
-            alias = alias_for(self.relation_str)
-            model = self.target_field.to
-        else:
-            alias = alias_for(self.relation_str)
-            model = self.target_field.to
-
-        return alias, model
+            return self.next_alias, self.target_field.owner
+        return alias_for(self.relation_str), self.target_field.to
 
     def _get_order_bys(self) -> None:  # noqa: CCR001
         """
