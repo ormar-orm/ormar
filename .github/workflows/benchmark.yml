@@ -15,7 +15,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    runs-on: codspeed-macro
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -39,5 +39,5 @@ jobs:
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v5.4.2
         with:
-          mode: walltime
+          mode: simulation
           run: poetry run pytest benchmarks/ --codspeed
