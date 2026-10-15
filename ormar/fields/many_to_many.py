@@ -208,21 +208,6 @@ class ManyToManyField(  # type: ignore
             self.through: type["Model"]
         super().__init__(**kwargs)
 
-    def get_source_related_name(self) -> str:
-        """
-        Returns name to use for source relation name.
-        For FK it's the same, differs for m2m fields.
-        It's either set as `related_name` or by default it's field name.
-        :return: name of the related_name or default related name.
-        :rtype: str
-        """
-        return (
-            self.through.ormar_config.model_fields[
-                self.default_source_field_name()
-            ].related_name
-            or self.name
-        )
-
     def has_unresolved_forward_refs(self) -> bool:
         """
         Verifies if the filed has any ForwardRefs that require updating before the
@@ -271,15 +256,6 @@ class ManyToManyField(  # type: ignore
         if self.self_reference and self.name == self.self_reference_primary:
             return self.default_source_field_name()
         return self.default_target_field_name()
-
-    def get_source_model(self) -> type["Model"]:
-        """
-        Returns model from which the relation comes -> either owner or through model
-
-        :return: source model
-        :rtype: type["Model"]
-        """
-        return self.through
 
     def get_filter_clause_target(self) -> type["Model"]:
         return self.through

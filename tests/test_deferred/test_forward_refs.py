@@ -7,6 +7,7 @@ import sqlalchemy as sa
 
 import ormar
 from ormar.exceptions import ModelError
+from ormar.relations.aliases import alias_for
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -164,7 +165,9 @@ def test_proper_field_init():
     )
     assert len(Person.ormar_config.table.columns["supervisor"].foreign_keys) > 0
 
-    assert "person_supervisor" in Person.ormar_config.alias_manager._aliases_new
+    action = Person.objects.filter(supervisor__name="x").filter_clauses[0]
+    assert action.target_model == Person
+    assert action.table_prefix == alias_for("supervisor")
 
 
 @pytest.mark.asyncio

@@ -2,7 +2,6 @@ from typing import ForwardRef, Optional
 
 import pytest
 import pytest_asyncio
-import sqlalchemy
 
 import ormar
 from tests.lifespan import init_tests
@@ -88,5 +87,7 @@ async def test_adding_same_m2m_model_twice_with_unique():
             redactor = await Author(name="News").save()
 
             await post.authors.add(redactor)
-            with pytest.raises((sqlalchemy.exc.IntegrityError)):
-                await post.authors.add(redactor)
+            await post.authors.add(redactor)
+
+            assert await AuthorXPosts.objects.count() == 1
+            assert len(post.authors) == 1

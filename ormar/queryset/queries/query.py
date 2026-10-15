@@ -10,6 +10,7 @@ from ormar.models.helpers.models import group_related_list
 from ormar.queryset.actions.filter_action import FilterAction
 from ormar.queryset.join import SqlJoin
 from ormar.queryset.queries import FilterQuery, LimitQuery, OffsetQuery, OrderQuery
+from ormar.relations.aliases import prefixed_columns
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
@@ -113,9 +114,7 @@ class Query:
         self_related_fields = self.model_cls.own_table_columns(
             model=self.model_cls, excludable=self.excludable, use_alias=True
         )
-        self.columns = self.model_cls.ormar_config.alias_manager.prefixed_columns(  # type: ignore
-            "", self.table, self_related_fields
-        )
+        self.columns = prefixed_columns("", self.table, self_related_fields)  # type: ignore
         self.apply_order_bys_for_primary_model()
         self.select_from = self.table
 

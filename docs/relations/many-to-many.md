@@ -423,6 +423,10 @@ category = await Category(name="Test category").save()
 await post.categories.add(category, sort_order=1, param_name='test')
 ```
 
+!!!note
+    Adding a child that is already linked does not create a second link - if you pass through
+    model fields, the existing through model is updated with them, otherwise the call does nothing.
+
 ### remove
 
 Removal of the related model one by one.

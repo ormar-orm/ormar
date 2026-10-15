@@ -5,6 +5,7 @@ import pytest
 import ormar
 from ormar.exceptions import QueryDefinitionError
 from ormar.models.excludable import ExcludableItems
+from ormar.relations.aliases import alias_for
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -62,9 +63,7 @@ def compare_results(excludable):
 
     assert car_excludable.is_excluded("year")
 
-    alias = Company.ormar_config.alias_manager.resolve_relation_alias(
-        Car, "manufacturer"
-    )
+    alias = alias_for("manufacturer")
     manu_excludable = excludable.get(Company, alias=alias)
     assert manu_excludable.exclude == {"founded"}
     assert manu_excludable.include == set()
@@ -73,7 +72,6 @@ def compare_results(excludable):
 
 
 def compare_results_include(excludable):
-    manager = Company.ormar_config.alias_manager
     car_excludable = excludable.get(Car)
     assert car_excludable.include == {"id", "name"}
     assert car_excludable.exclude == set()
@@ -81,7 +79,7 @@ def compare_results_include(excludable):
     assert car_excludable.is_included("name")
     assert not car_excludable.is_included("gears")
 
-    alias = manager.resolve_relation_alias(Car, "manufacturer")
+    alias = alias_for("manufacturer")
     manu_excludable = excludable.get(Company, alias=alias)
     assert manu_excludable.include == {"name"}
     assert manu_excludable.exclude == set()
@@ -89,12 +87,12 @@ def compare_results_include(excludable):
     assert manu_excludable.is_included("name")
     assert not manu_excludable.is_included("founded")
 
-    alias = manager.resolve_relation_alias(Company, "hq")
+    alias = alias_for("manufacturer__hq")
     hq_excludable = excludable.get(HQ, alias=alias)
     assert hq_excludable.include == {"name"}
     assert hq_excludable.exclude == set()
 
-    alias = manager.resolve_relation_alias(NicksHq, "nicknames")
+    alias = alias_for("manufacturer__hq__nicks")
     nick_excludable = excludable.get(NickNames, alias=alias)
     assert nick_excludable.include == {"name"}
     assert nick_excludable.exclude == set()
@@ -189,8 +187,7 @@ def _compare_flatten_results_single(excludable):
 
 
 def _compare_flatten_results_deep(excludable):
-    manager = Company.ormar_config.alias_manager
-    alias = manager.resolve_relation_alias(Car, "manufacturer")
+    alias = alias_for("manufacturer")
     manu_excludable = excludable.get(Company, alias=alias)
     assert manu_excludable.flatten == {"hq"}
     assert manu_excludable.is_flattened("hq")
@@ -274,8 +271,7 @@ def test_flatten_copy_preserves_paths_and_sets():
     excludable.build(items="manufacturer__hq", model_cls=Car, slot="flatten")
     clone = ExcludableItems.from_excludable(excludable)
     assert clone._flatten_paths == {("manufacturer", "hq")}
-    manager = Company.ormar_config.alias_manager
-    alias = manager.resolve_relation_alias(Car, "manufacturer")
+    alias = alias_for("manufacturer")
     assert clone.get(Company, alias=alias).flatten == {"hq"}
 
 
@@ -367,9 +363,7 @@ def test_includes_and_excludes_combo():
     assert car_excludable.is_excluded("aircon_type")
     assert car_excludable.is_included("name")
 
-    alias = Company.ormar_config.alias_manager.resolve_relation_alias(
-        Car, "manufacturer"
-    )
+    alias = alias_for("manufacturer")
     manu_excludable = excludable.get(Company, alias=alias)
     assert manu_excludable.include == {"name"}
     assert manu_excludable.exclude == {"founded"}

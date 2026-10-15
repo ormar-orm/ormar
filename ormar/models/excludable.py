@@ -408,17 +408,17 @@ class ExcludableItems:
         ``related_parts`` argument while resolving through models - the
         prefix tuple is copied to a list to insulate the caller.
 
-        Examples (alias strings are hashes from the alias manager and
-        shown here as ``<...>`` since they are not stable across runs)::
+        Examples (aliases are ``alias_for`` hashes of the path, shown here
+        as ``<...>``)::
 
             _resolve_path(Post, ())
             # => ("", Post)
 
             _resolve_path(Post, ("category",))
-            # => ("<post_category>", Category)
+            # => ("<alias_for('category')>", Category)
 
             _resolve_path(Role, ("users", "categories"))
-            # => ("<usercategory_category>", Category)
+            # => ("<alias_for('users__categories')>", Category)
 
         :param source_model: model from which the path is rooted
         :type source_model: type[Model]
@@ -498,6 +498,30 @@ class ExcludableItems:
             excludable = Excludable()
             self.items[key] = excludable
         return excludable
+
+    def with_entry_alias(
+        self, model_cls: type["Model"], source_alias: str, target_alias: str
+    ) -> "ExcludableItems":
+        """
+        Returns a copy in which the entry of a model stored under one alias is also
+        stored under another one. Used when a model is queried from a different root
+        than the one the include/exclude paths were defined from (prefetch queries).
+
+        :param model_cls: model which entry should be re-aliased
+        :type model_cls: type[Model]
+        :param source_alias: alias the entry is stored under
+        :type source_alias: str
+        :param target_alias: alias the entry should be available under
+        :type target_alias: str
+        :return: copy of excludable items with the re-aliased entry
+        :rtype: ExcludableItems
+        """
+        new_excludable = ExcludableItems.from_excludable(self)
+        source = self.items.get(self._make_key(model_cls, source_alias))
+        new_excludable.items[self._make_key(model_cls, target_alias)] = (
+            source.get_copy() if source else Excludable()
+        )
+        return new_excludable
 
     def build(
         self,
@@ -780,7 +804,7 @@ class ExcludableItems:
             ]
             # Walk deepest-first so kept_deeper accumulates inward. Each
             # segment still needs its own exclude when not kept, because
-            # ReverseAliasResolver only consults the immediate parent.
+            # values_column_map only consults the immediate parent.
             kept_deeper = False
             for i in reversed(range(len(parts))):
                 kept_deeper = kept_deeper or referenced[i]

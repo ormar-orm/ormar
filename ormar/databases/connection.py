@@ -7,6 +7,7 @@ from contextvars import ContextVar
 from typing import Any, AsyncIterator, Optional
 
 from sqlalchemy import event
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from ormar.databases.query_executor import QueryExecutor
@@ -15,6 +16,12 @@ from ormar.databases.transaction import Transaction
 _transaction_connection: ContextVar[Optional[AsyncConnection]] = ContextVar(
     "_transaction_connection", default=None
 )
+
+# Backends where switching a pooled connection into AUTOCOMMIT and back costs
+# extra round trips on every checkout (SET AUTOCOMMIT, SET SESSION TRANSACTION
+# ISOLATION LEVEL, COMMIT). Their engine runs in AUTOCOMMIT instead and only
+# transactional connections switch to the server's default isolation level.
+AUTOCOMMIT_ENGINE_BACKENDS = frozenset({"mysql", "mariadb"})
 
 
 class DatabaseConnection:
@@ -39,13 +46,22 @@ class DatabaseConnection:
         self._options = options
         self._engine: Optional[AsyncEngine] = None
         self._autocommit_engine: Optional[AsyncEngine] = None
+        self._autocommit_by_default = (
+            "isolation_level" not in options
+            and make_url(url).get_backend_name() in AUTOCOMMIT_ENGINE_BACKENDS
+        )
 
         self._global_transaction: Optional[Transaction] = None
 
     async def connect(self) -> None:
         """Connect to the database by creating the async engine."""
         if self._engine is None:
-            self._engine = create_async_engine(self._url, **self._options)
+            engine_options = (
+                {**self._options, "isolation_level": "AUTOCOMMIT"}
+                if self._autocommit_by_default
+                else self._options
+            )
+            self._engine = create_async_engine(self._url, **engine_options)
             # View of the same engine/pool in AUTOCOMMIT mode. Standalone
             # queries use this to avoid a BEGIN/COMMIT round-trip per call,
             # matching legacy `databases`-library semantics. Explicit
@@ -118,7 +134,22 @@ class DatabaseConnection:
             yield trans_conn
         else:
             async with self.engine.connect() as conn:
+                await self.restore_transaction_isolation(conn)
                 yield conn
+
+    async def restore_transaction_isolation(self, conn: AsyncConnection) -> None:
+        """
+        Switch a freshly checked out connection to the server's default isolation
+        level when the engine runs in AUTOCOMMIT, so explicit transactions get
+        a real BEGIN / COMMIT. The pool resets it back to AUTOCOMMIT on checkin.
+
+        :param conn: connection checked out from the main engine
+        :type conn: AsyncConnection
+        """
+        if self._autocommit_by_default:  # pragma: no cover
+            await conn.execution_options(
+                isolation_level=conn.dialect.default_isolation_level
+            )
 
     def transaction(self, force_rollback: bool = False) -> Transaction:
         """

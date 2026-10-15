@@ -3,13 +3,13 @@ Package handles relations on models, returning related models on calls and expos
 QuerySetProxy for m2m and reverse relations.
 """
 
-from ormar.relations.alias_manager import AliasManager
+from ormar.relations.aliases import alias_for
 from ormar.relations.relation import Relation, RelationType
 from ormar.relations.relation_manager import RelationsManager
 from ormar.relations.utils import get_relations_sides_and_names
 
 __all__ = [
-    "AliasManager",
+    "alias_for",
     "Relation",
     "RelationsManager",
     "RelationType",

@@ -39,7 +39,6 @@ from ormar.models.helpers import (
     populate_config_sqlalchemy_table_if_required,
     populate_config_tablename_columns_and_pk,
     populate_default_options_values,
-    register_relation_in_alias_manager,
     sqlalchemy_columns_from_model_fields,
 )
 from ormar.models.ormar_config import OrmarConfig
@@ -74,6 +73,7 @@ def add_cached_properties(new_model: type["Model"]) -> None:
     new_model._through_names = None
     new_model._related_fields = None
     new_model._json_fields = set()
+    new_model._loaded_json_fields = set()
     new_model._bytes_fields = set()
     new_model._onupdate_fields = set()
     # Lazy-populated in NewBaseModel._process_kwargs on first init per class.
@@ -297,7 +297,6 @@ def copy_and_replace_m2m_through_model(  # noqa: CFQ002
     )
     new_config.table = through_class.ormar_config.pkname  # type: ignore
     new_config.pkname = through_class.ormar_config.pkname
-    new_config.alias_manager = through_class.ormar_config.alias_manager
     new_config.signals = through_class.ormar_config.signals
     new_config.requires_ref_update = through_class.ormar_config.requires_ref_update
     new_config.model_fields = copy.deepcopy(through_class.ormar_config.model_fields)
@@ -593,7 +592,6 @@ def wire_proxy_from_parent(new_model: type["Model"]) -> None:
     cfg.model_fields = parent_cfg.model_fields
     cfg.metadata = parent_cfg.metadata
     cfg.database = parent_cfg.database
-    cfg.alias_manager = parent_cfg.alias_manager
     new_model.pk = PkDescriptor(name=parent_cfg.pkname)
 
 
@@ -686,7 +684,6 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
 
         * populate sqlalchemy columns, pkname and tables from model_fields
         * register reverse relationships on related models
-        * registers all relations in alias manager that populates table_prefixes
         * exposes alias manager on each Model
         * creates QuerySet for each model and exposes it on a class
         * sets custom serializers for relation models
@@ -745,7 +742,6 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
                 populate_config_sqlalchemy_table_if_required(new_model.ormar_config)
                 expand_reverse_relationships(new_model)
                 for field_name, field in new_model.ormar_config.model_fields.items():
-                    register_relation_in_alias_manager(field=field)
                     add_field_descriptor(
                         name=field_name, field=field, new_model=new_model
                     )
