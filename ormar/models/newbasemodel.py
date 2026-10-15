@@ -34,7 +34,6 @@ from ormar.models.excludable import (
     normalize_to_dict,
     skip_ellipsis,
 )
-from ormar.models.helpers import register_relation_in_alias_manager
 from ormar.models.helpers.relations import expand_reverse_relationship
 from ormar.models.helpers.sqlalchemy import (
     populate_config_sqlalchemy_table_if_required,
@@ -45,7 +44,6 @@ from ormar.models.modelproxy import ModelTableProxy
 from ormar.models.utils import Extra
 from ormar.queryset.field_accessor import FieldAccessor
 from ormar.queryset.utils import extract_access_chains, translate_list_to_dict
-from ormar.relations.alias_manager import AliasManager
 from ormar.relations.relation import Relation
 from ormar.relations.relation_manager import RelationsManager
 from ormar.warnings import OrmarDeprecatedSince020
@@ -120,7 +118,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         __relation_map__: Optional[list[str]]
         __cached_hash__: Optional[int]
         __setattr_fields__: set[str]
-        _orm_relationship_manager: AliasManager
         _orm: RelationsManager
         _orm_id: int
         _orm_saved: bool
@@ -671,7 +668,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                     field = cast(ormar.ManyToManyField, field)
                     field.create_default_through_model()
                 expand_reverse_relationship(model_field=field)
-                register_relation_in_alias_manager(field=field)
                 update_column_definition(model=cls, field=field)
         populate_config_sqlalchemy_table_if_required(config=cls.ormar_config)
         # super().update_forward_refs(**localns)

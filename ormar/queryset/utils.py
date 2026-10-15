@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
 import ormar_rust_utils
 
 from ormar.exceptions import QueryDefinitionError
+from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import BaseField, Model
@@ -446,77 +447,72 @@ def get_relationship_alias_model_and_str(
 ) -> tuple[str, type["Model"], str, bool]:
     """
     Walks the relation to retrieve the actual model on which the clause should be
-    constructed, extracts alias based on last relation leading to target model.
+    constructed and the alias of the table under which that model is joined.
+
+    The alias is derived from the path of the joined table, which for through
+    models is the path of the many to many relation followed by the through model
+    name - also when the relation itself was omitted in the related parts.
+
+    Note that through model names are removed from passed related_parts.
+
     :param related_parts: list of related names extracted from string
     :type related_parts: Union[list, list[str]]
     :param source_model: model from which relation starts
     :type source_model: type[Model]
-    :return: table prefix, target model and relation string
-    :rtype: tuple[str, type["Model"], str]
+    :return: table prefix, target model, relation string and is through flag
+    :rtype: tuple[str, type["Model"], str, bool]
     """
-    table_prefix = ""
     is_through = False
     target_model = source_model
-    previous_model = target_model
     previous_models = [target_model]
-    manager = target_model.ormar_config.alias_manager
+    table_path_parts: list[str] = []
     for relation in related_parts[:]:
         related_field = target_model.ormar_config.model_fields[relation]
-
         if related_field.is_through:
-            previous_model, relation, is_through = _process_through_field(
+            is_through = True
+            implicit_relation = resolve_implicit_through_relation(
                 related_parts=related_parts,
                 relation=relation,
                 related_field=related_field,
-                previous_model=previous_model,
                 previous_models=previous_models,
             )
-        if related_field.is_multi:
-            previous_model = related_field.through
-            relation = related_field.get_relation_name()  # type: ignore
-        table_prefix = manager.resolve_relation_alias(
-            from_model=previous_model, relation_name=relation
-        )
+            if implicit_relation:
+                table_path_parts.append(implicit_relation)
+        table_path_parts.append(relation)
         target_model = related_field.to
-        previous_model = target_model
         if not is_through:
-            previous_models.append(previous_model)
+            previous_models.append(target_model)
     relation_str = "__".join(related_parts)
-
+    table_prefix = alias_for("__".join(table_path_parts))
     return table_prefix, target_model, relation_str, is_through
 
 
-def _process_through_field(
+def resolve_implicit_through_relation(
     related_parts: list,
-    relation: Optional[str],
+    relation: str,
     related_field: "BaseField",
-    previous_model: type["Model"],
     previous_models: list[type["Model"]],
-) -> tuple[type["Model"], Optional[str], bool]:
+) -> Optional[str]:
     """
-    Helper processing through models as they need to be treated differently.
+    Removes the through model name from related parts and returns the name of the
+    many to many relation the through model belongs to, if that relation was not
+    part of the path (i.e. ``postcategory__sort_order`` used from ``Post``).
 
-    :param related_parts: split relation string
+    :param related_parts: split relation string, through name is removed in place
     :type related_parts: list[str]
-    :param relation: relation name
+    :param relation: name of the through field
     :type relation: str
-    :param related_field: field with relation declaration
-    :type related_field: "ForeignKeyField"
-    :param previous_model: model from which relation is coming
-    :type previous_model: type["Model"]
-    :param previous_models: list of already visited models in relation chain
+    :param related_field: through field
+    :type related_field: BaseField
+    :param previous_models: already visited models in relation chain
     :type previous_models: list[type["Model"]]
-    :return: previous_model, relation, is_through
-    :rtype: tuple[type["Model"], str, bool]
+    :return: name of the omitted many to many relation or None if it was in the path
+    :rtype: Optional[str]
     """
-    is_through = True
     related_parts.remove(relation)
     through_field = related_field.owner.ormar_config.model_fields[
         related_field.related_name or ""
     ]
     if len(previous_models) > 1 and previous_models[-2] == through_field.to:
-        previous_model = through_field.to
-        relation = through_field.related_name
-    else:
-        relation = related_field.related_name
-    return previous_model, relation, is_through
+        return None
+    return related_field.related_name

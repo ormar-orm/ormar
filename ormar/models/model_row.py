@@ -10,6 +10,7 @@ except ImportError:  # pragma: no cover
 from ormar.models import NewBaseModel  # noqa: I202
 from ormar.models.excludable import ExcludableItems
 from ormar.models.helpers.models import group_related_list
+from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.fields import ForeignKeyField
@@ -55,7 +56,7 @@ def build_shared_row_plan(
 
     :param model_cls: model the plan is built for
     :type model_cls: type[ModelRow]
-    :param table_prefix: prefix of the table from AliasManager
+    :param table_prefix: alias of the table from alias_for
     :type table_prefix: str
     :param include: fields to include for this model
     :type include: frozenset
@@ -86,7 +87,6 @@ class ModelRow(NewBaseModel):
         excludable: Optional[ExcludableItems] = None,
         current_relation_str: str = "",
         proxy_source_model: Optional[type["Model"]] = None,
-        used_prefixes: Optional[list[str]] = None,
         plan_cache: Optional[PlanCache] = None,
     ) -> Optional["Model"]:
         """
@@ -102,8 +102,6 @@ class ModelRow(NewBaseModel):
         where rows are populated in a different way as they do not have
         nested models in result.
 
-        :param used_prefixes: list of already extracted prefixes
-        :type used_prefixes: list[str]
         :param proxy_source_model: source model from which querysetproxy is constructed
         :type proxy_source_model: Optional[type["ModelRow"]]
         :param excludable: structure of fields to include and exclude
@@ -127,19 +125,13 @@ class ModelRow(NewBaseModel):
         select_related = select_related or []
         related_models = related_models or []
         table_prefix = ""
-        used_prefixes = used_prefixes if used_prefixes is not None else []
         excludable = excludable or ExcludableItems()
 
         if select_related:
             related_models = group_related_list(select_related)
 
         if related_field:
-            table_prefix = cls._process_table_prefix(
-                source_model=source_model,
-                current_relation_str=current_relation_str,
-                related_field=related_field,
-                used_prefixes=used_prefixes,
-            )
+            table_prefix = alias_for(current_relation_str)
 
         item = cls._populate_nested_models_from_row(
             item=item,
@@ -150,7 +142,6 @@ class ModelRow(NewBaseModel):
             source_model=source_model,  # type: ignore
             proxy_source_model=proxy_source_model,  # type: ignore
             table_prefix=table_prefix,
-            used_prefixes=used_prefixes,
             plan_cache=plan_cache,
         )
         plan = cls.get_or_build_row_plan(table_prefix, excludable, plan_cache)
@@ -166,44 +157,6 @@ class ModelRow(NewBaseModel):
         return instance
 
     @classmethod
-    def _process_table_prefix(
-        cls,
-        source_model: type["Model"],
-        current_relation_str: str,
-        related_field: "ForeignKeyField",
-        used_prefixes: list[str],
-    ) -> str:
-        """
-
-        :param source_model: model on which relation was defined
-        :type source_model: type[Model]
-        :param current_relation_str: current relation string
-        :type current_relation_str: str
-        :param related_field: field with relation declaration
-        :type related_field: "ForeignKeyField"
-        :param used_prefixes: list of already extracted prefixes
-        :type used_prefixes: list[str]
-        :return: table_prefix to use
-        :rtype: str
-        """
-        if related_field.is_multi:
-            previous_model = related_field.through
-        else:
-            previous_model = related_field.owner
-        table_prefix = cls.ormar_config.alias_manager.resolve_relation_alias(
-            from_model=previous_model, relation_name=related_field.name
-        )
-        if not table_prefix or table_prefix in used_prefixes:
-            manager = cls.ormar_config.alias_manager
-            table_prefix = manager.resolve_relation_alias_after_complex(
-                source_model=source_model,
-                relation_str=current_relation_str,
-                relation_field=related_field,
-            )
-        used_prefixes.append(table_prefix)
-        return table_prefix
-
-    @classmethod
     def _populate_nested_models_from_row(  # noqa: CFQ002
         cls,
         item: dict,
@@ -212,7 +165,6 @@ class ModelRow(NewBaseModel):
         related_models: Any,
         excludable: ExcludableItems,
         table_prefix: str,
-        used_prefixes: list[str],
         current_relation_str: Optional[str] = None,
         proxy_source_model: Optional[type["Model"]] = None,
         plan_cache: Optional[PlanCache] = None,
@@ -269,10 +221,9 @@ class ModelRow(NewBaseModel):
                 current_relation_str=relation_str,
                 source_model=source_model,
                 proxy_source_model=proxy_source_model,
-                used_prefixes=used_prefixes,
                 plan_cache=plan_cache,
             )
-            item[model_cls.get_column_name_from_alias(related)] = child
+            item[related] = child
             if (
                 field.is_multi
                 and child
@@ -282,6 +233,7 @@ class ModelRow(NewBaseModel):
                     row=row,
                     item=item,
                     related=related,
+                    relation_str=relation_str,
                     excludable=excludable,
                     child=child,
                     proxy_source_model=proxy_source_model,
@@ -323,6 +275,7 @@ class ModelRow(NewBaseModel):
         row: ResultProxy,
         item: dict,
         related: str,
+        relation_str: str,
         excludable: ExcludableItems,
         child: "Model",
         proxy_source_model: Optional[type["Model"]],
@@ -338,6 +291,8 @@ class ModelRow(NewBaseModel):
         :type item: dict
         :param related: current relation name
         :type related: str
+        :param relation_str: path of the many to many relation from the query root
+        :type relation_str: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems
         :param child: child item of parent
@@ -350,8 +305,8 @@ class ModelRow(NewBaseModel):
         through_name = cls.ormar_config.model_fields[related].through.get_name()
         through_child = cls._create_through_instance(
             row=row,
-            related=related,
             through_name=through_name,
+            relation_str=relation_str,
             excludable=excludable,
             plan_cache=plan_cache,
         )
@@ -367,7 +322,7 @@ class ModelRow(NewBaseModel):
         cls,
         row: ResultProxy,
         through_name: str,
-        related: str,
+        relation_str: str,
         excludable: ExcludableItems,
         plan_cache: Optional[PlanCache] = None,
     ) -> "ModelRow":
@@ -379,8 +334,8 @@ class ModelRow(NewBaseModel):
         :type row: sqlalchemy.engine.ResultProxy
         :param through_name: name of the through field
         :type through_name: str
-        :param related: name of the relation
-        :type related: str
+        :param relation_str: path of the many to many relation from the query root
+        :type relation_str: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems
         :param plan_cache: optional per-queryset plan cache
@@ -389,9 +344,7 @@ class ModelRow(NewBaseModel):
         :rtype: "ModelRow"
         """
         model_cls = cls.ormar_config.model_fields[through_name].to
-        table_prefix = cls.ormar_config.alias_manager.resolve_relation_alias(
-            from_model=cls, relation_name=related
-        )
+        table_prefix = alias_for(f"{relation_str}__{through_name}")
         # remove relations on through field — must happen before the plan is
         # built so the plan reflects the through-model's full exclude set
         model_excludable = excludable.get(model_cls=model_cls, alias=table_prefix)
@@ -416,7 +369,7 @@ class ModelRow(NewBaseModel):
         excludable)`` triple — the work that previously ran inside
         ``extract_prefixed_table_columns`` for every row.
 
-        :param table_prefix: prefix of the table from AliasManager
+        :param table_prefix: alias of the table from alias_for
         :type table_prefix: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems
@@ -456,7 +409,7 @@ class ModelRow(NewBaseModel):
         shared between querysets. When ``plan_cache`` is ``None`` (legacy /
         external caller) only the shared plans are used.
 
-        :param table_prefix: prefix of the table from AliasManager
+        :param table_prefix: alias of the table from alias_for
         :type table_prefix: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems
@@ -483,7 +436,7 @@ class ModelRow(NewBaseModel):
         Return a plan shared between querysets for the model's own
         include/exclude/pk_only settings at the given table prefix.
 
-        :param table_prefix: prefix of the table from AliasManager
+        :param table_prefix: alias of the table from alias_for
         :type table_prefix: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems

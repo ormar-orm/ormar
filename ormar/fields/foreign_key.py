@@ -335,16 +335,6 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         self.foreign_key_name: Optional[str] = kwargs.pop("foreign_key_name", None)
         super().__init__(**kwargs)
 
-    def get_source_related_name(self) -> str:
-        """
-        Returns name to use for source relation name.
-        For FK it's the same, differs for m2m fields.
-        It's either set as `related_name` or by default it's owner model. get_name + 's'
-        :return: name of the related_name or default related name.
-        :rtype: str
-        """
-        return self.get_related_name()
-
     def get_related_name(self) -> str:
         """
         Returns name to use for reverse relation.
@@ -653,12 +643,3 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :rtype: bool
         """
         return self.name
-
-    def get_source_model(self) -> type["Model"]:  # pragma: no cover
-        """
-        Returns model from which the relation comes -> either owner or through model
-
-        :return: source model
-        :rtype: type["Model"]
-        """
-        return self.owner

@@ -5,6 +5,7 @@ from sqlalchemy import TextClause
 import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.query_action import QueryAction
+from ormar.relations.aliases import prefixed_table
 
 if TYPE_CHECKING:  # pragma: nocover
     from ormar import Model
@@ -142,11 +143,7 @@ class FilterAction(QueryAction):
         else:
             filter_value = self.filter_value
         if self.table_prefix:
-            aliased_table = (
-                self.source_model.ormar_config.alias_manager.prefixed_table_name(
-                    self.table_prefix, self.column.table
-                )
-            )
+            aliased_table = prefixed_table(self.table_prefix, self.column.table)
             aliased_column = getattr(aliased_table.c, self.column.name)
         else:
             aliased_column = self.column
