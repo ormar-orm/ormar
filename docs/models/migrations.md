@@ -134,6 +134,8 @@ datefmt = %H:%M:%S
     | PostgreSQL | `postgresql+asyncpg://...` | `postgresql+psycopg2://...` |
     | MySQL | `mysql+aiomysql://...` | `mysql+pymysql://...` |
 
+    For SQLite, `%(here)s` makes Alembic's path relative to `alembic.ini`, while the relative path in ormar's URL resolves against the directory the application is started from. The two point at the same file only when you run the application from the project root, so use an absolute path in ormar if you start it from anywhere else.
+
     If you prefer to use async drivers throughout, you can initialize Alembic with `alembic init -t async`.
 
 `alembic/env.py`:
@@ -215,7 +217,9 @@ If your models are split across several packages, the metadata must still be sha
 ```
 my_project/
 ├── alembic/
-│   └── env.py
+│   ├── env.py
+│   ├── script.py.mako
+│   └── versions/
 ├── my_project/
 │   ├── __init__.py
 │   ├── database.py
@@ -229,6 +233,8 @@ my_project/
 │       └── models.py
 └── alembic.ini
 ```
+
+`alembic.ini` and `alembic/env.py` are the same as in the [complete project layout](#complete-project-layout) above, except for the metadata import shown at the end of this section.
 
 `my_project/database.py`:
 
@@ -291,15 +297,20 @@ from my_project.database import metadata
 __all__ = ["Author", "Book", "metadata"]
 ```
 
-Then in `alembic/env.py`:
+Then in `alembic/env.py`, replace the metadata import with:
 
 ```python
+# Import the models explicitly, not only metadata, so their tables are registered
+# even if the import later changes to `from my_project.database import metadata`.
 from my_project.models import Author, Book, metadata  # noqa: E402, F401
 
 target_metadata = metadata
 ```
 
 Importing the models is required: if a model class is never defined/imported, its table is never attached to `metadata` and Alembic will not see it.
+
+!!!warning
+    Do not import `metadata` only from `my_project.database`. Alembic does not raise an error when it gets an empty `metadata`: on a new database it generates an empty migration, and on an existing database it generates a migration that **drops every table**.
 
 ### Detecting column type changes (`compare_type`)
 

@@ -1,5 +1,6 @@
-import ormar
 import sqlalchemy
+
+import ormar
 from ormar import DatabaseConnection
 
 database = DatabaseConnection("sqlite+aiosqlite:///db.sqlite")
