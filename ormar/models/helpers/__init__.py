@@ -10,7 +10,6 @@ from ormar.models.helpers.pydantic import (
     merge_or_generate_pydantic_config,
 )
 from ormar.models.helpers.relations import (
-    alias_manager,
     expand_reverse_relationships,
 )
 from ormar.models.helpers.sqlalchemy import (
@@ -26,7 +25,6 @@ __all__ = [
     "populate_config_tablename_columns_and_pk",
     "populate_config_sqlalchemy_table_if_required",
     "populate_default_options_values",
-    "alias_manager",
     "get_potential_fields",
     "get_pydantic_base_orm_config",
     "merge_or_generate_pydantic_config",

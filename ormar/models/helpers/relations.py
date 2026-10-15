@@ -21,13 +21,10 @@ from ormar import ForeignKey, ManyToMany
 from ormar.fields import Through
 from ormar.models.descriptors import RelationDescriptor
 from ormar.models.helpers.sqlalchemy import adjust_through_many_to_many_model
-from ormar.relations import AliasManager
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
     from ormar.fields import ForeignKeyField, ManyToManyField
-
-alias_manager = AliasManager()
 
 
 def expand_reverse_relationship(model_field: "ForeignKeyField") -> None:

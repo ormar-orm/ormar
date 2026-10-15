@@ -5,7 +5,7 @@ Maps prefixed columns of a raw query to the relation string keys returned by
 
 from typing import TYPE_CHECKING, cast
 
-from ormar.relations.alias_manager import alias_for
+from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import ForeignKeyField, Model

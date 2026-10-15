@@ -10,7 +10,7 @@ except ImportError:  # pragma: no cover
 from ormar.models import NewBaseModel  # noqa: I202
 from ormar.models.excludable import ExcludableItems
 from ormar.models.helpers.models import group_related_list
-from ormar.relations.alias_manager import alias_for
+from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.fields import ForeignKeyField
@@ -56,7 +56,7 @@ def build_shared_row_plan(
 
     :param model_cls: model the plan is built for
     :type model_cls: type[ModelRow]
-    :param table_prefix: prefix of the table from AliasManager
+    :param table_prefix: alias of the table from alias_for
     :type table_prefix: str
     :param include: fields to include for this model
     :type include: frozenset
@@ -369,7 +369,7 @@ class ModelRow(NewBaseModel):
         excludable)`` triple — the work that previously ran inside
         ``extract_prefixed_table_columns`` for every row.
 
-        :param table_prefix: prefix of the table from AliasManager
+        :param table_prefix: alias of the table from alias_for
         :type table_prefix: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems
@@ -409,7 +409,7 @@ class ModelRow(NewBaseModel):
         shared between querysets. When ``plan_cache`` is ``None`` (legacy /
         external caller) only the shared plans are used.
 
-        :param table_prefix: prefix of the table from AliasManager
+        :param table_prefix: alias of the table from alias_for
         :type table_prefix: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems
@@ -436,7 +436,7 @@ class ModelRow(NewBaseModel):
         Return a plan shared between querysets for the model's own
         include/exclude/pk_only settings at the given table prefix.
 
-        :param table_prefix: prefix of the table from AliasManager
+        :param table_prefix: alias of the table from alias_for
         :type table_prefix: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems

@@ -297,7 +297,6 @@ def copy_and_replace_m2m_through_model(  # noqa: CFQ002
     )
     new_config.table = through_class.ormar_config.pkname  # type: ignore
     new_config.pkname = through_class.ormar_config.pkname
-    new_config.alias_manager = through_class.ormar_config.alias_manager
     new_config.signals = through_class.ormar_config.signals
     new_config.requires_ref_update = through_class.ormar_config.requires_ref_update
     new_config.model_fields = copy.deepcopy(through_class.ormar_config.model_fields)
@@ -593,7 +592,6 @@ def wire_proxy_from_parent(new_model: type["Model"]) -> None:
     cfg.model_fields = parent_cfg.model_fields
     cfg.metadata = parent_cfg.metadata
     cfg.database = parent_cfg.database
-    cfg.alias_manager = parent_cfg.alias_manager
     new_model.pk = PkDescriptor(name=parent_cfg.pkname)
 
 

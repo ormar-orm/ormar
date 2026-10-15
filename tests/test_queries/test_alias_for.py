@@ -1,4 +1,4 @@
-from ormar.relations.alias_manager import alias_for
+from ormar.relations.aliases import alias_for
 
 
 def test_root_path_has_no_alias():

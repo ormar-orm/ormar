@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
 import ormar_rust_utils
 
 from ormar.exceptions import QueryDefinitionError
-from ormar.relations.alias_manager import alias_for
+from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import BaseField, Model

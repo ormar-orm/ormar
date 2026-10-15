@@ -5,7 +5,7 @@ import pytest
 import ormar
 from ormar.exceptions import QueryDefinitionError
 from ormar.models.excludable import ExcludableItems
-from ormar.relations.alias_manager import alias_for
+from ormar.relations.aliases import alias_for
 from tests.lifespan import init_tests
 from tests.settings import create_config
 

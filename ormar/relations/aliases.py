@@ -58,52 +58,43 @@ def alias_for(relation_path: str) -> str:
     return "t" + hashlib.blake2s(relation_path.encode(), digest_size=3).hexdigest()
 
 
-class AliasManager:
+def prefixed_columns(
+    alias: str, table: sqlalchemy.Table, fields: Optional[list] = None
+) -> list[Label[Any]]:
     """
-    Builds aliased tables and columns for joins.
-    One instance is shared between all models.
+    Creates a list of labelled columns of a table prefixed with the table alias.
+
+    Optional list of fields to include can be passed to extract only those columns.
+    List has to have sqlalchemy names of columns (ormar aliases) not the ormar ones.
+
+    :param alias: alias of given table
+    :type alias: str
+    :param table: table from which fields should be aliased
+    :type table: sqlalchemy.Table
+    :param fields: fields to include
+    :type fields: Optional[list[str]]
+    :return: list of labelled columns
+    :rtype: list[Label[Any]]
     """
+    return list(
+        build_prefixed_columns(alias, table, frozenset(fields) if fields else None)
+    )
 
-    def __init__(self) -> None:
-        self._prefixed_tables: dict[str, NamedFromClause] = dict()
 
-    @staticmethod
-    def prefixed_columns(
-        alias: str, table: sqlalchemy.Table, fields: Optional[list] = None
-    ) -> list[Label[Any]]:
-        """
-        Creates a list of aliases sqlalchemy text clauses from
-        string alias and sqlalchemy.Table.
+@lru_cache(maxsize=None)
+def prefixed_table(alias: str, table: sqlalchemy.Table) -> NamedFromClause:
+    """
+    Returns the table aliased under its table alias.
 
-        Optional list of fields to include can be passed to extract only those columns.
-        List has to have sqlalchemy names of columns (ormar aliases) not the ormar ones.
+    Cached without a size limit, as filters and joins of one statement have to
+    reference the same aliased table object, and the number of aliases is bounded
+    by the relation paths of the defined models.
 
-        :param alias: alias of given table
-        :type alias: str
-        :param table: table from which fields should be aliased
-        :type table: sqlalchemy.Table
-        :param fields: fields to include
-        :type fields: Optional[list[str]]
-        :return: list of sqlalchemy text clauses with "column name as aliased name"
-        :rtype: list[text]
-        """
-        return list(
-            build_prefixed_columns(alias, table, frozenset(fields) if fields else None)
-        )
-
-    def prefixed_table_name(
-        self, alias: str, table: sqlalchemy.Table
-    ) -> NamedFromClause:
-        """
-        Creates text clause with table name with aliased name.
-
-        :param alias: alias of given table
-        :type alias: str
-        :param table: table
-        :type table: sqlalchemy.Table
-        :return: sqlalchemy text clause as "table_name aliased_name"
-        :rtype: sqlalchemy text clause
-        """
-        full_alias = f"{alias}_{table.name}"
-        key = f"{full_alias}_{id(table)}"
-        return self._prefixed_tables.setdefault(key, table.alias(full_alias))
+    :param alias: alias of given table
+    :type alias: str
+    :param table: table to alias
+    :type table: sqlalchemy.Table
+    :return: aliased table
+    :rtype: NamedFromClause
+    """
+    return table.alias(f"{alias}_{table.name}")

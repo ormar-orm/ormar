@@ -44,7 +44,6 @@ from ormar.models.modelproxy import ModelTableProxy
 from ormar.models.utils import Extra
 from ormar.queryset.field_accessor import FieldAccessor
 from ormar.queryset.utils import extract_access_chains, translate_list_to_dict
-from ormar.relations.alias_manager import AliasManager
 from ormar.relations.relation import Relation
 from ormar.relations.relation_manager import RelationsManager
 from ormar.warnings import OrmarDeprecatedSince020
@@ -119,7 +118,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         __relation_map__: Optional[list[str]]
         __cached_hash__: Optional[int]
         __setattr_fields__: set[str]
-        _orm_relationship_manager: AliasManager
         _orm: RelationsManager
         _orm_id: int
         _orm_saved: bool

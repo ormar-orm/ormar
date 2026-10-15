@@ -10,7 +10,7 @@ import ormar  # noqa:  I100, I202
 from ormar.queryset.clause import QueryClause
 from ormar.queryset.queries.query import Query
 from ormar.queryset.utils import translate_list_to_dict
-from ormar.relations.alias_manager import alias_for
+from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import ForeignKeyField, Model

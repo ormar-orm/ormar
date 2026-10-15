@@ -7,7 +7,7 @@ import sqlalchemy as sa
 
 import ormar
 from ormar.exceptions import ModelError
-from ormar.relations.alias_manager import alias_for
+from ormar.relations.aliases import alias_for
 from tests.lifespan import init_tests
 from tests.settings import create_config
 

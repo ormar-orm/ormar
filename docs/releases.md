@@ -18,7 +18,7 @@
   `prefetch_related()` could target the wrong table, produce cross joins or
   load fields of the other path, depending on the order of the calls. Table
   aliases are now derived from the relation path and stable between queries;
-  internally the relation alias registry of `AliasManager` was removed.
+  internally `AliasManager` and `OrmarConfig.alias_manager` were removed.
 * Fix chained `exclude()` calls applying only the last one; an empty
   `exclude()` is now a no-op — thanks @moneebullah25 for the initial
   implementation in #1826 [#1816](https://github.com/ormar-orm/ormar/issues/1816)

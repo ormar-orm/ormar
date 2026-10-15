@@ -9,8 +9,7 @@ from ormar.exceptions import (
     QueryDefinitionError,
     RelationshipInstanceError,
 )
-from ormar.relations import AliasManager
-from ormar.relations.alias_manager import alias_for
+from ormar.relations.aliases import alias_for, prefixed_columns, prefixed_table
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
@@ -67,16 +66,6 @@ class SqlJoin:
     @next_model.setter
     def next_model(self, value: type["Model"]) -> None:
         self._next_model = value
-
-    @property
-    def alias_manager(self) -> AliasManager:
-        """
-        Shortcut for ormar's model AliasManager stored on OrmarConfig.
-
-        :return: alias manager from model's OrmarConfig
-        :rtype: AliasManager
-        """
-        return self.main_model.ormar_config.alias_manager
 
     @property
     def to_table(self) -> sqlalchemy.Table:
@@ -297,9 +286,7 @@ class SqlJoin:
             to_table_name=self.to_table.name,
             to_column_name=to_key,
         )
-        target_table = self.alias_manager.prefixed_table_name(
-            self.next_alias, self.to_table
-        )
+        target_table = prefixed_table(self.next_alias, self.to_table)
         self.select_from = sqlalchemy.sql.outerjoin(
             self.select_from,  # type: ignore
             target_table,
@@ -315,7 +302,7 @@ class SqlJoin:
             use_alias=True,
         )
         self.columns.extend(
-            self.alias_manager.prefixed_columns(  # type: ignore
+            prefixed_columns(
                 self.next_alias,
                 target_table,  # type: ignore
                 self_related_fields,
