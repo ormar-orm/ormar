@@ -43,6 +43,12 @@ therefore it's listed here for clarity.
 
 `model_dump` as the name suggests export data from model tree to dictionary.
 
+Options like `mode`, `by_alias`, `exclude_unset`, `exclude_defaults`, `exclude_none`, `exclude_list`
+and `round_trip` apply to the whole tree, including nested related and through models.
+A relation set to `None` is treated as a field equal to its default, so it is dropped by `exclude_none`
+and `exclude_defaults`, and by `exclude_unset` when it was not set explicitly.
+List relations (reverse and many to many) are always included unless `exclude_list` is set.
+
 Explanation of model_dump parameters:
 
 ### include (`ormar` modified)

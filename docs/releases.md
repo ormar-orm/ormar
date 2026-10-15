@@ -10,6 +10,36 @@
   expressions for arbitrary functional indexes. On MySQL this needs 8.0.13+.
   [#615](https://github.com/collerek/ormar/issues/615)
 
+### 🐛 Fixes
+
+* Fix `add()` on a reverse ForeignKey relation silently not inserting a child
+  that already had a primary key set (a `uuid` pk with a default or an explicit
+  id on a non-autoincrement pk) — thanks @moneebullah25 [#1819](https://github.com/ormar-orm/ormar/issues/1819)
+* Fix `clear()` on a self-referencing many-to-many relation deleting through
+  rows by the wrong column. It now removes only the rows of the side being
+  cleared (e.g. `person.friends.clear()` no longer touches `person.friend_of`),
+  and the relation is emptied only after the delete succeeds
+  — thanks @moneebullah25 [#1820](https://github.com/ormar-orm/ormar/issues/1820)
+* Fix `add()`, `remove()` and through model updates on the reverse side of a
+  self-referencing many-to-many relation storing the link in the wrong direction
+  (e.g. `member.followers.add(other)` added `other` to `member.follows`).
+  [#1836](https://github.com/ormar-orm/ormar/issues/1836)
+* Fix querying through a self-referencing many-to-many relation resolving the
+  wrong table alias - e.g. `member.followers.all()` / `.count()` returned every
+  row, and filters, `order_by()`, `values()` and default `orders_by` on such
+  relations failed or produced cross joins.
+  [#1837](https://github.com/ormar-orm/ormar/issues/1837)
+* Fix `add()` of an already linked child on a many-to-many relation inserting
+  a duplicate through row (it now updates the existing link with passed through
+  fields, if any), and `remove()` emptying the in-memory relation before the
+  through rows were deleted. `remove()` now deletes all matching through rows.
+  [#1821](https://github.com/ormar-orm/ormar/issues/1821)
+* Raise `QueryDefinitionError` when `update()` or `delete()` is called on a
+  queryset filtered or excluded by a related model's field (e.g.
+  `filter(category__name="x")`), instead of generating an invalid statement
+  that ignores or fails on the missing join
+  — thanks @moneebullah25 [#1817](https://github.com/ormar-orm/ormar/issues/1817)
+
 ## 0.26.0
 
 ### ✨ Features

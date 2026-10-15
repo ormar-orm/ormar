@@ -1,4 +1,5 @@
 import copy
+from functools import lru_cache
 from typing import TYPE_CHECKING, Optional
 
 import sqlalchemy
@@ -8,6 +9,20 @@ from ormar.queryset.actions.query_action import QueryAction  # noqa: I100, I202
 
 if TYPE_CHECKING:  # pragma: nocover
     from ormar import Model
+
+
+@lru_cache(maxsize=2048)
+def order_text_clause(expression: str) -> sqlalchemy.sql.expression.TextClause:
+    """
+    Builds a text clause for an ORDER BY expression, cached as text clauses are
+    immutable and the same orderings (e.g. default pk sort) repeat on every query.
+
+    :param expression: raw ORDER BY expression
+    :type expression: str
+    :return: text clause for the expression
+    :rtype: sqlalchemy.sql.expression.TextClause
+    """
+    return text(expression)
 
 
 class OrderAction(QueryAction):
@@ -94,7 +109,9 @@ class OrderAction(QueryAction):
         else:
             table_name = quoter(f"{prefix}{table_name}")
         field_name = quoter(field_name)
-        return text(self._build_order_expression(f"{table_name}.{field_name}"))
+        return order_text_clause(
+            self._build_order_expression(f"{table_name}.{field_name}")
+        )
 
     def _build_order_expression(self, full_column: str) -> str:
         """

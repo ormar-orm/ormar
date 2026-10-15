@@ -115,6 +115,11 @@ assert department.courses[0] == course
     
     That means that in example above the department has to be saved before you can call `department.courses.add()`.
 
+!!!note
+    If the child already has a primary key value (i.e. a `uuid` pk with a default or an explicitly passed id
+    on a non-autoincrement pk), `ormar` checks if the row exists in the database - if not the child is inserted,
+    otherwise it's updated.
+
 !!!warning
     This method will not work on `ManyToMany` relations - there, both sides of the relation have to be saved before adding to relation.
     

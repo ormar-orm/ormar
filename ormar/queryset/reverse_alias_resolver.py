@@ -225,5 +225,5 @@ class ReverseAliasResolver:
                 self._fields[prefix_name] = field
                 new_through_str = previous_related_str + through_name
                 self._prefixes[prefix_name] = new_through_str
-            prefix_name = f"{through_name}_{field.default_target_field_name()}"
+            prefix_name = f"{through_name}_{field.get_relation_name()}"
         return prefix_name

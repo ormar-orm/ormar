@@ -31,6 +31,7 @@ quick_access_set = {
     "_get_value",
     "_init_private_attributes",
     "_is_conversion_to_json_needed",
+    "_is_null_relation_excluded",
     "_iter",
     "_iterate_related_models",
     "_orm",

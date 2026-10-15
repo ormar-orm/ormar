@@ -51,6 +51,13 @@ def populate_default_options_values(  # noqa: CCR001
     new_model._json_fields = {
         name for name, field in model_fields.items() if field.__type__ == pydantic.Json
     }
+    new_model._loaded_json_fields = {
+        name
+        for name, field in model_fields.items()
+        if name in new_model._json_fields
+        and field.__pydantic_type__ == pydantic.Json
+        and field.encrypt_backend == ormar.EncryptBackends.NONE
+    }
     new_model._bytes_fields = {
         name for name, field in model_fields.items() if field.__type__ is bytes
     }
