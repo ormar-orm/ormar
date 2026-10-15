@@ -804,7 +804,7 @@ class ExcludableItems:
             ]
             # Walk deepest-first so kept_deeper accumulates inward. Each
             # segment still needs its own exclude when not kept, because
-            # ReverseAliasResolver only consults the immediate parent.
+            # values_column_map only consults the immediate parent.
             kept_deeper = False
             for i in reversed(range(len(parts))):
                 kept_deeper = kept_deeper or referenced[i]
