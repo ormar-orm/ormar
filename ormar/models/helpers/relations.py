@@ -119,6 +119,10 @@ def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
         add_field_serializer_for_reverse_relations(
             to_model=model_field.to, related_name=related_name
         )
+        # The metaclass marks finished models incomplete; pydantic >= 2.14 only
+        # drops the cached schema on a forced rebuild of a complete model, so
+        # restore the flag or the new reverse field is silently ignored.
+        model_field.to.__pydantic_complete__ = True  # type: ignore[attr-defined]
         model_field.to.model_rebuild(
             force=True,
             _types_namespace={

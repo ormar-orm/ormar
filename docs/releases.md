@@ -12,6 +12,9 @@
 
 ### 🐛 Fixes
 
+* Support pydantic 2.14 (upper bound raised to `<2.15`). On 2.14 reverse
+  relation fields were dropped from the cached model schema, so they were
+  missing from FastAPI request/response models and OpenAPI docs.
 * Fix queries over two relation paths ending in the same relation (e.g.
   `order.buyer.city` and `order.seller.city`): filters, `exclude()`,
   `order_by()`, `fields()`, `exclude_fields()`, `values()` and
