@@ -18,10 +18,11 @@ _transaction_connection: ContextVar[Optional[AsyncConnection]] = ContextVar(
 )
 
 # Backends where switching a pooled connection into AUTOCOMMIT and back costs
-# extra round trips on every checkout (SET AUTOCOMMIT, SET SESSION TRANSACTION
-# ISOLATION LEVEL, COMMIT). Their engine runs in AUTOCOMMIT instead and only
-# transactional connections switch to the server's default isolation level.
-AUTOCOMMIT_ENGINE_BACKENDS = frozenset({"mysql", "mariadb"})
+# extra round trips on every checkout (MySQL: SET AUTOCOMMIT, SET SESSION
+# TRANSACTION ISOLATION LEVEL, COMMIT; aiosqlite: a hop to the driver thread
+# per switch). Their engine runs in AUTOCOMMIT instead and only transactional
+# connections leave it (see ``Transaction``).
+AUTOCOMMIT_ENGINE_BACKENDS = frozenset({"mysql", "mariadb", "sqlite"})
 
 
 class DatabaseConnection:
@@ -62,13 +63,15 @@ class DatabaseConnection:
                 else self._options
             )
             self._engine = create_async_engine(self._url, **engine_options)
-            # View of the same engine/pool in AUTOCOMMIT mode. Standalone
-            # queries use this to avoid a BEGIN/COMMIT round-trip per call,
-            # matching legacy `databases`-library semantics. Explicit
+            # Engine (or a view of the same engine/pool) in AUTOCOMMIT mode.
+            # Standalone queries use this to avoid a BEGIN/COMMIT round-trip
+            # per call, matching legacy `databases`-library semantics. Explicit
             # Transactions keep using ``self._engine`` so BEGIN / SAVEPOINT
             # still work.
-            self._autocommit_engine = self._engine.execution_options(
-                isolation_level="AUTOCOMMIT"
+            self._autocommit_engine = (
+                self._engine
+                if self._autocommit_by_default
+                else self._engine.execution_options(isolation_level="AUTOCOMMIT")
             )
 
             # Set up SQLite foreign keys pragma if using SQLite

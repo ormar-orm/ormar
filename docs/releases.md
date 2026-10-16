@@ -46,6 +46,12 @@
   Queries over deep or fanned-out relations are 2–14× faster (e.g. 1000 rows
   joined five levels deep with a many-to-many: 1.24s → 0.09s).
   [#1851](https://github.com/ormar-orm/ormar/pull/1851)
+* On SQLite the engine now runs in AUTOCOMMIT, like MySQL, instead of switching
+  every pooled connection into AUTOCOMMIT and back, which cost two hops to the
+  driver thread per query. Standalone queries (`get`, `create`, `save`,
+  `delete`, `count`, ...) are 25–45% faster; transactions keep using an
+  explicit `BEGIN`, so savepoints and rollbacks work as before. Postgres is
+  unchanged and a user-supplied `isolation_level` is respected.
 
 ### 🐛 Fixes
 

@@ -151,43 +151,34 @@ async def test_force_rollback_cascades():
 
 @pytest.mark.asyncio
 async def test_standalone_query_uses_autocommit():
-    """Standalone CRUD must not wrap each statement in BEGIN/COMMIT.
-
-    The old code path held a real transaction around every call; this test
-    pins the replacement behavior so future refactors don't silently reintroduce
-    the per-query commit overhead (see discussion #1629).
+    """Standalone CRUD must not wrap each statement in BEGIN/COMMIT, while
+    statements inside ``database.transaction()`` must stay invisible to other
+    connections until it commits (see discussion #1629).
     """
     seen_autocommit: list[bool] = []
 
     def capture(conn, cursor, statement, parameters, context, executemany):
-        seen_autocommit.append(
-            conn.get_execution_options().get("isolation_level") == "AUTOCOMMIT"
-        )
+        seen_autocommit.append(conn._is_autocommit_isolation())
 
-    async with base_ormar_config.database:
-        event.listen(
-            base_ormar_config.database.engine.sync_engine,
-            "before_cursor_execute",
-            capture,
-        )
+    database = base_ormar_config.database
+    async with database:
+        event.listen(database.engine.sync_engine, "before_cursor_execute", capture)
         try:
             await Team.objects.create(name="Standalone")
             await Team.objects.get(name="Standalone")
-
-            async with base_ormar_config.database.transaction():
-                await Team.objects.create(name="InsideTransaction")
-                await Team.objects.get(name="InsideTransaction")
         finally:
-            event.remove(
-                base_ormar_config.database.engine.sync_engine,
-                "before_cursor_execute",
-                capture,
-            )
+            event.remove(database.engine.sync_engine, "before_cursor_execute", capture)
 
-    # First two statements were standalone → must have run under AUTOCOMMIT.
-    # Last two were inside an explicit transaction → must NOT have.
-    assert seen_autocommit[:2] == [True, True]
-    assert all(flag is False for flag in seen_autocommit[2:])
+        async with database.transaction():
+            await Team.objects.create(name="InsideTransaction")
+            async with database.engine.connect() as other:
+                visible = await other.scalar(
+                    text("SELECT COUNT(*) FROM teams WHERE name = 'InsideTransaction'")
+                )
+        assert await Team.objects.filter(name="InsideTransaction").count() == 1
+
+    assert seen_autocommit == [True, True]
+    assert visible == 0
 
 
 @pytest.mark.asyncio
