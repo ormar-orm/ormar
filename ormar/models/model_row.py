@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, AbstractSet, Any, Optional, Union, cast
 
 try:
     from sqlalchemy.engine.result import ResultProxy  # type: ignore
@@ -136,29 +136,79 @@ class ModelRow(NewBaseModel):
         :return: returns model if model is populated from database
         :rtype: Optional[Model]
         """
-        item: dict[str, Any] = {}
-        select_related = select_related or []
-        related_models = related_models or []
-        table_prefix = ""
-        excludable = excludable or ExcludableItems()
-
         if select_related:
             related_models = group_related_list(select_related)
+        instance, _ = cls._materialize_row(
+            row=row,
+            source_model=source_model,
+            related_models=related_models or [],
+            related_field=related_field,
+            excludable=excludable or ExcludableItems(),
+            current_relation_str=current_relation_str,
+            proxy_source_model=proxy_source_model,
+            plan_cache=plan_cache,
+            registry=registry,
+            scope=scope,
+        )
+        return instance
 
-        if related_field:
-            table_prefix = alias_for(current_relation_str)
+    @classmethod
+    def _materialize_row(  # noqa: CFQ002
+        cls,
+        row: ResultProxy,
+        source_model: type["Model"],
+        related_models: Any,
+        related_field: Optional["ForeignKeyField"],
+        excludable: ExcludableItems,
+        current_relation_str: str,
+        proxy_source_model: Optional[type["Model"]],
+        plan_cache: Optional[PlanCache],
+        registry: Optional[RowRegistry],
+        scope: Any,
+    ) -> tuple[Optional["Model"], bool]:
+        """
+        Builds a model (and its selected relations) from a database row, or
+        reuses the model already built for the same relation path and pk.
+
+        :param row: raw result row from the database
+        :type row: ResultProxy
+        :param source_model: model on which relation was defined
+        :type source_model: type[Model]
+        :param related_models: list or dict of related models
+        :type related_models: Union[list, dict]
+        :param related_field: field with relation declaration
+        :type related_field: Optional[ForeignKeyField]
+        :param excludable: structure of fields to include and exclude
+        :type excludable: ExcludableItems
+        :param current_relation_str: name of the relation field
+        :type current_relation_str: str
+        :param proxy_source_model: source model from which querysetproxy is constructed
+        :type proxy_source_model: Optional[type[Model]]
+        :param plan_cache: optional per-queryset plan cache
+        :type plan_cache: Optional[PlanCache]
+        :param registry: optional per-query identity map
+        :type registry: Optional[RowRegistry]
+        :param scope: registry key of the closest parent reached through a
+            many-to-many relation, ``None`` outside of such relations
+        :type scope: Any
+        :return: the model (``None`` if the row has no pk for it) and a flag
+            whether it was reused from the registry, i.e. built from an
+            earlier row and already registered on its parent
+        :rtype: tuple[Optional[Model], bool]
+        """
+        table_prefix = alias_for(current_relation_str) if related_field else ""
 
         plan = cls.get_or_build_row_plan(table_prefix, excludable, plan_cache)
         key: Optional[RegistryKey] = None
         if registry is not None and plan.pk_column is not None:
             pk = row[plan.pk_column]
             if pk is None:
-                return None
+                return None, False
             key = (scope, table_prefix, pk)
             existing = registry.instances.get(key)
             if existing is not None:
                 if cls._selects_multi_relation(registry, table_prefix, related_models):
-                    children = cls._populate_nested_models_from_row(
+                    children, reused = cls._populate_nested_models_from_row(
                         item={},
                         row=row,
                         related_models=related_models,
@@ -172,11 +222,11 @@ class ModelRow(NewBaseModel):
                         parent_key=key,
                         scope=scope,
                     )
-                    cls._attach_children(existing, children)
-                return existing
+                    cls._attach_children(existing, children, reused)
+                return existing, True
 
-        item = cls._populate_nested_models_from_row(
-            item=item,
+        item, _ = cls._populate_nested_models_from_row(
+            item={},
             row=row,
             related_models=related_models,
             excludable=excludable,
@@ -200,7 +250,7 @@ class ModelRow(NewBaseModel):
             instance.set_save_status(True)
             if key is not None:
                 registry.instances[key] = instance  # type: ignore[union-attr]
-        return instance
+        return instance, False
 
     @classmethod
     def _selects_multi_relation(
@@ -227,21 +277,28 @@ class ModelRow(NewBaseModel):
         return result
 
     @classmethod
-    def _attach_children(cls, instance: "Model", children: dict) -> None:
+    def _attach_children(
+        cls, instance: "Model", children: dict, reused: AbstractSet[str]
+    ) -> None:
         """
         Registers children read from a repeated row on an already built model.
 
         Only reverse, many-to-many and through relations can bring new children;
         a forward foreign key of the same model always resolves to the same,
-        already registered instance.
+        already registered instance. Children reused from the registry were
+        registered on this model by the row that built them, so they are skipped.
 
         :param instance: model built from an earlier row
         :type instance: Model
         :param children: related models read from the current row by field name
         :type children: dict
+        :param reused: names of relations whose child was reused from the registry
+        :type reused: AbstractSet[str]
         """
         model_fields = cls.ormar_config.model_fields
         for name, child in children.items():
+            if name in reused:
+                continue
             field = model_fields[name]
             if child is not None and (
                 field.is_multi or field.virtual or field.is_through
@@ -263,7 +320,7 @@ class ModelRow(NewBaseModel):
         registry: Optional[RowRegistry] = None,
         parent_key: Optional[RegistryKey] = None,
         scope: Any = None,
-    ) -> dict:
+    ) -> tuple[dict, set[str]]:
         """
         Traverses structure of related models and populates the nested models
         from the database row.
@@ -298,9 +355,11 @@ class ModelRow(NewBaseModel):
         :param scope: registry scope of the model the children belong to
         :type scope: Any
         :return: dictionary with keys corresponding to model fields names
-        and values are database values
-        :rtype: dict
+            and values are database values, and names of relations whose
+            child was reused from the registry
+        :rtype: tuple[dict, set[str]]
         """
+        reused: set[str] = set()
 
         for related in related_models:
             field = cls.ormar_config.model_fields[related]
@@ -317,27 +376,25 @@ class ModelRow(NewBaseModel):
                 current_relation_str=current_relation_str,
                 related=related,
             )
-            child = model_cls.from_row(
-                row,
-                related_models=remainder,
+            child, child_reused = model_cls._materialize_row(
+                row=row,
+                source_model=source_model,
+                related_models=remainder or [],
                 related_field=field,
                 excludable=excludable,
                 current_relation_str=relation_str,
-                source_model=source_model,
                 proxy_source_model=proxy_source_model,
                 plan_cache=plan_cache,
                 registry=registry,
                 scope=parent_key if field.is_multi else scope,
             )
             item[related] = child
-            if (
+            if child_reused:
+                reused.add(related)
+            elif (
                 field.is_multi
                 and child
                 and not model_excludable.is_excluded(field.through.get_name())
-                and (
-                    registry is None
-                    or child.__dict__.get(field.through.get_name()) is None
-                )
             ):
                 cls._populate_through_instance(
                     row=row,
@@ -350,7 +407,7 @@ class ModelRow(NewBaseModel):
                     plan_cache=plan_cache,
                 )
 
-        return item
+        return item, reused
 
     @staticmethod
     def _process_remainder_and_relation_string(
