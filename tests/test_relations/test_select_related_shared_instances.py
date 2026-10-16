@@ -165,3 +165,23 @@ async def test_repeated_rows_attach_new_children_to_existing_models():
             ]
             assert [g.name for g in books["Second"].genres] == ["Drama"]
             assert len(books["Second"].chapters) == 2
+
+
+@pytest.mark.asyncio
+async def test_not_selected_fk_shares_pk_only_model():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            await create_library()
+            chapters = await Chapter.objects.order_by("id").all()
+
+            first, second, third = chapters[:3]
+            assert first.book is second.book
+            assert first.book is not third.book
+            assert first.book.title is None
+            assert sorted(c.title for c in first.book.chapters) == [
+                "First-1",
+                "First-2",
+            ]
+
+            await first.book.load()
+            assert second.book.title == "First"

@@ -4,7 +4,7 @@
 
 ### ✨ Breaking changes
 
-* **`select_related` shares related models across rows**
+* **Query results share related models across rows**
 
     A related model reached through the same relation with the same pk is now
     one instance in the whole query result, the same way `prefetch_related`
@@ -17,6 +17,11 @@
       `chapter.book.chapters` contains all loaded chapters of that book, not
       only the one it was reached from, so code iterating those relations
       sees all of them.
+
+    The same applies to pk-only models of relations that are not selected:
+    with `Chapter.objects.all()`, chapters of the same book share one `book`
+    instance with only its pk set, so loading it with `await chapter.book.load()`
+    fills it in for all of them.
 
     Models reached through a many-to-many relation stay separate per parent, so
     each keeps its own through model, and the same model on two different
@@ -46,12 +51,16 @@
   Queries over deep or fanned-out relations are 2–14× faster (e.g. 1000 rows
   joined five levels deep with a many-to-many: 1.24s → 0.09s).
   [#1851](https://github.com/ormar-orm/ormar/pull/1851)
+* Queries also build one pk-only model per related pk for foreign keys that are
+  not selected, instead of one per row, so e.g. loading 1000 books by 50
+  authors is 1.8× faster.
 * On SQLite the engine now runs in AUTOCOMMIT, like MySQL, instead of switching
   every pooled connection into AUTOCOMMIT and back, which cost two hops to the
   driver thread per query. Standalone queries (`get`, `create`, `save`,
   `delete`, `count`, ...) are 25–45% faster; transactions keep using an
   explicit `BEGIN`, so savepoints and rollbacks work as before. Postgres is
   unchanged and a user-supplied `isolation_level` is respected.
+  [#1852](https://github.com/ormar-orm/ormar/pull/1852)
 
 ### 🐛 Fixes
 
