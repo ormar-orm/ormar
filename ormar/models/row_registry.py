@@ -19,9 +19,11 @@ class RowRegistry:
     once and reused by every row it appears in, instead of being constructed
     per row and merged afterwards. Models below a many-to-many edge are scoped
     to their parent, because the through instance of that link is stored on
-    the child. The registry lives only for one result set.
+    the child. Pk-only models of not selected foreign keys are shared the same
+    way. The registry lives only for one result set.
 
-    :ivar instances: built models keyed by ``(scope, table_prefix, pk)``
+    :ivar instances: built models keyed by ``(scope, table_prefix, pk)``, and
+        pk-only models keyed by ``((scope, table_prefix), field_name, pk)``
     :ivar subtree_has_multi: memo of whether the relations selected below a
         ``(model_cls, table_prefix)`` position contain a reverse or
         many-to-many relation that later rows can still extend

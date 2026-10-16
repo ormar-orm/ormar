@@ -34,12 +34,15 @@ class RowExtractionPlan:
         test for a populated pk without a per-row attribute lookup
     :ivar pk_column: prefixed db column holding the pk, ``None`` when the pk is
         not among the selected columns
+    :ivar foreign_key_names: selected forward foreign key fields, whose raw pk
+        value becomes a pk-only related model unless the relation is selected
     """
 
     column_mappings: tuple[tuple[str, str], ...]
     excluded_field_names: frozenset[str]
     pk_field_name: str
     pk_column: Optional[str] = None
+    foreign_key_names: tuple[str, ...] = ()
 
 
 PlanCache = dict[tuple[type, str, int], RowExtractionPlan]
@@ -240,6 +243,8 @@ class ModelRow(NewBaseModel):
             scope=scope,
         )
         item = cls.apply_row_plan(plan, row, item)
+        if registry is not None and plan.foreign_key_names:
+            cls._share_pk_only_models(plan, item, registry, (scope, table_prefix))
 
         instance: Optional["Model"] = None
         if item.get(plan.pk_field_name, None) is not None:
@@ -251,6 +256,42 @@ class ModelRow(NewBaseModel):
             if key is not None:
                 registry.instances[key] = instance  # type: ignore[union-attr]
         return instance, False
+
+    @classmethod
+    def _share_pk_only_models(
+        cls,
+        plan: RowExtractionPlan,
+        item: dict,
+        registry: RowRegistry,
+        position: tuple[Any, str],
+    ) -> None:
+        """
+        Replaces raw foreign key values of not selected relations with pk-only
+        related models shared by every row of the query that points to the
+        same pk from the same position.
+
+        :param plan: extraction plan of the model being built
+        :type plan: RowExtractionPlan
+        :param item: model kwargs read from the row, updated in place
+        :type item: dict
+        :param registry: per-query identity map
+        :type registry: RowRegistry
+        :param position: scope and table prefix of the model being built
+        :type position: tuple[Any, str]
+        """
+        model_fields = cls.ormar_config.model_fields
+        instances = registry.instances
+        for field_name in plan.foreign_key_names:
+            value = item[field_name]
+            field = cast("ForeignKeyField", model_fields[field_name])
+            if value is None or value.__class__ is field.to:
+                continue
+            key = (position, field_name, value)
+            related = instances.get(key)
+            if related is None:
+                related = field.construct_pk_only_model(value)
+                instances[key] = related
+            item[field_name] = related
 
     @classmethod
     def _selects_multi_relation(
@@ -563,11 +604,18 @@ class ModelRow(NewBaseModel):
             (column for column, field_name in mappings if field_name == pk_name),
             None,
         )
+        model_fields = cls.ormar_config.model_fields
+        foreign_key_names = tuple(
+            field_name
+            for _, field_name in mappings
+            if model_fields[field_name].is_relation
+        )
         return RowExtractionPlan(
             column_mappings=mappings,
             excluded_field_names=excluded,
             pk_field_name=pk_name,
             pk_column=pk_column,
+            foreign_key_names=foreign_key_names,
         )
 
     @classmethod
