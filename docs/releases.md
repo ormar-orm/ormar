@@ -9,8 +9,17 @@
   only in case cannot both be stored. `IndexColumns` now also accepts SQLAlchemy
   expressions for arbitrary functional indexes. On MySQL this needs 8.0.13+.
   [#615](https://github.com/collerek/ormar/issues/615)
+* Add `flatten_fields` and `flatten_all` to `get_pydantic()`, matching
+  `model_dump()` and `QuerySet.flatten_fields()`. Flattened relations are
+  generated as the related model's pk type (a list of pks for many-to-many and
+  reverse relations) and accept a pk, dict or model, so one generated model
+  works for both requests and responses — thanks @iron3oxide for the initial
+  idea in #893 [#1850](https://github.com/ormar-orm/ormar/pull/1850)
 
 ### 🐛 Fixes
+
+* Fix `get_pydantic()` cache being keyed by model class name, so same-named
+  models from different modules could get each other's generated models.
 
 * Support pydantic 2.14 (upper bound raised to `<2.15`). On 2.14 reverse
   relation fields were dropped from the cached model schema, so they were
