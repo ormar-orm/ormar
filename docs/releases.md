@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### ✨ Breaking changes
+
+* **`select_related` shares related models across rows**
+
+    A related model reached through the same relation with the same pk is now
+    one instance in the whole query result, the same way `prefetch_related`
+    already loads them. Previously each joined row got its own copy. With
+    `Chapter.objects.select_related("book").all()`:
+
+    * `chapters[0].book is chapters[1].book` for chapters of the same book, so
+      changing one of them is visible through all of them.
+    * Reverse relations of a shared model list every loaded row:
+      `chapter.book.chapters` contains all loaded chapters of that book, not
+      only the one it was reached from, so code iterating those relations
+      sees all of them.
+
+    Models reached through a many-to-many relation stay separate per parent, so
+    each keeps its own through model, and the same model on two different
+    relations (e.g. `author` and `editor`) stays two instances. Serialized
+    results (`model_dump()`, FastAPI responses) are unchanged. If you relied on
+    per-row copies, take an independent one with `model_copy()` before changing
+    it. [#1851](https://github.com/ormar-orm/ormar/pull/1851)
+
 ### ✨ Features
 
 * Add `IndexColumns(..., case_insensitive=True)` to build a case-insensitive
@@ -20,13 +43,9 @@
 
 * `select_related` queries now build each related model once per query result
   instead of once per joined row, and reuse it in every row it appears in.
-  Queries over deep or fanned-out relations are 2–11× faster (e.g. 1000 rows
-  joined five levels deep with a many-to-many: 1.24s → 0.11s). As a result,
-  reverse relations of shared models list every row of the result: with
-  `Chapter.objects.select_related("book").all()`, `chapter.book.chapters`
-  now contains all loaded chapters of that book instead of only one.
-  Models reached through a many-to-many relation stay separate per parent, so
-  each keeps its own through model.
+  Queries over deep or fanned-out relations are 2–14× faster (e.g. 1000 rows
+  joined five levels deep with a many-to-many: 1.24s → 0.09s).
+  [#1851](https://github.com/ormar-orm/ormar/pull/1851)
 
 ### 🐛 Fixes
 
