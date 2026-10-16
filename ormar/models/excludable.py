@@ -5,12 +5,14 @@ from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.utils import (
     PathParts,
     build_flatten_map,
+    extract_access_chains,
     get_relationship_alias_model_and_str,
     translate_list_to_dict,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import Model
+    from ormar.queryset.field_accessor import FieldAccessor
 
 
 Slot = Literal["include", "exclude", "flatten"]
@@ -187,6 +189,9 @@ class FlattenMap:
 
     def __bool__(self) -> bool:
         return self._flatten_all or bool(self._data)
+
+    def __repr__(self) -> str:
+        return f"FlattenMap(data={self._data!r}, flatten_all={self._flatten_all!r})"
 
 
 def walk_flatten_vs_selector(
@@ -876,3 +881,45 @@ def join_path(parts: PathParts, tail: Optional[str] = None) -> str:
     if tail is None:
         return "__".join(parts)
     return "__".join(parts + (tail,)) if parts else tail
+
+
+def resolve_flatten_map(
+    model_cls: type["Model"],
+    flatten_fields: Union[
+        set, list, str, tuple, dict, "FieldAccessor", FlattenMap, None
+    ],
+    flatten_all: bool,
+) -> Optional[FlattenMap]:
+    """
+    Produce a :class:`FlattenMap` from the input forms accepted by
+    ``flatten_fields``. Resolves dunder strings / lists / sets / nested dicts /
+    ``FieldAccessor`` chains against ``model_cls``; an already-resolved
+    ``FlattenMap`` is returned as-is.
+
+    :param model_cls: model from which flatten paths are rooted
+    :type model_cls: type[Model]
+    :param flatten_fields: user spec, nested dict, or FlattenMap
+    :type flatten_fields: Union[set, list, str, tuple, dict, FieldAccessor,
+        FlattenMap, None]
+    :param flatten_all: if True every relation flattens regardless of spec
+    :type flatten_all: bool
+    :raises QueryDefinitionError: when a flatten path is unknown, targets a
+        non-relation field or collides with another flatten path
+    :return: resolved FlattenMap, or None when nothing should flatten
+    :rtype: Optional[FlattenMap]
+    """
+    if flatten_all:
+        return FlattenMap(flatten_all=True)
+    if flatten_fields is None:
+        return None
+    if isinstance(flatten_fields, FlattenMap):
+        return flatten_fields
+    if isinstance(flatten_fields, dict):
+        return FlattenMap(data=flatten_fields)
+    excludable = ExcludableItems()
+    excludable.build(
+        items=extract_access_chains(flatten_fields),
+        model_cls=model_cls,
+        slot="flatten",
+    )
+    return excludable.flatten_map()

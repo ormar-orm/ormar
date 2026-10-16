@@ -284,7 +284,7 @@ Of course the end result is a string with json representation and not a dictiona
 
 ## get_pydantic()
 
-`get_pydantic(include: Union[set, dict] = None, exclude: Union[set, dict] = None)`
+`get_pydantic(include: Union[set, dict] = None, exclude: Union[set, dict] = None, flatten_fields: Union[set, list, str, tuple, dict, FieldAccessor] = None, flatten_all: bool = False)`
 
 This method allows you to generate `pydantic` models from your ormar models without you needing to retype all the fields.
 
@@ -368,6 +368,55 @@ Note how `Item` model above does not have a reference to `Category` although in 
     If required, you need to redefine/ manually copy them to generated pydantic model.
 
 Methods decorated with `@pydantic.computed_field` are also carried over to the generated model and follow the same `include` / `exclude` rules as regular fields, so they appear in the model's schema and `model_dump()` output (e.g. in `fastapi` responses).
+
+### Relations as primary keys
+
+By default, relations are generated as nested pydantic models. If you want a relation to be represented only by
+the primary key of the related model, pass it in the `flatten_fields` parameter, or use `flatten_all=True` to flatten every relation.
+Both work exactly like the same parameters of [`model_dump()`](../queries/select-columns.md#flatten_fields) and
+[`QuerySet.flatten_fields()`](../queries/select-columns.md#flatten_fields), so the generated model describes the flattened output.
+
+```python
+PydanticItem = Item.get_pydantic(flatten_fields="category")
+```
+
+Which will generate model equivalent of:
+
+```python
+class Item(BaseModel):
+    id: Optional[int]
+    name: Optional[str] = "test"
+    category: Optional[int] = None
+```
+
+The field type is the type of the related model's primary key (so it works with `UUID` or `str` primary keys as well).
+Many-to-many and reverse relations are generated as lists of primary keys.
+
+```python
+PydanticCategory = Category.get_pydantic(flatten_fields="items")
+# equivalent of:
+class Category(BaseModel):
+    id: Optional[int]
+    name: Optional[str]
+    items: Optional[list[int]] = None
+```
+
+The generated field accepts a bare primary key, a dict or an ormar model and reduces it to the primary key value.
+That means that the same model can be used both for requests (where you send `{"category": 1}`) and for responses
+(where you can return ormar models directly, even if they were not loaded with `flatten_fields`).
+
+Nested relations can be flattened as well, the parent relation stays a nested model. All input forms accepted by
+`flatten_fields` work (dunder strings, list/set/tuple, nested dict with Ellipsis and `FieldAccessor`):
+
+```python
+# position is a nested model, but item inside it is represented by its pk
+PydanticOrder = Order.get_pydantic(flatten_fields="position__item")
+PydanticOrder = Order.get_pydantic(flatten_fields=Order.position.item)
+```
+
+!!!note
+    The same validation rules as in `model_dump()` apply: flattening a non-relation field, an unknown relation or a relation
+    with sub-fields selected in `include`/`exclude` raises `QueryDefinitionError`. Excluding the whole relation is fine.
 
 ## load()
 

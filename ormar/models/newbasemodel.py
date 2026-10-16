@@ -27,11 +27,11 @@ from ormar.exceptions import ModelError, ModelPersistenceError, QueryDefinitionE
 from ormar.fields.foreign_key import ForeignKeyField
 from ormar.fields.parsers import decode_bytes, encode_json
 from ormar.models.excludable import (
-    ExcludableItems,
     FlattenMap,
     convert_all,
     filter_not_excluded_fields,
     normalize_to_dict,
+    resolve_flatten_map,
     skip_ellipsis,
 )
 from ormar.models.helpers.relations import expand_reverse_relationship
@@ -43,7 +43,7 @@ from ormar.models.metaclass import ModelMetaclass
 from ormar.models.modelproxy import ModelTableProxy
 from ormar.models.utils import Extra
 from ormar.queryset.field_accessor import FieldAccessor
-from ormar.queryset.utils import extract_access_chains, translate_list_to_dict
+from ormar.queryset.utils import translate_list_to_dict
 from ormar.relations.relation import Relation
 from ormar.relations.relation_manager import RelationsManager
 from ormar.warnings import OrmarDeprecatedSince020
@@ -1144,26 +1144,14 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         :return: resolved FlattenMap, or None when nothing should flatten
         :rtype: Optional[FlattenMap]
         """
-        if flatten_all:
-            return FlattenMap(flatten_all=True)
-
-        if flatten_fields is None:
+        if flatten_fields is None and not flatten_all:
             excludable = getattr(self, "__ormar_excludable__", None)
             return excludable.flatten_map() if excludable is not None else None
-
-        if isinstance(flatten_fields, FlattenMap):
-            return flatten_fields
-
-        if isinstance(flatten_fields, builtins.dict):
-            return FlattenMap(data=flatten_fields)
-
-        excludable = ExcludableItems()
-        excludable.build(
-            items=extract_access_chains(flatten_fields),
+        return resolve_flatten_map(
             model_cls=cast(type["Model"], type(self)),
-            slot="flatten",
+            flatten_fields=flatten_fields,
+            flatten_all=flatten_all,
         )
-        return excludable.flatten_map()
 
     @typing_extensions.deprecated(
         "The `json` method is deprecated; use `model_dump_json` instead.",
