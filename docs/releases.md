@@ -16,6 +16,18 @@
   works for both requests and responses — thanks @iron3oxide for the initial
   idea in #893 [#1850](https://github.com/ormar-orm/ormar/pull/1850)
 
+### ⚡ Performance
+
+* `select_related` queries now build each related model once per query result
+  instead of once per joined row, and reuse it in every row it appears in.
+  Queries over deep or fanned-out relations are 2–11× faster (e.g. 1000 rows
+  joined five levels deep with a many-to-many: 1.24s → 0.11s). As a result,
+  reverse relations of shared models list every row of the result: with
+  `Chapter.objects.select_related("book").all()`, `chapter.book.chapters`
+  now contains all loaded chapters of that book instead of only one.
+  Models reached through a many-to-many relation stay separate per parent, so
+  each keeps its own through model.
+
 ### 🐛 Fixes
 
 * Fix `get_pydantic()` cache being keyed by model class name, so same-named

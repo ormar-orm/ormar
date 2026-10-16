@@ -22,6 +22,7 @@ from ormar.exceptions import (
     ModelPersistenceError,
     QueryDefinitionError,
 )
+from ormar.models.row_registry import RowRegistry
 from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
 from ormar.queryset.actions.order_action import OrderAction
 from ormar.queryset.clause import FilterGroup, QueryClause
@@ -187,6 +188,7 @@ class QuerySet(Generic[T]):
         """
         if plan_cache is None:
             plan_cache = {}
+        registry = RowRegistry()
         result_rows = []
         for i, row in enumerate(rows):
             result_rows.append(
@@ -197,6 +199,7 @@ class QuerySet(Generic[T]):
                     source_model=self.model,
                     proxy_source_model=self.proxy_source_model,
                     plan_cache=plan_cache,
+                    registry=registry,
                 )
             )
             if i % 100 == 99:  # pragma: no cover
