@@ -256,3 +256,12 @@ async def test_related_model_fields_properly_decrypted():
         report2 = await Report.objects.select_related("filters__hash").get()
         assert report2.filters[0].name == "test1"
         assert report2.filters[0].hash.name == hashed_test1
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_encrypts_values():
+    async with base_ormar_config.database:
+        item = await Filter(name="before").save()
+        item.name = "after"
+        await Filter.objects.bulk_update([item])
+        assert (await Filter.objects.get(id=item.id)).name == "after"

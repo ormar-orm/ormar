@@ -1,7 +1,5 @@
 import base64
-import uuid
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Collection, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Collection, Optional, Union, cast
 
 from pydantic.plugin._schema_validator import (
     PluggableSchemaValidator,
@@ -66,19 +64,9 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         :return: dictionary of model that is about to be updated
         :rtype: dict[str, str]
         """
-        new_kwargs = cls.parse_non_db_fields(new_kwargs)
         new_kwargs = cls.substitute_models_with_pks(new_kwargs)
         new_kwargs = cls.reconvert_str_to_bytes(new_kwargs)
-        new_kwargs = cls.dump_all_json_fields_to_str(new_kwargs)
         new_kwargs = cls.translate_columns_to_aliases(new_kwargs)
-        new_kwargs = cls.translate_enum_columns(new_kwargs)
-        return new_kwargs
-
-    @classmethod
-    def translate_enum_columns(cls, new_kwargs: dict) -> dict:
-        for key, value in new_kwargs.items():
-            if isinstance(value, Enum):
-                new_kwargs[key] = value.name
         return new_kwargs
 
     @classmethod
@@ -118,25 +106,6 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         ):
             del new_kwargs[pkname]
         return new_kwargs
-
-    @classmethod
-    def parse_non_db_fields(cls, model_dict: dict) -> dict:
-        """
-        Receives dictionary of model that is about to be saved and changes uuid fields
-        to strings in bulk_update.
-
-        :param model_dict: dictionary of model that is about to be saved
-        :type model_dict: dict
-        :return: dictionary of model that is about to be saved
-        :rtype: dict
-        """
-        for name, field in cls.ormar_config.model_fields.items():
-            if field.__type__ == uuid.UUID and model_dict.get(name) is not None:
-                parsers = {"string": lambda x: str(x), "hex": lambda x: "%.32x" % x.int}
-                uuid_format = field.column_type.uuid_format
-                parser: Callable[..., Any] = parsers.get(uuid_format, lambda x: x)
-                model_dict[name] = parser(model_dict[name])
-        return model_dict
 
     @classmethod
     def substitute_models_with_pks(cls, model_dict: dict) -> dict:  # noqa  CCR001
