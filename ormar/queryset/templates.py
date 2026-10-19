@@ -3,9 +3,25 @@ Read statement templates: per-call values become named bind parameters so a
 statement built once per query shape can be reused with new values.
 """
 
-from typing import TYPE_CHECKING, Any, Iterable, Iterator, List, Tuple, Union
+import os
+from collections import OrderedDict
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+)
 
 import sqlalchemy
+from sqlalchemy.engine.interfaces import Dialect
+from sqlalchemy.sql import Executable
 from sqlalchemy.sql.elements import BindParameter
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -16,6 +32,133 @@ if TYPE_CHECKING:  # pragma: no cover
 
 LIMIT_SLOT = "ormar_limit"
 OFFSET_SLOT = "ormar_offset"
+TEMPLATE_CACHE_SIZE = 512
+# Test-suite safety net: every template hit is also built fresh and compared.
+CROSS_CHECK = os.environ.get("ORMAR_TEMPLATE_CROSS_CHECK") == "1"
+
+
+class SelectTemplate(NamedTuple):
+    """A cached read statement and the values to bind for one call."""
+
+    statement: Executable
+    params: Dict[str, Any]
+
+
+class TemplateCache:
+    """Least-recently-used cache of read statements of one model, by shape."""
+
+    def __init__(self, max_size: int = TEMPLATE_CACHE_SIZE) -> None:
+        """
+        :param max_size: number of statement shapes kept
+        :type max_size: int
+        """
+        self.max_size = max_size
+        self.entries: "OrderedDict[Any, Any]" = OrderedDict()
+
+    def get(self, key: Any) -> Any:
+        """
+        Return the statement cached for a shape, or None.
+
+        :param key: statement shape
+        :type key: Any
+        :return: cached statement or None
+        :rtype: Any
+        """
+        statement = self.entries.get(key)
+        if statement is not None:
+            self.entries.move_to_end(key)
+        return statement
+
+    def put(self, key: Any, statement: Any) -> None:
+        """
+        Cache the statement of a shape, evicting the least recently used one.
+
+        :param key: statement shape
+        :type key: Any
+        :param statement: statement to cache
+        :type statement: Any
+        """
+        self.entries[key] = statement
+        if len(self.entries) > self.max_size:
+            self.entries.popitem(last=False)
+
+    def clear(self) -> None:
+        """Remove every cached statement."""
+        self.entries.clear()
+
+
+TEMPLATE_CACHES: Dict[type, TemplateCache] = {}
+
+
+def template_cache_for(model_cls: Type[Any]) -> TemplateCache:
+    """
+    Return the statement template cache of a model class.
+
+    :param model_cls: model class
+    :type model_cls: Type[Any]
+    :return: the model's template cache
+    :rtype: TemplateCache
+    """
+    cache = TEMPLATE_CACHES.get(model_cls)
+    if cache is None:
+        cache = TEMPLATE_CACHES.setdefault(model_cls, TemplateCache())
+    return cache
+
+
+def template_params(
+    actions: List["FilterAction"], limit: Optional[int], offset: Optional[int]
+) -> Dict[str, Any]:
+    """
+    Collect the values a template binds for one call, keyed like the slots
+    ``SlotBinder`` names.
+
+    :param actions: filter actions in canonical order
+    :type actions: List[FilterAction]
+    :param limit: effective limit (applied when not None)
+    :type limit: Optional[int]
+    :param offset: effective offset (applied when truthy)
+    :type offset: Optional[int]
+    :return: values per slot name
+    :rtype: Dict[str, Any]
+    """
+    params = {}
+    for index, action in enumerate(actions):
+        value = action.bound_value()
+        if action.operator != "isnull" and value is not None:
+            params[f"ormar_p{index}"] = value
+    if limit is not None:
+        params[LIMIT_SLOT] = limit
+    if offset:
+        params[OFFSET_SLOT] = offset
+    return params
+
+
+def assert_same_statement(
+    cached: Executable, fresh: Executable, params: Dict[str, Any], dialect: Dialect
+) -> None:
+    """
+    Fail if a cached template would run different SQL or values than the
+    statement built fresh for the same call.
+
+    :param cached: statement taken from the template cache
+    :type cached: Executable
+    :param fresh: statement built for this call
+    :type fresh: Executable
+    :param params: values bound to the cached statement
+    :type params: Dict[str, Any]
+    :param dialect: dialect the statements run on
+    :type dialect: Dialect
+    :raises AssertionError: when the statements differ
+    """
+    cached_sql = cached.compile(dialect=dialect)  # type: ignore[attr-defined]
+    fresh_sql = fresh.compile(dialect=dialect)  # type: ignore[attr-defined]
+    cached_values = cached_sql.construct_params(params)
+    if str(cached_sql) != str(fresh_sql) or cached_values != fresh_sql.params:
+        raise AssertionError(
+            "Query template mismatch:\n"
+            f"cached: {cached_sql} {cached_values}\n"
+            f"fresh:  {fresh_sql} {fresh_sql.params}"
+        )
 
 
 def iter_actions(

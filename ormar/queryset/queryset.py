@@ -3,6 +3,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Callable,
     Generic,
     Iterable,
     Optional,
@@ -23,16 +24,20 @@ from ormar.exceptions import (
     QueryDefinitionError,
 )
 from ormar.models.row_registry import RowRegistry
-from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
+from ormar.queryset import FieldAccessor, FilterQuery, SelectAction, templates
 from ormar.queryset.actions.order_action import OrderAction
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
 from ormar.queryset.templates import (
+    SelectTemplate,
     SlotBinder,
+    canonical_actions,
     clauses_shape,
     excludable_shape,
     order_shape,
+    template_cache_for,
+    template_params,
 )
 from ormar.queryset.utils import (
     extract_access_chains,
@@ -309,6 +314,87 @@ class QuerySet(Generic[T]):
         exp = qry.build_select_expression()
         # print("\n", exp.compile(compile_kwargs={"literal_binds": True}))
         return exp
+
+    def build_select_template(
+        self,
+        variant: tuple = (),
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order_bys: Optional[list] = None,
+        wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]] = None,
+    ) -> SelectTemplate:
+        """
+        Return the read statement for this queryset from the model's template
+        cache (building and caching it on the first call of a shape) together
+        with the values to bind for this call.
+
+        :param variant: how the select is used (plain, count, aggregate, ...)
+        :type variant: tuple
+        :param limit: number to limit the query
+        :type limit: Optional[int]
+        :param offset: number to offset by
+        :type offset: Optional[int]
+        :param order_bys: list of order actions
+        :type order_bys: Optional[list]
+        :param wrap: turns the built select into the executed statement
+        :type wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]]
+        :return: statement and values to bind
+        :rtype: SelectTemplate
+        """
+        actions = canonical_actions(self.filter_clauses, self.exclude_clauses)
+        params = template_params(
+            actions,
+            limit if limit is not None else self.limit_count,
+            offset or self.query_offset,
+        )
+        key = self.template_key(variant, limit, offset, order_bys)
+        cache = template_cache_for(self.model)
+        statement = cache.get(key)
+        if statement is None:
+            statement = self.build_template_statement(
+                actions, limit, offset, order_bys, wrap
+            )
+            cache.put(key, statement)
+        elif templates.CROSS_CHECK:
+            fresh = self.build_template_statement(
+                actions, limit, offset, order_bys, wrap
+            )
+            templates.assert_same_statement(
+                statement, fresh, params, self.model_config.database.dialect
+            )
+        return SelectTemplate(statement, params)
+
+    def build_template_statement(
+        self,
+        actions: list,
+        limit: Optional[int],
+        offset: Optional[int],
+        order_bys: Optional[list],
+        wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]],
+    ) -> Any:
+        """
+        Build the read statement with named value slots.
+
+        :param actions: filter actions in canonical order
+        :type actions: list
+        :param limit: number to limit the query
+        :type limit: Optional[int]
+        :param offset: number to offset by
+        :type offset: Optional[int]
+        :param order_bys: list of order actions
+        :type order_bys: Optional[list]
+        :param wrap: turns the built select into the executed statement
+        :type wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]]
+        :return: statement to execute
+        :rtype: Any
+        """
+        select = self.build_select_expression(
+            limit=limit,
+            offset=offset,
+            order_bys=order_bys,
+            binder=SlotBinder(actions),
+        )
+        return wrap(select) if wrap is not None else select
 
     def template_key(
         self,

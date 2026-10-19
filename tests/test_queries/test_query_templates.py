@@ -1,10 +1,18 @@
+import functools
 from typing import Optional
 
 import pytest
 import pytest_asyncio
 
 import ormar
-from ormar.queryset.templates import SlotBinder, canonical_actions
+from ormar.queryset import templates
+from ormar.queryset.queries.query import Query
+from ormar.queryset.templates import (
+    SlotBinder,
+    TemplateCache,
+    canonical_actions,
+    template_cache_for,
+)
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -134,3 +142,76 @@ async def test_sql_changing_differences_get_distinct_keys(connected):
     keys = [key(queryset) for queryset in variants]
     assert len(set(keys)) == len(keys)
     assert key(variants[1], variant=("count",)) != keys[1]
+
+
+class BuildCounter:
+    def __init__(self, original):
+        self.original = original
+        self.calls = 0
+
+    def __get__(self, instance, owner):
+        return functools.partial(self.call, instance)
+
+    def call(self, query, *args, **kwargs):
+        self.calls += 1
+        return self.original(query, *args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_template_hit_reuses_statement(connected):
+    template_cache_for(Book).clear()
+    first = Book.objects.filter(id=1).build_select_template()
+    second = Book.objects.filter(id=2).build_select_template()
+    assert first.statement is second.statement
+    assert (first.params, second.params) == ({"ormar_p0": 1}, {"ormar_p0": 2})
+
+
+@pytest.mark.asyncio
+async def test_template_params_skip_values_without_binds(connected):
+    template = (
+        Book.objects.filter(title=None, year__isnull=True, id=3)
+        .limit(4)
+        .offset(0)
+        .build_select_template()
+    )
+    assert template.params == {"ormar_p2": 3, "ormar_limit": 4}
+
+
+def test_cache_is_bounded():
+    cache = TemplateCache(max_size=2)
+    for name in ("a", "b", "c"):
+        cache.put(name, name)
+    assert (cache.get("a"), cache.get("b"), cache.get("c")) == (None, "b", "c")
+
+
+@pytest.mark.asyncio
+async def test_hit_without_cross_check_skips_building(connected, monkeypatch):
+    template_cache_for(Book).clear()
+    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    Book.objects.filter(title="warm").build_select_template()
+    counter = BuildCounter(Query.build_select_expression)
+    monkeypatch.setattr(Query, "build_select_expression", counter)
+    Book.objects.filter(title="hit").build_select_template()
+    assert counter.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_cross_check_detects_mismatch(connected, monkeypatch):
+    template_cache_for(Book).clear()
+    monkeypatch.setattr(templates, "CROSS_CHECK", True)
+    monkeypatch.setattr(
+        Book.objects.__class__, "template_key", lambda *args, **kwargs: ("same",)
+    )
+    Book.objects.filter(title="a").build_select_template()
+    with pytest.raises(AssertionError, match="template"):
+        Book.objects.filter(year=1).build_select_template()
+
+
+@pytest.mark.asyncio
+async def test_cross_check_passes_for_matching_hit(connected, monkeypatch):
+    template_cache_for(Book).clear()
+    monkeypatch.setattr(templates, "CROSS_CHECK", True)
+    queryset = Book.objects.select_related("author").filter(title="a").limit(2)
+    first = queryset.build_select_template()
+    second = Book.objects.select_related("author").filter(title="b").limit(3)
+    assert second.build_select_template().statement is first.statement
