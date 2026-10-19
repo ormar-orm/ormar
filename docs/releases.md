@@ -51,6 +51,10 @@
   concurrent queries every extra one opened a new database connection; with
   10 concurrent `get()` calls on PostgreSQL this is 4–6× faster. Pass
   `pool_size` to `DatabaseConnection` to size the pool for your concurrency.
+* Adding an already saved child to a reverse `ForeignKey` relation with
+  `add()` no longer queries the database to check that the child exists
+  first; the check now runs only for unsaved children (e.g. with a preset
+  pk), so `add()` of saved children is ~2× faster.
 * `select_related` queries now build each related model once per query result
   instead of once per joined row, and reuse it in every row it appears in.
   Queries over deep or fanned-out relations are 2–14× faster (e.g. 1000 rows
