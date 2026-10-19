@@ -2,7 +2,8 @@
 DatabaseConnection module - provides async database connection management.
 """
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import AsyncExitStack, asynccontextmanager
 from contextvars import ContextVar
 from typing import Any, AsyncIterator, Optional
 
@@ -37,9 +38,12 @@ class DatabaseConnection:
         :param url: Database URL with an async driver (e.g., postgresql+asyncpg://)
         :param options: Additional engine options passed to
             ``create_async_engine``; ``pool_size`` defaults to 10 and
-            ``max_overflow`` to 10
+            ``max_overflow`` to 10. ``min_connections`` (default 0) opens that
+            many pooled connections on ``connect()`` (at most ``pool_size``),
+            so the first concurrent queries do not wait for new connections.
         """
         self._force_rollback = options.pop("force_rollback", False)
+        self._min_connections = options.pop("min_connections", 0)
         self._url = url
         # Set reasonable pool defaults if not provided; overflow connections are
         # closed on checkin, so pool_size should cover the usual concurrency
@@ -86,12 +90,31 @@ class DatabaseConnection:
                     cursor.execute("PRAGMA foreign_keys=ON")
                     cursor.close()
 
+            await self._open_min_connections()
+
             if self._force_rollback:
                 assert self._global_transaction is None
                 self._global_transaction = Transaction(
                     self, force_rollback=self._force_rollback
                 )
                 await self._global_transaction.__aenter__()
+
+    async def _open_min_connections(self) -> None:
+        """
+        Open ``min_connections`` pooled connections at once and return them to
+        the pool, capped at the pool size (connections beyond it are closed
+        when returned).
+        """
+        assert self._engine is not None
+        count = min(self._min_connections, self._options["pool_size"])
+        if count > 0:
+            async with AsyncExitStack() as stack:
+                await asyncio.gather(
+                    *(
+                        stack.enter_async_context(self._engine.connect())
+                        for _ in range(count)
+                    )
+                )
 
     async def disconnect(self) -> None:
         """
