@@ -145,4 +145,6 @@ async def test_write_cross_check_detects_mismatch(connected, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pk_column_property(connected):
-    assert Item(name="x").pk_column is Item.ormar_config.table.c.id
+    item = Item(name="x")
+    assert item.pk_column is Item.ormar_config.table.c.id
+    assert item.pk_column is Item.ormar_config.table.c.id
