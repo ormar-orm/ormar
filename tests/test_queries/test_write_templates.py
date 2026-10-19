@@ -10,6 +10,7 @@ import sqlalchemy as sa
 
 import ormar
 from ormar.databases.native import compiler
+from ormar.models import NewBaseModel
 from ormar.queryset import templates
 from ormar.queryset.templates import (
     build_pk_select,
@@ -321,8 +322,10 @@ async def test_direct_batch_binding_matches_expanded_binding(connected, monkeypa
 @pytest.mark.asyncio
 async def test_bulk_create_of_trusted_models_skips_model_dump(connected, monkeypatch):
     monkeypatch.setattr(templates, "CROSS_CHECK", False)
-    counter = mock.Mock(wraps=Item.model_dump)
-    monkeypatch.setattr(Item, "model_dump", counter)
+    counter = mock.create_autospec(
+        NewBaseModel.model_dump, side_effect=NewBaseModel.model_dump
+    )
+    monkeypatch.setattr(NewBaseModel, "model_dump", counter)
     async with base_ormar_config.database.transaction(force_rollback=True):
         await Item.objects.bulk_create([Item(name="d1"), Item(name="d2")])
         assert counter.call_count == 0
@@ -337,7 +340,7 @@ class WrongDump:
 @pytest.mark.asyncio
 async def test_trusted_dump_cross_check_detects_mismatch(connected, monkeypatch):
     monkeypatch.setattr(templates, "CROSS_CHECK", True)
-    monkeypatch.setattr(Item, "model_dump", WrongDump())
+    monkeypatch.setattr(NewBaseModel, "model_dump", WrongDump())
     with pytest.raises(AssertionError, match="Trusted dump mismatch"):
         await Item.objects.bulk_create([Item(name="w")])
 
@@ -356,3 +359,16 @@ async def test_direct_binding_of_one_statement_matches_expanded(connected, monke
     expanded = backend.compiler.bind(template.statement, template.params)
     assert direct.sql == expanded.sql
     assert direct.args == expanded.args
+
+
+@pytest.mark.asyncio
+async def test_literal_execute_binds_are_rendered(connected):
+    table = Item.ormar_config.table
+    statement = table.select().where(
+        table.c.name == sa.bindparam("name_value", literal_execute=True)
+    )
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Item(name="lit").save()
+        async with base_ormar_config.database.get_query_executor() as executor:
+            rows = await executor.fetch_all(statement, {"name_value": "lit"})
+    assert [row["name"] for row in rows] == ["lit"]

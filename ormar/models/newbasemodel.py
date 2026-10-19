@@ -144,6 +144,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         _relation_field_names: Optional[frozenset[str]]
         _required_row_fields: frozenset[str]
         _row_relation_names: tuple[str, ...]
+        _row_field_order: tuple[str, ...]
         _trusted_rows: Optional[bool]
         ormar_config: OrmarConfig
 
@@ -301,20 +302,29 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             ),
         )
         type.__setattr__(cls, "_row_relation_names", tuple(cls.extract_related_names()))
+        type.__setattr__(cls, "_row_field_order", tuple(cls.model_fields))
         type.__setattr__(cls, "_trusted_rows", trusted)
         return trusted
 
     @classmethod
     def flat_row_model(cls) -> bool:
         """
-        Return whether the model has ``trusted_row_construction()`` and no
-        relations at all, so its rows and its ``model_dump()`` hold plain column
-        values only.
+        Return whether the model has ``trusted_row_construction()``, no
+        relations at all and no custom serialization (serializers or an
+        overridden ``model_dump``), so its rows and its ``model_dump()`` hold
+        plain column values only.
 
         :return: True for trusted models without relations
         :rtype: bool
         """
-        return cls.trusted_row_construction() and not cls._row_relation_names
+        decorators = cls.__pydantic_decorators__
+        return (
+            cls.trusted_row_construction()
+            and not cls._row_relation_names
+            and not decorators.field_serializers
+            and not decorators.model_serializers
+            and cls.model_dump is NewBaseModel.model_dump
+        )
 
     @classmethod
     def _construct_from_row(
@@ -331,7 +341,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         :param excluded: field names excluded from the query
         :type excluded: AbstractSet[str]
         :param values: field values of the row, used as the instance's
-            ``__dict__`` when it holds every field
+            ``__dict__`` when it holds every field in field order
         :type values: dict[str, Any]
         :return: model instance
         :rtype: Self
@@ -341,7 +351,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         object.__setattr__(instance, "__pk_only__", False)
         object.__setattr__(instance, "__ormar_excludable__", None)
         model_fields = cls.model_fields
-        if not excluded and len(values) == len(model_fields):
+        if not excluded and tuple(values) == cls._row_field_order:
             data = values
         else:
             data = {

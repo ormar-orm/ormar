@@ -11,6 +11,7 @@ import pytest
 import pytest_asyncio
 
 import ormar
+from ormar.models.excludable import ExcludableItems
 from ormar.queryset import queryset, templates
 from tests.lifespan import init_tests
 from tests.settings import create_config
@@ -81,6 +82,17 @@ class Secret(ormar.Model):
         encrypt_secret="s3cr3t",
         encrypt_backend=ormar.EncryptBackends.FERNET,
     )
+
+
+class Serialized(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="trusted_serialized")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=100)
+
+    @pydantic.field_serializer("name")
+    def lower(self, value: str) -> str:
+        return value.lower()
 
 
 class EnumValues(ormar.Model):
@@ -323,3 +335,37 @@ async def test_rows_without_related_values_skip_init(connected, monkeypatch):
         assert pets[0].owner is None
         assert pets[1].owner.pk == owner.pk
         assert pets[1] in (await Owner.objects.select_related("pets").get()).pets
+
+
+@pytest.mark.asyncio
+async def test_bulk_create_keeps_field_serializers(connected):
+    assert Serialized.trusted_row_construction() is True
+    assert Serialized.flat_row_model() is False
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Serialized.objects.bulk_create([Serialized(name="ABC")])
+        assert [s.name for s in await Serialized.objects.all()] == ["abc"]
+
+
+def test_flat_rows_merge_duplicate_pks_and_keep_field_order():
+    row = {
+        "id": 1,
+        "name": "n",
+        "amount": decimal.Decimal("1"),
+        "ratio": 1.0,
+        "flag": True,
+        "day": datetime.date(2020, 1, 1),
+        "stamp": datetime.datetime(2020, 1, 1),
+        "payload": {},
+        "uid": uuid.UUID(int=1),
+        "color": Color.RED,
+        "blob": b"x",
+        "note": None,
+    }
+    other = {**row, "id": 2}
+    built = Plain.from_flat_rows(
+        [row, {**row, "name": "dup"}, other], ExcludableItems(), {}, None
+    )
+    assert [(item.id, item.name) for item in built] == [(1, "n"), (2, "n")]
+    reordered = dict(reversed(list(row.items())))
+    trusted = Plain._construct_from_row(frozenset(), reordered)
+    assert list(trusted.__dict__) == list(Plain.model_fields)

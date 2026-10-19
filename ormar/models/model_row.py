@@ -178,7 +178,8 @@ class ModelRow(NewBaseModel):
         ``trusted_row_construction()``: such rows map one to one to models, so
         the per-row plan lookup, identity map, nested models and merging of
         ``from_row`` are skipped. Rows holding a related value (a foreign key
-        that needs registering) are built by ``fallback``.
+        that needs registering) are built by ``fallback``; repeated pks (views
+        or tables without a unique pk) keep the first row, like merging does.
 
         :param rows: database rows of the main model only
         :type rows: Sequence[Any]
@@ -194,9 +195,15 @@ class ModelRow(NewBaseModel):
         plan = cls.get_or_build_row_plan("", excludable, plan_cache)
         mappings = plan.column_mappings
         relation_names = cls._row_relation_names
+        pk_name = plan.pk_field_name
+        seen: set[Any] = set()
         instances: list["Model"] = []
         for row in rows:
             item = {field_name: row[column] for column, field_name in mappings}
+            pk = item[pk_name]
+            if pk in seen:
+                continue
+            seen.add(pk)
             if relation_names and any(
                 item.get(name) is not None for name in relation_names
             ):

@@ -376,7 +376,8 @@ def expand(
 def binds_directly(compiled: SQLCompiler, row: Mapping[str, Any]) -> bool:
     """
     Return whether rows can be bound to a compiled statement by position
-    alone: no expanding or post-compile parameters, no prefetched defaults, no
+    alone: no expanding, literal-execute or post-compile parameters, no
+    prefetched defaults, no
     escaped bind names and every positional bind supplied by the row.
 
     :param compiled: compiled statement
@@ -390,6 +391,7 @@ def binds_directly(compiled: SQLCompiler, row: Mapping[str, Any]) -> bool:
     return (
         names is not None
         and not compiled.post_compile_params
+        and not compiled.literal_execute_params
         and not compiled.insert_prefetch
         and not compiled.update_prefetch
         and not compiled.escaped_bind_names
