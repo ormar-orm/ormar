@@ -56,7 +56,11 @@
   values instead of going through `__init__` and validation again, and models
   without relations skip relation bookkeeping during initialization. Loading
   many rows is 1.25–1.6× faster in the orm-benchmarks suite (small filters
-  1.15–1.5×), the most on wide models.
+  1.15–1.5×), the most on wide models. For such models values stored in the
+  database are no longer re-validated on load (e.g. a string longer than
+  `max_length` written outside ormar loads as is); models with an overwritten
+  pydantic type, value-changing `model_config` (`use_enum_values`, string
+  transformations, `strict`) or a custom `__init__` keep full validation.
 * Writes (`save()`, `update()`, `delete()`, `load()`, `upsert()`,
   `QuerySet.update()`/`delete()`, `bulk_create()` and `bulk_update()`) now reuse
   one statement per write shape and only bind the values, like read queries.

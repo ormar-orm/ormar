@@ -82,6 +82,55 @@ class Secret(ormar.Model):
     )
 
 
+class EnumValues(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="trusted_enum_values")
+    model_config = pydantic.ConfigDict(use_enum_values=True)
+
+    id: int = ormar.Integer(primary_key=True)
+    color: Color = ormar.Enum(enum_class=Color, default=Color.RED)
+
+
+class Stripped(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="trusted_stripped")
+    model_config = pydantic.ConfigDict(str_strip_whitespace=True)
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=100)
+
+
+class Overwritten(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="trusted_overwritten")
+
+    id: int = ormar.Integer(primary_key=True)
+    data: str = ormar.String(max_length=100, overwrite_pydantic_type=pydantic.EmailStr)
+
+
+class CustomInit(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="trusted_custom_init")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=100)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+
+class Early(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="trusted_early")
+
+    id: int = ormar.Integer(primary_key=True)
+
+
+EARLY_TRUSTED_BEFORE_RELATION = Early.trusted_row_construction()
+
+
+class Late(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="trusted_late")
+
+    id: int = ormar.Integer(primary_key=True)
+    early: Optional[Early] = ormar.ForeignKey(Early)
+
+
 create_test_database = init_tests(base_ormar_config)
 
 
@@ -103,8 +152,20 @@ class ConstructCounter:
 
 def test_eligibility():
     assert Plain.trusted_row_construction() is True
-    for model in (Pet, Owner, Validated, Encoded, Secret):
-        assert model.trusted_row_construction() is False
+    untrusted = (
+        Pet,
+        Owner,
+        Validated,
+        Encoded,
+        Secret,
+        EnumValues,
+        Stripped,
+        Overwritten,
+        CustomInit,
+    )
+    for model in untrusted:
+        assert model.trusted_row_construction() is False, model.__name__
+    assert CustomInit(id=1, name="c").name == "c"
     assert Validated(id=1, name="lower").name == "LOWER"
 
 
@@ -182,6 +243,42 @@ async def test_cross_check_detects_trusted_mismatch(connected, monkeypatch):
         await Plain.objects.create(name="a", amount=decimal.Decimal("1"))
         monkeypatch.setattr(
             Plain, "_construct_from_row", WrongConstruct(Plain._construct_from_row)
+        )
+        with pytest.raises(AssertionError, match="Trusted row construction"):
+            await Plain.objects.all()
+
+
+def test_reverse_relation_resets_eligibility():
+    assert EARLY_TRUSTED_BEFORE_RELATION is True
+    assert Early.trusted_row_construction() is False
+
+
+@pytest.mark.asyncio
+async def test_excluding_required_field_still_raises(connected, monkeypatch):
+    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Plain.objects.create(name="a", amount=decimal.Decimal("1"))
+        with pytest.raises(pydantic.ValidationError):
+            await Plain.objects.exclude_fields(["name"]).all()
+
+
+class RetypedConstruct:
+    def __init__(self, original):
+        self.original = original
+
+    def __call__(self, excluded, values):
+        instance = self.original(excluded, values)
+        instance.__dict__["flag"] = int(instance.__dict__["flag"])
+        return instance
+
+
+@pytest.mark.asyncio
+async def test_cross_check_detects_equal_values_of_other_type(connected, monkeypatch):
+    monkeypatch.setattr(templates, "CROSS_CHECK", True)
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Plain.objects.create(name="a", amount=decimal.Decimal("1"))
+        monkeypatch.setattr(
+            Plain, "_construct_from_row", RetypedConstruct(Plain._construct_from_row)
         )
         with pytest.raises(AssertionError, match="Trusted row construction"):
             await Plain.objects.all()

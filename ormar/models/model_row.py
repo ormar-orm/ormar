@@ -19,6 +19,19 @@ if TYPE_CHECKING:  # pragma: no cover
     from ormar.models import Model
 
 
+def value_types(values: dict[str, Any]) -> dict[str, type]:
+    """
+    Return the type of each value, so values that compare equal across types
+    (``1 == 1.0 == True``, str enums and strings) are told apart.
+
+    :param values: field values
+    :type values: dict[str, Any]
+    :return: type per field name
+    :rtype: dict[str, type]
+    """
+    return {name: type(value) for name, value in values.items()}
+
+
 @dataclass(frozen=True)
 class RowExtractionPlan:
     """
@@ -162,8 +175,9 @@ class ModelRow(NewBaseModel):
     ) -> "ModelRow":
         """
         Build the model instance of one row: directly from the row values for
-        models with ``trusted_row_construction()``, otherwise through
-        ``_construct_with_excluded``. With the template cross-check enabled
+        models with ``trusted_row_construction()`` when the row holds every
+        required field, otherwise through ``_construct_with_excluded`` (which
+        also raises for excluded required fields). With the template cross-check enabled
         (test suite), a trusted build is compared with the regular one.
 
         :param plan: extraction plan of the row position
@@ -174,13 +188,16 @@ class ModelRow(NewBaseModel):
         :return: model instance
         :rtype: ModelRow
         """
-        if not cls.trusted_row_construction():
+        if not cls.trusted_row_construction() or not cls._required_row_fields.issubset(
+            item
+        ):
             return cls._construct_with_excluded(plan.excluded_field_names, **item)
         instance = cls._construct_from_row(plan.excluded_field_names, item)
         if templates.CROSS_CHECK:
             built = cls._construct_with_excluded(plan.excluded_field_names, **item)
             if (
                 instance.__dict__ != built.__dict__
+                or value_types(instance.__dict__) != value_types(built.__dict__)
                 or instance.__pydantic_fields_set__ != built.__pydantic_fields_set__
             ):
                 raise AssertionError(

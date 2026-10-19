@@ -48,6 +48,15 @@ from ormar.relations.relation import Relation
 from ormar.relations.relation_manager import RelationsManager
 from ormar.warnings import OrmarDeprecatedSince020
 
+VALUE_CHANGING_CONFIG = (
+    "use_enum_values",
+    "str_strip_whitespace",
+    "str_to_lower",
+    "str_to_upper",
+    "coerce_numbers_to_str",
+    "strict",
+)
+
 if TYPE_CHECKING:  # pragma no cover
     from ormar.models import Model, OrmarConfig
     from ormar.signals import SignalEmitter
@@ -133,6 +142,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         _extra_is_ignore: Optional[bool]
         _allowed_kwarg_names: Optional[frozenset[str]]
         _relation_field_names: Optional[frozenset[str]]
+        _required_row_fields: frozenset[str]
+        _trusted_rows: Optional[bool]
         ormar_config: OrmarConfig
 
     # noinspection PyMissingConstructor
@@ -245,10 +256,12 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
     def trusted_row_construction(cls) -> bool:
         """
         Return whether rows of this model can be turned into instances without
-        running ``__init__``: the model has no relations, no user validators,
-        no private attributes or post-init hook, no extra fields and no fields
-        whose stored value is converted during validation (base64 bytes,
-        encrypted values). Computed once per class.
+        running ``__init__``: only when validation could not change a value the
+        column type already converted - no relations, no custom ``__init__``,
+        validators, private attributes or post-init hook, no extra fields, no
+        fields with an overwritten pydantic type, encryption or base64
+        representation and no value-changing model config (enum values, string
+        transformations, number coercion, strict mode). Computed once per class.
 
         :return: True when database rows can be trusted as field values
         :rtype: bool
@@ -259,10 +272,13 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         decorators = cls.__pydantic_decorators__
         model_fields = cls.ormar_config.model_fields
         trusted = (
-            not cls.extract_related_fields()
+            cls.__init__ is NewBaseModel.__init__
+            and not cls.extract_related_fields()
             and set(cls.model_fields) == set(model_fields)
-            and not any(
-                field.encrypt_secret or field.represent_as_base64_str
+            and all(
+                field.__pydantic_type__ is field.__type__
+                and not field.encrypt_secret
+                and not field.represent_as_base64_str
                 for field in model_fields.values()
             )
             and not (
@@ -274,6 +290,14 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             and not cls.__private_attributes__
             and cls.__pydantic_post_init__ is None
             and cls.model_config.get("extra") != "allow"
+            and not any(cls.model_config.get(key) for key in VALUE_CHANGING_CONFIG)
+        )
+        type.__setattr__(
+            cls,
+            "_required_row_fields",
+            frozenset(
+                name for name, info in cls.model_fields.items() if info.is_required()
+            ),
         )
         type.__setattr__(cls, "_trusted_rows", trusted)
         return trusted
@@ -285,8 +309,9 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         """
         Build an instance straight from database row values, which the column
         types already converted, skipping ``__init__`` and validation. Only for
-        models with ``trusted_row_construction()``; fields missing from the row
-        (excluded) are None, like after ``_construct_with_excluded``.
+        models with ``trusted_row_construction()`` and rows holding every
+        required field; fields missing from the row or excluded are None, like
+        after ``_construct_with_excluded``.
 
         :param excluded: field names excluded from the query
         :type excluded: AbstractSet[str]
@@ -296,17 +321,13 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         :rtype: Self
         """
         instance = cls.__new__(cls)
-        object.__setattr__(instance, "_orm_saved", False)
-        object.__setattr__(instance, "_pk_column", None)
-        object.__setattr__(instance, "__setattr_fields__", set())
-        object.__setattr__(
-            instance,
-            "_orm",
-            RelationsManager(related_fields=[], owner=cast("Model", instance)),
-        )
+        instance._initialize_internal_attributes()
         object.__setattr__(instance, "__pk_only__", False)
         object.__setattr__(instance, "__ormar_excludable__", None)
-        data = {name: values.get(name) for name in cls.model_fields}
+        data = {
+            name: None if name in excluded else values.get(name)
+            for name in cls.model_fields
+        }
         object.__setattr__(instance, "__dict__", data)
         object.__setattr__(instance, "__pydantic_fields_set__", set(values))
         object.__setattr__(instance, "__pydantic_extra__", None)
