@@ -230,6 +230,22 @@ Created instance needs to be passed to every `Model` with `ormar_config` object 
     You need to create the `DatabaseConnection` instance **only once** and use it for all models.
     You can create several ones if you want to use multiple databases.
 
+Any extra keyword arguments are passed to SQLAlchemy's `create_async_engine`, so you can
+tune the connection pool there.
+
+```python
+database = DatabaseConnection(DATABASE_URL, pool_size=20, max_overflow=10)
+```
+
+!!!note
+    By default ormar keeps up to `pool_size=10` connections open and allows
+    `max_overflow=10` extra ones. Overflow connections are closed as soon as they are
+    returned to the pool, so when more queries run at once than `pool_size`, the extra
+    ones open a new database connection each time, which can make concurrent queries
+    several times slower. Set `pool_size` to at least the number of queries you expect
+    to run concurrently in one process, keeping the total across all processes below
+    your database's connection limit (`max_connections` in PostgreSQL).
+
 #### Sqlalchemy
 
 Second dependency is sqlalchemy `MetaData` instance.

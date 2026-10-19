@@ -35,13 +35,16 @@ class DatabaseConnection:
         Initialize database connection.
 
         :param url: Database URL with an async driver (e.g., postgresql+asyncpg://)
-        :param options: Additional engine options
+        :param options: Additional engine options passed to
+            ``create_async_engine``; ``pool_size`` defaults to 10 and
+            ``max_overflow`` to 10
         """
         self._force_rollback = options.pop("force_rollback", False)
         self._url = url
-        # Set reasonable pool defaults if not provided
+        # Set reasonable pool defaults if not provided; overflow connections are
+        # closed on checkin, so pool_size should cover the usual concurrency
         if "pool_size" not in options:
-            options["pool_size"] = 5
+            options["pool_size"] = 10
         if "max_overflow" not in options:
             options["max_overflow"] = 10
         self._options = options

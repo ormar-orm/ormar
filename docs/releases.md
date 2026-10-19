@@ -46,6 +46,11 @@
 
 ### ⚡ Performance
 
+* The default connection pool size of `DatabaseConnection` is raised from 5 to
+  10. SQLAlchemy closes overflow connections on checkin, so with more than 5
+  concurrent queries every extra one opened a new database connection; with
+  10 concurrent `get()` calls on PostgreSQL this is 4–6× faster. Pass
+  `pool_size` to `DatabaseConnection` to size the pool for your concurrency.
 * `select_related` queries now build each related model once per query result
   instead of once per joined row, and reuse it in every row it appears in.
   Queries over deep or fanned-out relations are 2–14× faster (e.g. 1000 rows
