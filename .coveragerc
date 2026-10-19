@@ -1,8 +1,8 @@
 [run]
 source = ormar, tests
-omit = ./tests/test.db, *py.typed*
+omit = ./tests/test.db, *py.typed*, ${ORMAR_COV_OMIT-}
 data_file = .coverage
 concurrency = greenlet
 
 [report]
-omit = ./tests/test.db, *py.typed*
+omit = ./tests/test.db, *py.typed*, ${ORMAR_COV_OMIT-}

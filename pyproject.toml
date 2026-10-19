@@ -49,7 +49,10 @@ python = "^3.10.0"
 # Pinned below 2.15 because ormar relies on pydantic internals; bump the
 # upper bound manually after verifying compatibility with each new release.
 pydantic = ">=2.11.9,<2.15"
-SQLAlchemy = {version = "^2.0.40", extras = ["asyncio"]}
+# Pinned below 2.1 because native execution relies on SQLAlchemy compiler and
+# async adapter internals; bump the upper bound manually after verifying
+# tests/test_databases/test_sqlalchemy_internals.py against each new release.
+SQLAlchemy = {version = ">=2.0.40,<2.1", extras = ["asyncio"]}
 cryptography = { version = ">=44.0.1,<51.0.0", optional = true }
 # Async database drivers
 aiosqlite = { version = ">=0.19,<0.23", optional = true }
