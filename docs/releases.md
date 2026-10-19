@@ -51,6 +51,14 @@
 
 ### ⚡ Performance
 
+* Writes (`save()`, `update()`, `delete()`, `load()`, `upsert()`,
+  `QuerySet.update()`/`delete()`, `bulk_create()` and `bulk_update()`) now reuse
+  one statement per write shape and only bind the values, like read queries.
+  `bulk_create()` runs a single-row insert once per row (`executemany`) inside
+  one transaction instead of building one multi-row statement per call, which
+  also removes the driver's bound-parameter limit on large batches. In the
+  orm-benchmarks suite on PostgreSQL, inserts are 1.1–4.8× and updates
+  1.4–2.9× faster, the most on wide models.
 * Read queries (`get()`, `first()`, `all()`, `iterate()`, `values()`,
   `count()`, `exists()` and aggregates) now cache the built SQLAlchemy
   statement per query shape and only bind the new values on later calls,
