@@ -73,6 +73,12 @@ jobs:
         DATABASE_URL: "mysql://username:password@127.0.0.1:3306/testsuite"
       run: bash scripts/test.sh
 
+    - name: Run mysql (aiomysql)
+      env:
+        DATABASE_URL: "mysql://username:password@127.0.0.1:3306/testsuite"
+        MYSQL_DRIVER: "aiomysql"
+      run: bash scripts/test.sh
+
     - name: Install postgresql-client
       run: |
         sudo apt-get update
