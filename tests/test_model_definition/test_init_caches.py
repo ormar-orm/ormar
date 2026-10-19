@@ -51,3 +51,11 @@ def test_model_with_relations_still_serializes_and_registers(monkeypatch):
     assert counter.calls == 1
     assert pet.owner is owner
     assert owner.pets == [pet]
+
+
+def test_internal_construct_serializes_nested_models_for_relations(monkeypatch):
+    counter = Counter(Pet.serialize_nested_models_json_fields)
+    monkeypatch.setattr(Pet, "serialize_nested_models_json_fields", counter)
+    pet = Pet._internal_construct(id=3, owner=Owner(id=4))
+    assert counter.calls == 1
+    assert pet.owner.id == 4

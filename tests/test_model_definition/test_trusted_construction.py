@@ -105,6 +105,7 @@ def test_eligibility():
     assert Plain.trusted_row_construction() is True
     for model in (Pet, Owner, Validated, Encoded, Secret):
         assert model.trusted_row_construction() is False
+    assert Validated(id=1, name="lower").name == "LOWER"
 
 
 def test_trusted_build_equals_init_build():
@@ -141,6 +142,8 @@ async def test_loaded_rows_skip_init_for_eligible_models(connected, monkeypatch)
         loaded = await Plain.objects.all()
     assert counter.calls == 0
     assert loaded[0].name == "a" and loaded[0].saved
+    Plain._construct_with_excluded(frozenset(), id=9, name="x", amount=1)
+    assert counter.calls == 1
 
 
 @pytest.mark.asyncio
@@ -160,3 +163,25 @@ async def test_trusted_instances_behave_like_built_ones(connected):
         assert restored.model_dump() == item.model_dump()
         partial = await Plain.objects.exclude_fields(["note", "ratio"]).get(id=item.id)
         assert partial.note is None and partial.ratio is None
+
+
+class WrongConstruct:
+    def __init__(self, original):
+        self.original = original
+
+    def __call__(self, excluded, values):
+        instance = self.original(excluded, values)
+        instance.__dict__["name"] = "tampered"
+        return instance
+
+
+@pytest.mark.asyncio
+async def test_cross_check_detects_trusted_mismatch(connected, monkeypatch):
+    monkeypatch.setattr(templates, "CROSS_CHECK", True)
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Plain.objects.create(name="a", amount=decimal.Decimal("1"))
+        monkeypatch.setattr(
+            Plain, "_construct_from_row", WrongConstruct(Plain._construct_from_row)
+        )
+        with pytest.raises(AssertionError, match="Trusted row construction"):
+            await Plain.objects.all()
