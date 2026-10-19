@@ -58,15 +58,15 @@ COMPARISON_OPERATORS = {
 CROSS_CHECK = os.environ.get("ORMAR_TEMPLATE_CROSS_CHECK") == "1"
 
 
-class SelectTemplate(NamedTuple):
-    """A cached read statement and the values to bind for one call."""
+class StatementTemplate(NamedTuple):
+    """A cached statement and the values to bind for one call."""
 
     statement: Executable
     params: Dict[str, Any]
 
 
 class TemplateCache:
-    """Least-recently-used cache of read statements of one model, by shape."""
+    """Least-recently-used cache of the statements of one model, by shape."""
 
     def __init__(self, max_size: int = TEMPLATE_CACHE_SIZE) -> None:
         """
@@ -473,11 +473,9 @@ def aggregate_statement(
     return sqlalchemy.select(*select_columns).select_from(subquery)
 
 
-class WriteTemplate(NamedTuple):
-    """A cached write statement and the values to bind for one call."""
-
-    statement: Executable
-    params: Dict[str, Any]
+PK_COLUMNS: "weakref.WeakKeyDictionary[type, sqlalchemy.Column]" = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def cached_statement(
@@ -488,7 +486,6 @@ def cached_statement(
 ) -> Executable:
     """
     Return the statement cached for a write shape, building it on a miss.
-    With ``CROSS_CHECK`` a hit is rebuilt and compared.
 
     :param model_cls: model the statement writes
     :type model_cls: Type[Any]
@@ -498,7 +495,6 @@ def cached_statement(
     :type builder: Callable[..., Executable]
     :param args: arguments of the builder
     :type args: Any
-    :raises AssertionError: when the cached statement differs from a fresh one
     :return: statement for the shape
     :rtype: Executable
     """
@@ -507,25 +503,49 @@ def cached_statement(
     if statement is None:
         statement = builder(*args)
         cache.put(key, statement)
-    elif CROSS_CHECK:
-        fresh = builder(*args)
-        cached_sql = str(statement.compile())  # type: ignore[attr-defined]
-        if cached_sql != str(fresh.compile()):  # type: ignore[attr-defined]
-            raise AssertionError(f"Query template mismatch for {key}: {cached_sql}")
     return statement
+
+
+def cross_check_write(
+    model_cls: Type[Any],
+    statement: Executable,
+    literal: Executable,
+    params: Dict[str, Any],
+) -> None:
+    """
+    With ``CROSS_CHECK``, compare a write template with the statement built
+    with literal values, as without templates.
+
+    :param model_cls: written model
+    :type model_cls: Type[Any]
+    :param statement: template statement
+    :type statement: Executable
+    :param literal: statement built with literal values
+    :type literal: Executable
+    :param params: values bound to the template
+    :type params: Dict[str, Any]
+    :raises AssertionError: when the statements differ
+    """
+    if CROSS_CHECK:
+        assert_same_statement(
+            statement, literal, params, model_cls.ormar_config.database.dialect
+        )
 
 
 def primary_key_column(model_cls: Type[Any]) -> sqlalchemy.Column:
     """
-    Return the primary key column of a model's table.
+    Return the primary key column of a model's table, resolved once per model.
 
     :param model_cls: model class
     :type model_cls: Type[Any]
     :return: primary key column
     :rtype: sqlalchemy.Column
     """
-    alias = model_cls.get_column_alias(model_cls.ormar_config.pkname)
-    return model_cls.ormar_config.table.c[alias]
+    column = PK_COLUMNS.get(model_cls)
+    if column is None:
+        alias = model_cls.get_column_alias(model_cls.ormar_config.pkname)
+        column = PK_COLUMNS.setdefault(model_cls, model_cls.ormar_config.table.c[alias])
+    return column
 
 
 def primary_key_bind(column: sqlalchemy.Column) -> BindParameter:
@@ -570,6 +590,24 @@ def value_params(names: Tuple[str, ...], values: Mapping[str, Any]) -> Dict[str,
     :rtype: Dict[str, Any]
     """
     return {f"ormar_v{index}": values[name] for index, name in enumerate(names)}
+
+
+def literal_values(
+    table: sqlalchemy.Table, names: Tuple[str, ...], values: Mapping[str, Any]
+) -> Dict[Any, Any]:
+    """
+    Return the written values keyed by column, in the template's column order.
+
+    :param table: written table
+    :type table: sqlalchemy.Table
+    :param names: written column names, sorted
+    :type names: Tuple[str, ...]
+    :param values: written values by column name
+    :type values: Mapping[str, Any]
+    :return: value per column
+    :rtype: Dict[Any, Any]
+    """
+    return {table.c[name]: values[name] for name in names}
 
 
 def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:
@@ -638,109 +676,6 @@ def build_pk_select(
     return table.select().where(pk_column == primary_key_bind(pk_column))
 
 
-def insert_template(model_cls: Type[Any], values: Mapping[str, Any]) -> WriteTemplate:
-    """
-    Return the insert of a model for the given column values.
-
-    :param model_cls: inserted model
-    :type model_cls: Type[Any]
-    :param values: values by column name
-    :type values: Mapping[str, Any]
-    :return: statement and values to bind
-    :rtype: WriteTemplate
-    """
-    names = tuple(sorted(values))
-    table = model_cls.ormar_config.table
-    statement = cached_statement(
-        model_cls, ("insert", names), build_insert, table, names
-    )
-    return WriteTemplate(statement, value_params(names, values))
-
-
-def update_template(
-    model_cls: Type[Any], values: Mapping[str, Any], pk: Any
-) -> WriteTemplate:
-    """
-    Return the update of one row of a model for the given column values.
-
-    :param model_cls: updated model
-    :type model_cls: Type[Any]
-    :param values: values by column name
-    :type values: Mapping[str, Any]
-    :param pk: primary key of the row
-    :type pk: Any
-    :return: statement and values to bind
-    :rtype: WriteTemplate
-    """
-    names = tuple(sorted(values))
-    table = model_cls.ormar_config.table
-    statement = cached_statement(
-        model_cls,
-        ("update", names),
-        build_update,
-        table,
-        names,
-        primary_key_column(model_cls),
-    )
-    return WriteTemplate(statement, {**value_params(names, values), PK_SLOT: pk})
-
-
-def delete_template(model_cls: Type[Any], pk: Any) -> WriteTemplate:
-    """
-    Return the delete of one row of a model.
-
-    :param model_cls: model
-    :type model_cls: Type[Any]
-    :param pk: primary key of the row
-    :type pk: Any
-    :return: statement and values to bind
-    :rtype: WriteTemplate
-    """
-    statement = cached_statement(
-        model_cls,
-        ("delete",),
-        build_delete,
-        model_cls.ormar_config.table,
-        primary_key_column(model_cls),
-    )
-    return WriteTemplate(statement, {PK_SLOT: pk})
-
-
-def pk_select_template(model_cls: Type[Any], pk: Any) -> WriteTemplate:
-    """
-    Return the select of one row of a model by primary key.
-
-    :param model_cls: model
-    :type model_cls: Type[Any]
-    :param pk: primary key of the row
-    :type pk: Any
-    :return: statement and values to bind
-    :rtype: WriteTemplate
-    """
-    statement = cached_statement(
-        model_cls,
-        ("select_pk",),
-        build_pk_select,
-        model_cls.ormar_config.table,
-        primary_key_column(model_cls),
-    )
-    return WriteTemplate(statement, {PK_SLOT: pk})
-
-
-def release_values(statement: Executable) -> None:
-    """
-    Drop the values of a template's named slots (SQLAlchemy may have cloned the
-    bind parameters while building), so a cached statement does not keep the
-    first call's values alive; every call binds its own values.
-
-    :param statement: built template statement
-    :type statement: Executable
-    """
-    for element in visitors.iterate(statement):  # type: ignore[arg-type]
-        if isinstance(element, BindParameter) and str(element.key).startswith("ormar_"):
-            element.value = None
-
-
 def build_bulk_update(
     table: sqlalchemy.Table, pk_column: sqlalchemy.Column, columns: Tuple[str, ...]
 ) -> Executable:
@@ -762,3 +697,133 @@ def build_bulk_update(
         .where(pk_column == sqlalchemy.bindparam("new_" + pk_column.name))
         .values({name: sqlalchemy.bindparam("new_" + name) for name in columns})
     )
+
+
+def insert_statement(model_cls: Type[Any], names: Tuple[str, ...]) -> Executable:
+    """
+    Return the insert of a model for the given sorted column names.
+
+    :param model_cls: inserted model
+    :type model_cls: Type[Any]
+    :param names: inserted column names, sorted
+    :type names: Tuple[str, ...]
+    :return: insert statement with ``ormar_v{i}`` binds
+    :rtype: Executable
+    """
+    table = model_cls.ormar_config.table
+    return cached_statement(model_cls, ("insert", names), build_insert, table, names)
+
+
+def insert_template(
+    model_cls: Type[Any], values: Mapping[str, Any]
+) -> StatementTemplate:
+    """
+    Return the insert of a model for the given column values.
+
+    :param model_cls: inserted model
+    :type model_cls: Type[Any]
+    :param values: values by column name
+    :type values: Mapping[str, Any]
+    :return: statement and values to bind
+    :rtype: StatementTemplate
+    """
+    names = tuple(sorted(values))
+    statement = insert_statement(model_cls, names)
+    params = value_params(names, values)
+    table = model_cls.ormar_config.table
+    if CROSS_CHECK:
+        literal = table.insert().values(literal_values(table, names, values))
+        cross_check_write(model_cls, statement, literal, params)
+    return StatementTemplate(statement, params)
+
+
+def update_template(
+    model_cls: Type[Any], values: Mapping[str, Any], pk: Any
+) -> StatementTemplate:
+    """
+    Return the update of one row of a model for the given column values.
+
+    :param model_cls: updated model
+    :type model_cls: Type[Any]
+    :param values: values by column name
+    :type values: Mapping[str, Any]
+    :param pk: primary key of the row
+    :type pk: Any
+    :return: statement and values to bind
+    :rtype: StatementTemplate
+    """
+    names = tuple(sorted(values))
+    table = model_cls.ormar_config.table
+    pk_column = primary_key_column(model_cls)
+    statement = cached_statement(
+        model_cls, ("update", names), build_update, table, names, pk_column
+    )
+    params = {**value_params(names, values), PK_SLOT: pk}
+    if CROSS_CHECK:
+        literal = (
+            table.update()
+            .values(literal_values(table, names, values))
+            .where(pk_column == pk)
+        )
+        cross_check_write(model_cls, statement, literal, params)
+    return StatementTemplate(statement, params)
+
+
+def delete_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
+    """
+    Return the delete of one row of a model.
+
+    :param model_cls: model
+    :type model_cls: Type[Any]
+    :param pk: primary key of the row
+    :type pk: Any
+    :return: statement and values to bind
+    :rtype: StatementTemplate
+    """
+    table = model_cls.ormar_config.table
+    pk_column = primary_key_column(model_cls)
+    statement = cached_statement(model_cls, ("delete",), build_delete, table, pk_column)
+    params = {PK_SLOT: pk}
+    if CROSS_CHECK:
+        cross_check_write(
+            model_cls, statement, table.delete().where(pk_column == pk), params
+        )
+    return StatementTemplate(statement, params)
+
+
+def pk_select_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
+    """
+    Return the select of one row of a model by primary key.
+
+    :param model_cls: model
+    :type model_cls: Type[Any]
+    :param pk: primary key of the row
+    :type pk: Any
+    :return: statement and values to bind
+    :rtype: StatementTemplate
+    """
+    table = model_cls.ormar_config.table
+    pk_column = primary_key_column(model_cls)
+    statement = cached_statement(
+        model_cls, ("select_pk",), build_pk_select, table, pk_column
+    )
+    params = {PK_SLOT: pk}
+    if CROSS_CHECK:
+        cross_check_write(
+            model_cls, statement, table.select().where(pk_column == pk), params
+        )
+    return StatementTemplate(statement, params)
+
+
+def release_values(statement: Executable) -> None:
+    """
+    Drop the values of a template's named slots (SQLAlchemy may have cloned the
+    bind parameters while building), so a cached statement does not keep the
+    first call's values alive; every call binds its own values.
+
+    :param statement: built template statement
+    :type statement: Executable
+    """
+    for element in visitors.iterate(statement):  # type: ignore[arg-type]
+        if isinstance(element, BindParameter) and str(element.key).startswith("ormar_"):
+            element.value = None

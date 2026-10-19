@@ -30,9 +30,8 @@ from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
 from ormar.queryset.templates import (
-    SelectTemplate,
     SlotBinder,
-    WriteTemplate,
+    StatementTemplate,
     aggregate_statement,
     build_bulk_update,
     cached_statement,
@@ -41,6 +40,7 @@ from ormar.queryset.templates import (
     count_statement,
     excludable_shape,
     exists_statement,
+    insert_statement,
     insert_template,
     order_shape,
     release_values,
@@ -332,7 +332,7 @@ class QuerySet(Generic[T]):
         offset: Optional[int] = None,
         order_bys: Optional[list] = None,
         wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]] = None,
-    ) -> SelectTemplate:
+    ) -> StatementTemplate:
         """
         Return the read statement for this queryset from the model's template
         cache (building and caching it on the first call of a shape) together
@@ -349,7 +349,7 @@ class QuerySet(Generic[T]):
         :param wrap: turns the built select into the executed statement
         :type wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]]
         :return: statement and values to bind
-        :rtype: SelectTemplate
+        :rtype: StatementTemplate
         """
         actions = canonical_actions(self.filter_clauses, self.exclude_clauses)
         params = template_params(
@@ -373,7 +373,7 @@ class QuerySet(Generic[T]):
             templates.assert_same_statement(
                 statement, fresh, params, self.model_config.database.dialect
             )
-        return SelectTemplate(statement, params)
+        return StatementTemplate(statement, params)
 
     def build_template_statement(
         self,
@@ -407,7 +407,7 @@ class QuerySet(Generic[T]):
         release_values(statement)
         return statement
 
-    def build_write_template(self, kind: str, values: dict) -> WriteTemplate:
+    def build_write_template(self, kind: str, values: dict) -> StatementTemplate:
         """
         Return the filtered update (``kind="update"``) or delete of this
         queryset from the model's template cache, with the values to bind.
@@ -417,7 +417,7 @@ class QuerySet(Generic[T]):
         :param values: updated values by column name (empty for delete)
         :type values: dict
         :return: statement and values to bind
-        :rtype: WriteTemplate
+        :rtype: StatementTemplate
         """
         actions = canonical_actions(self.filter_clauses, self.exclude_clauses)
         names = tuple(sorted(values))
@@ -442,7 +442,7 @@ class QuerySet(Generic[T]):
             templates.assert_same_statement(
                 statement, fresh, params, self.model_config.database.dialect
             )
-        return WriteTemplate(statement, params)
+        return StatementTemplate(statement, params)
 
     def build_write_statement(
         self,
@@ -1163,6 +1163,11 @@ class QuerySet(Generic[T]):
         updates = self.model.populate_onupdate_value(updates)
         updates = self.model.validate_enums(updates)
         updates = self.model.translate_columns_to_aliases(updates)
+        unconsumed = [name for name in updates if name not in self.table.c]
+        if unconsumed:
+            raise sqlalchemy.exc.CompileError(
+                f"Unconsumed column names: {', '.join(unconsumed)}"
+            )
 
         template = self.build_write_template("update", updates)
         async with self.model_config.database.get_query_executor() as executor:
@@ -1652,13 +1657,14 @@ class QuerySet(Generic[T]):
             transactional=several_statements
         ) as executor:
             for rows in rows_by_keys.values():
-                template = insert_template(self.model, rows[0])
                 if len(rows) == 1:
+                    template = insert_template(self.model, rows[0])
                     await executor.execute(template.statement, template.params)
                     continue
                 names = tuple(sorted(rows[0]))
                 await executor.execute_many(
-                    template.statement, [value_params(names, row) for row in rows]
+                    insert_statement(self.model, names),
+                    [value_params(names, row) for row in rows],
                 )
 
         for obj in objects:

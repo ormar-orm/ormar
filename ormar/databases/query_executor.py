@@ -16,16 +16,23 @@ from typing import (
     Sequence,
     TypeVar,
     Union,
+    cast,
 )
 
 from sqlalchemy import text, util
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.sql import Executable
+from sqlalchemy.sql.compiler import SQLCompiler
 
 from ormar.databases.native.adapters.base import ITERATE_BATCH_SIZE
 from ormar.databases.native.backend import NativeBackend
-from ormar.databases.native.compiler import BoundBatch, BoundStatement, is_plannable
+from ormar.databases.native.compiler import (
+    BoundBatch,
+    BoundStatement,
+    is_plannable,
+    pk_param_key,
+)
 from ormar.databases.native.errors import raise_translated
 
 Payload = TypeVar("Payload", BoundStatement, BoundBatch)
@@ -134,6 +141,12 @@ class QueryExecutor:
         # Do NOT fall back to rowcount here: rowcount is not a pk, and
         # returning it would silently corrupt `Model.pk` in `save()`.
         if result.context and result.context.isinsert:
+            # a primary key bound by name (statement templates) is returned as
+            # bound; SQLAlchemy only looks it up under the column key
+            compiled = cast(SQLCompiler, result.context.compiled)
+            key = pk_param_key(compiled) if params else None
+            if key is not None and params and params.get(key) is not None:
+                return params[key]
             if result.inserted_primary_key:
                 pk_value = result.inserted_primary_key[0]
                 if pk_value is not None:
