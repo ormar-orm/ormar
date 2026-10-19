@@ -64,6 +64,11 @@
 
 ### 🐛 Fixes
 
+* Fix `get()` after `exclude()` returning the last row instead of raising
+  `MultipleMatches` when several rows match. A queryset narrowed only by
+  `exclude()` was treated as unfiltered; code relying on `exclude(...).get()`
+  returning the last row should add a `filter()` or use `first()`/`last()`.
+  [#1858](https://github.com/ormar-orm/ormar/issues/1858)
 * Fix `bulk_update()` writing encrypted fields as plain text. The update now
   runs as a SQLAlchemy statement, so column types process the values like in
   `save()` and `update()`.
