@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, AbstractSet, Any, Optional, Union, cast
+from typing import TYPE_CHECKING, AbstractSet, Any, Optional, Sequence, Union, cast
 
 try:
     from sqlalchemy.engine.result import ResultProxy  # type: ignore
@@ -170,6 +170,39 @@ class ModelRow(NewBaseModel):
         return instance
 
     @classmethod
+    def from_flat_rows(
+        cls,
+        rows: Sequence[Any],
+        excludable: ExcludableItems,
+        plan_cache: Optional[PlanCache],
+    ) -> list["Model"]:
+        """
+        Build models of a query without joined relations of a model with
+        ``trusted_row_construction()``: no relations means rows map one to one
+        to models, so the per-row plan lookup, identity map, nested models and
+        merging of ``from_row`` are skipped.
+
+        :param rows: database rows of the main model only
+        :type rows: Sequence[Any]
+        :param excludable: structure of fields to include and exclude
+        :type excludable: ExcludableItems
+        :param plan_cache: per-queryset plan cache
+        :type plan_cache: Optional[PlanCache]
+        :return: models built from the rows
+        :rtype: list[Model]
+        """
+        plan = cls.get_or_build_row_plan("", excludable, plan_cache)
+        mappings = plan.column_mappings
+        instances: list["Model"] = []
+        for row in rows:
+            item = {field_name: row[column] for column, field_name in mappings}
+            instance = cls.construct_row_instance(plan, item)
+            object.__setattr__(instance, "_orm_saved", True)
+            object.__setattr__(instance, "__ormar_excludable__", excludable)
+            instances.append(cast("Model", instance))
+        return instances
+
+    @classmethod
     def construct_row_instance(
         cls, plan: RowExtractionPlan, item: dict[str, Any]
     ) -> "ModelRow":
@@ -192,18 +225,19 @@ class ModelRow(NewBaseModel):
             item
         ):
             return cls._construct_with_excluded(plan.excluded_field_names, **item)
+        if not templates.CROSS_CHECK:
+            return cls._construct_from_row(plan.excluded_field_names, item)
+        built = cls._construct_with_excluded(plan.excluded_field_names, **item)
         instance = cls._construct_from_row(plan.excluded_field_names, item)
-        if templates.CROSS_CHECK:
-            built = cls._construct_with_excluded(plan.excluded_field_names, **item)
-            if (
-                instance.__dict__ != built.__dict__
-                or value_types(instance.__dict__) != value_types(built.__dict__)
-                or instance.__pydantic_fields_set__ != built.__pydantic_fields_set__
-            ):
-                raise AssertionError(
-                    f"Trusted row construction mismatch for {cls.__name__}: "
-                    f"{instance.__dict__} != {built.__dict__}"
-                )
+        if (
+            instance.__dict__ != built.__dict__
+            or value_types(instance.__dict__) != value_types(built.__dict__)
+            or instance.__pydantic_fields_set__ != built.__pydantic_fields_set__
+        ):
+            raise AssertionError(
+                f"Trusted row construction mismatch for {cls.__name__}: "
+                f"{instance.__dict__} != {built.__dict__}"
+            )
         return instance
 
     @classmethod

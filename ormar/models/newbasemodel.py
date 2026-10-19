@@ -315,7 +315,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
 
         :param excluded: field names excluded from the query
         :type excluded: AbstractSet[str]
-        :param values: field values of the row
+        :param values: field values of the row, used as the instance's
+            ``__dict__`` when it holds every field
         :type values: dict[str, Any]
         :return: model instance
         :rtype: Self
@@ -324,10 +325,14 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         instance._initialize_internal_attributes()
         object.__setattr__(instance, "__pk_only__", False)
         object.__setattr__(instance, "__ormar_excludable__", None)
-        data = {
-            name: None if name in excluded else values.get(name)
-            for name in cls.model_fields
-        }
+        model_fields = cls.model_fields
+        if not excluded and len(values) == len(model_fields):
+            data = values
+        else:
+            data = {
+                name: None if name in excluded else values.get(name)
+                for name in model_fields
+            }
         object.__setattr__(instance, "__dict__", data)
         object.__setattr__(instance, "__pydantic_fields_set__", set(values))
         object.__setattr__(instance, "__pydantic_extra__", None)
@@ -601,7 +606,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             self,
             "_orm",
             RelationsManager(
-                related_fields=self.extract_related_fields(), owner=cast("Model", self)
+                related_fields=self.extract_related_fields(),
+                owner=self,  # type: ignore[arg-type]
             ),
         )
 

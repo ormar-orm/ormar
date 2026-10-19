@@ -53,10 +53,11 @@
 
 * Rows of models without relations, custom validators, encrypted or base64
   fields are turned into models directly from the already converted column
-  values instead of going through `__init__` and validation again, and models
-  without relations skip relation bookkeeping during initialization. Loading
-  many rows is 1.25–1.6× faster in the orm-benchmarks suite (small filters
-  1.15–1.5×), the most on wide models. For such models values stored in the
+  values instead of going through `__init__` and validation again, queries of
+  such models without `select_related` skip the relation-aware row merging,
+  and models without relations skip relation bookkeeping during
+  initialization. Loading many rows is 1.7–2.2× faster in the orm-benchmarks
+  suite (small filters 1.3–1.5×), the most on wide models. For such models values stored in the
   database are no longer re-validated on load (e.g. a string longer than
   `max_length` written outside ormar loads as is); models with an overwritten
   pydantic type, value-changing `model_config` (`use_enum_values`, string

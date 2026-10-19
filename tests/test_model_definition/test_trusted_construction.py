@@ -4,13 +4,14 @@ import enum
 import pickle
 import uuid
 from typing import Optional
+from unittest import mock
 
 import pydantic
 import pytest
 import pytest_asyncio
 
 import ormar
-from ormar.queryset import templates
+from ormar.queryset import queryset, templates
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -282,3 +283,26 @@ async def test_cross_check_detects_equal_values_of_other_type(connected, monkeyp
         )
         with pytest.raises(AssertionError, match="Trusted row construction"):
             await Plain.objects.all()
+
+
+@pytest.mark.asyncio
+async def test_flat_queries_skip_from_row_and_yield_between_chunks(
+    connected, monkeypatch
+):
+    monkeypatch.setattr(queryset, "FLAT_ROWS_CHUNK", 2)
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Plain.objects.bulk_create(
+            [Plain(name=f"n{i}", amount=decimal.Decimal(i)) for i in range(5)]
+        )
+        sleep = mock.AsyncMock()
+        monkeypatch.setattr(queryset.asyncio, "sleep", sleep)
+        counter = ConstructCounter(Plain.from_row)
+        monkeypatch.setattr(Plain, "from_row", counter)
+        loaded = await Plain.objects.order_by("id").all()
+        assert counter.calls == 0
+        assert sleep.await_count == 2
+        assert [item.name for item in loaded] == [f"n{i}" for i in range(5)]
+        assert all(item.saved for item in loaded)
+        assert loaded[0].model_dump(exclude={"uid"})["name"] == "n0"
+        pets = await Pet.objects.select_related("owner").all()
+        assert pets == []

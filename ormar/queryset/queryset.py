@@ -56,6 +56,8 @@ from ormar.queryset.utils import (
 )
 from ormar.queryset.values_columns import values_column_map
 
+FLAT_ROWS_CHUNK = 500
+
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
     from ormar.models import T
@@ -209,6 +211,8 @@ class QuerySet(Generic[T]):
         """
         if plan_cache is None:
             plan_cache = {}
+        if not self._select_related and self.model.trusted_row_construction():
+            return await self._process_flat_rows(rows, plan_cache)
         registry = RowRegistry()
         result_rows = []
         for i, row in enumerate(rows):
@@ -232,6 +236,31 @@ class QuerySet(Generic[T]):
                 excludable=self._excludable,
             )
         return cast(list["T"], result_rows)
+
+    async def _process_flat_rows(self, rows: list, plan_cache: dict) -> list["T"]:
+        """
+        Build models of rows without joined relations, in chunks of
+        ``FLAT_ROWS_CHUNK`` rows yielding to the event loop in between.
+
+        :param rows: list of database rows from query result
+        :type rows: list
+        :param plan_cache: row-extraction plan cache
+        :type plan_cache: dict
+        :return: list of models
+        :rtype: list[Model]
+        """
+        result: list["T"] = []
+        for start in range(0, len(rows), FLAT_ROWS_CHUNK):
+            if start:
+                await asyncio.sleep(0)
+            chunk = rows[start : start + FLAT_ROWS_CHUNK]
+            result.extend(
+                cast(
+                    list["T"],
+                    self.model.from_flat_rows(chunk, self._excludable, plan_cache),
+                )
+            )
+        return result
 
     def _resolve_filter_groups(
         self, groups: Any
