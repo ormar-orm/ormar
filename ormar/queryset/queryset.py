@@ -40,6 +40,7 @@ from ormar.queryset.templates import (
     excludable_shape,
     exists_statement,
     order_shape,
+    release_values,
     template_cache_for,
     template_params,
 )
@@ -360,9 +361,10 @@ class QuerySet(Generic[T]):
             )
             cache.put(key, statement)
         elif templates.CROSS_CHECK:
-            fresh = self.build_template_statement(
-                actions, limit, offset, order_bys, wrap
+            fresh = self.build_select_expression(
+                limit=limit, offset=offset, order_bys=order_bys
             )
+            fresh = wrap(fresh) if wrap is not None else fresh
             templates.assert_same_statement(
                 statement, fresh, params, self.model_config.database.dialect
             )
@@ -392,13 +394,27 @@ class QuerySet(Generic[T]):
         :return: statement to execute
         :rtype: Any
         """
+        binder = SlotBinder(actions)
         select = self.build_select_expression(
-            limit=limit,
-            offset=offset,
-            order_bys=order_bys,
-            binder=SlotBinder(actions),
+            limit=limit, offset=offset, order_bys=order_bys, binder=binder
         )
-        return wrap(select) if wrap is not None else select
+        statement = wrap(select) if wrap is not None else select
+        release_values(statement)
+        return statement
+
+    def effective_limit_shape(self, limit: Optional[int]) -> tuple:
+        """
+        Return how the effective limit shapes the SQL: whether a LIMIT is
+        applied at all, and whether it is non-zero (only a non-zero limit with
+        ``select_related`` builds the pagination subquery).
+
+        :param limit: limit passed to ``build_select_expression``
+        :type limit: Optional[int]
+        :return: limit presence and truthiness
+        :rtype: tuple
+        """
+        effective = limit if limit is not None else self.limit_count
+        return effective is not None, bool(effective)
 
     def template_key(
         self,
@@ -430,7 +446,7 @@ class QuerySet(Generic[T]):
             tuple(self._select_related),
             excludable_shape(self._excludable),
             order_shape(order_bys or self.order_bys),
-            (limit if limit is not None else self.limit_count) is not None,
+            self.effective_limit_shape(limit),
             bool(offset or self.query_offset),
             self.limit_sql_raw,
         )
