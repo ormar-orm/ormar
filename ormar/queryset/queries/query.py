@@ -16,6 +16,7 @@ if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
     from ormar.models.excludable import ExcludableItems
     from ormar.queryset import OrderAction
+    from ormar.queryset.templates import SlotBinder
 
 
 class Query:
@@ -30,6 +31,7 @@ class Query:
         excludable: "ExcludableItems",
         order_bys: Optional[list["OrderAction"]],
         limit_raw_sql: bool,
+        binder: Optional["SlotBinder"] = None,
     ) -> None:
         self.query_offset = offset
         self.limit_count = limit_count
@@ -50,6 +52,7 @@ class Query:
         self._init_sorted_orders()
 
         self.limit_raw_sql = limit_raw_sql
+        self.binder = binder
 
     def _init_sorted_orders(self) -> None:
         """
@@ -192,15 +195,21 @@ class Query:
 
         limit_qry: Select[Any] = sqlalchemy.sql.select(qry_text)
         limit_qry = limit_qry.select_from(self.select_from)  # type: ignore
-        limit_qry = FilterQuery(filter_clauses=self.filter_clauses).apply(limit_qry)
         limit_qry = FilterQuery(
-            filter_clauses=self.exclude_clauses, exclude=True
+            filter_clauses=self.filter_clauses, binder=self.binder
+        ).apply(limit_qry)
+        limit_qry = FilterQuery(
+            filter_clauses=self.exclude_clauses, exclude=True, binder=self.binder
         ).apply(limit_qry)
         limit_qry = limit_qry.group_by(qry_text)
         for order_by in maxes.values():
             limit_qry = limit_qry.order_by(order_by)
-        limit_qry = LimitQuery(limit_count=self.limit_count).apply(limit_qry)
-        limit_qry = OffsetQuery(query_offset=self.query_offset).apply(limit_qry)
+        limit_qry = LimitQuery(limit_count=self.limit_count, binder=self.binder).apply(
+            limit_qry
+        )
+        limit_qry = OffsetQuery(
+            query_offset=self.query_offset, binder=self.binder
+        ).apply(limit_qry)
         limit_qry = limit_qry.alias("limit_query")  # type: ignore
         on_clause = sqlalchemy.text(
             f"limit_query.{pk_alias}={self.table.name}.{pk_alias}"
@@ -225,13 +234,19 @@ class Query:
         :return: expression with all present clauses applied
         :rtype: sqlalchemy.sql.selectable.Select
         """
-        expr = FilterQuery(filter_clauses=self.filter_clauses).apply(expr)
-        expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
-            expr
-        )
+        expr = FilterQuery(
+            filter_clauses=self.filter_clauses, binder=self.binder
+        ).apply(expr)
+        expr = FilterQuery(
+            filter_clauses=self.exclude_clauses, exclude=True, binder=self.binder
+        ).apply(expr)
         if not self._pagination_query_required():
-            expr = LimitQuery(limit_count=self.limit_count).apply(expr)
-            expr = OffsetQuery(query_offset=self.query_offset).apply(expr)
+            expr = LimitQuery(limit_count=self.limit_count, binder=self.binder).apply(
+                expr
+            )
+            expr = OffsetQuery(
+                query_offset=self.query_offset, binder=self.binder
+            ).apply(expr)
         expr = OrderQuery(sorted_orders=self.sorted_orders).apply(expr)
         return expr
 

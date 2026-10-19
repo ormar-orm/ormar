@@ -1,9 +1,12 @@
-from typing import Any, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 import sqlalchemy
 from sqlalchemy import ColumnElement, Select, TextClause
 
 from ormar.queryset.actions.filter_action import FilterAction
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ormar.queryset.templates import SlotBinder
 
 
 class FilterQuery:
@@ -12,10 +15,14 @@ class FilterQuery:
     """
 
     def __init__(
-        self, filter_clauses: list[FilterAction], exclude: bool = False
+        self,
+        filter_clauses: list[FilterAction],
+        exclude: bool = False,
+        binder: Optional["SlotBinder"] = None,
     ) -> None:
         self.exclude = exclude
         self.filter_clauses = filter_clauses
+        self.binder = binder
 
     def apply(
         self,
@@ -31,7 +38,7 @@ class FilterQuery:
         """
         if self.filter_clauses:
             clauses: list[Union[TextClause, ColumnElement[Any]]] = [
-                x.get_text_clause() for x in self.filter_clauses
+                x.get_text_clause(self.binder) for x in self.filter_clauses
             ]
             if self.exclude:
                 # every exclude() call is negated on its own, all of them are ANDed

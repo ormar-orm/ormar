@@ -9,6 +9,7 @@ from ormar.queryset.actions.filter_action import FilterAction
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
+    from ormar.queryset.templates import SlotBinder
 
 
 class FilterType(Enum):
@@ -106,18 +107,23 @@ class FilterGroup:
         yield from self.actions
 
     def _get_text_clauses(
-        self,
+        self, binder: Optional["SlotBinder"] = None
     ) -> list[Union[sqlalchemy.sql.expression.TextClause, ColumnElement[Any]]]:
         """
         Helper to return list of text queries from actions and nested groups
+
+        :param binder: names bound values for statement templates, if given
+        :type binder: Optional[SlotBinder]
         :return: list of text queries from actions and nested groups
         :rtype: list[sqlalchemy.sql.elements.TextClause]
         """
-        return [x.get_text_clause() for x in self._nested_groups] + [
-            x.get_text_clause() for x in self.actions
+        return [x.get_text_clause(binder) for x in self._nested_groups] + [
+            x.get_text_clause(binder) for x in self.actions
         ]
 
-    def get_text_clause(self) -> ColumnElement[bool]:
+    def get_text_clause(
+        self, binder: Optional["SlotBinder"] = None
+    ) -> ColumnElement[bool]:
         """
         Returns all own actions and nested groups conditions compiled and joined
         inside parentheses.
@@ -125,13 +131,16 @@ class FilterGroup:
         Substitutes values of the models if value is a ormar Model with its pk value.
         Compiles the clause.
 
+        :param binder: names bound values for statement templates, if given
+        :type binder: Optional[SlotBinder]
         :return: complied and escaped clause
         :rtype: sqlalchemy.sql.elements.TextClause
         """
+        clauses = self._get_text_clauses(binder)
         if self.filter_type == FilterType.AND:
-            clause = sqlalchemy.sql.and_(*self._get_text_clauses()).self_group()
+            clause = sqlalchemy.sql.and_(*clauses).self_group()
         else:
-            clause = sqlalchemy.sql.or_(*self._get_text_clauses()).self_group()
+            clause = sqlalchemy.sql.or_(*clauses).self_group()
         if self.exclude:
             clause = sqlalchemy.sql.not_(clause)
         return clause

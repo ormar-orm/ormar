@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import TextClause
 
@@ -9,6 +9,7 @@ from ormar.relations.aliases import prefixed_table
 
 if TYPE_CHECKING:  # pragma: nocover
     from ormar import Model
+    from ormar.queryset.templates import SlotBinder
 
 FILTER_OPERATORS = {
     "exact": "__eq__",
@@ -124,24 +125,38 @@ class FilterAction(QueryAction):
         sufix = "%" if "end" not in self.operator else ""
         self.filter_value = f"{prefix}{self.filter_value}{sufix}"
 
-    def get_text_clause(self) -> TextClause:
+    def bound_value(self) -> Any:
+        """
+        Return the value bound to the query: an ormar Model is replaced by its
+        primary key.
+
+        :return: value to bind
+        :rtype: Any
+        """
+        if isinstance(self.filter_value, ormar.Model):
+            return self.filter_value.pk
+        return self.filter_value
+
+    def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
         """
         Escapes characters if it's required.
         Substitutes values of the models if value is a ormar Model with its pk value.
         Compiles the clause.
 
+        :param binder: names the bound value for statement templates, if given
+        :type binder: Optional[SlotBinder]
         :return: complied and escaped clause
         :rtype: sqlalchemy.sql.elements.TextClause
         """
-        if isinstance(self.filter_value, ormar.Model):
-            self.filter_value = self.filter_value.pk
-
+        value = self.bound_value()
         op_attr = FILTER_OPERATORS[self.operator]
         if self.operator == "isnull":
-            op_attr = "is_" if self.filter_value else "isnot"
+            op_attr = "is_" if value else "isnot"
             filter_value = None
         else:
-            filter_value = self.filter_value
+            filter_value = value
+            if binder is not None and value is not None:
+                filter_value = binder.bind(self, value)
         if self.table_prefix:
             aliased_table = prefixed_table(self.table_prefix, self.column.table)
             aliased_column = getattr(aliased_table.c, self.column.name)

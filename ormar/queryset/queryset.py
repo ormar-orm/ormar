@@ -28,6 +28,7 @@ from ormar.queryset.actions.order_action import OrderAction
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
+from ormar.queryset.templates import SlotBinder
 from ormar.queryset.utils import (
     extract_access_chains,
     get_relationship_alias_model_and_str,
@@ -271,6 +272,7 @@ class QuerySet(Generic[T]):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         order_bys: Optional[list] = None,
+        binder: Optional[SlotBinder] = None,
     ) -> sqlalchemy.sql.Select:
         """
         Constructs the actual database query used in the QuerySet.
@@ -282,6 +284,8 @@ class QuerySet(Generic[T]):
         :type offset: int
         :param order_bys: list of order-by fields names
         :type order_bys: list
+        :param binder: names per-call values for statement templates, if given
+        :type binder: Optional[SlotBinder]
         :return: built sqlalchemy select expression
         :rtype: sqlalchemy.sql.selectable.Select
         """
@@ -295,6 +299,7 @@ class QuerySet(Generic[T]):
             order_bys=order_bys or self.order_bys,
             limit_raw_sql=self.limit_sql_raw,
             limit_count=limit if limit is not None else self.limit_count,
+            binder=binder,
         )
         exp = qry.build_select_expression()
         # print("\n", exp.compile(compile_kwargs={"literal_binds": True}))
