@@ -173,6 +173,19 @@ async def test_delete_and_update():
 
 
 @pytest.mark.asyncio
+async def test_get_after_exclude_checks_all_matches():
+    async with base_ormar_config.database:
+        for title in ["a", "b", "c"]:
+            await Book.objects.create(title=title, author="Anonymous")
+
+        with pytest.raises(ormar.exceptions.MultipleMatches):
+            await Book.objects.exclude(title="zzz").get()
+
+        book = await Book.objects.exclude(title__in=["a", "b"]).get()
+        assert book.title == "c"
+
+
+@pytest.mark.asyncio
 async def test_get_or_create():
     async with base_ormar_config.database:
         tom, created = await Book.objects.get_or_create(

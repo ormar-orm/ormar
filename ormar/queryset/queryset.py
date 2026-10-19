@@ -1194,7 +1194,7 @@ class QuerySet(Generic[T]):
         if kwargs or args:
             return await self.filter(*args, **kwargs).get()
 
-        if not self.filter_clauses:
+        if not (self.filter_clauses or self.exclude_clauses):
             expr = self.build_select_expression(
                 limit=1,
                 order_bys=(
