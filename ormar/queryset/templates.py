@@ -8,10 +8,12 @@ from collections import OrderedDict
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Dict,
     Iterable,
     Iterator,
     List,
+    Mapping,
     NamedTuple,
     Optional,
     Tuple,
@@ -32,6 +34,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 LIMIT_SLOT = "ormar_limit"
 OFFSET_SLOT = "ormar_offset"
+PK_SLOT = "ormar_pk"
 TEMPLATE_CACHE_SIZE = 512
 # Test-suite safety net: every template hit is also built fresh and compared.
 CROSS_CHECK = os.environ.get("ORMAR_TEMPLATE_CROSS_CHECK") == "1"
@@ -407,3 +410,257 @@ def aggregate_statement(
     """
     subquery = select.alias(f"subquery_for_{func_name}")
     return sqlalchemy.select(*select_columns).select_from(subquery)
+
+
+class WriteTemplate(NamedTuple):
+    """A cached write statement and the values to bind for one call."""
+
+    statement: Executable
+    params: Dict[str, Any]
+
+
+def cached_statement(
+    model_cls: Type[Any],
+    key: Tuple[Any, ...],
+    builder: Callable[..., Executable],
+    *args: Any,
+) -> Executable:
+    """
+    Return the statement cached for a write shape, building it on a miss.
+    With ``CROSS_CHECK`` a hit is rebuilt and compared.
+
+    :param model_cls: model the statement writes
+    :type model_cls: Type[Any]
+    :param key: write shape
+    :type key: Tuple[Any, ...]
+    :param builder: builds the statement from ``args``
+    :type builder: Callable[..., Executable]
+    :param args: arguments of the builder
+    :type args: Any
+    :raises AssertionError: when the cached statement differs from a fresh one
+    :return: statement for the shape
+    :rtype: Executable
+    """
+    cache = template_cache_for(model_cls)
+    statement = cache.get(key)
+    if statement is None:
+        statement = builder(*args)
+        cache.put(key, statement)
+    elif CROSS_CHECK:
+        fresh = builder(*args)
+        cached_sql = str(statement.compile())  # type: ignore[attr-defined]
+        if cached_sql != str(fresh.compile()):  # type: ignore[attr-defined]
+            raise AssertionError(f"Query template mismatch for {key}: {cached_sql}")
+    return statement
+
+
+def primary_key_column(model_cls: Type[Any]) -> sqlalchemy.Column:
+    """
+    Return the primary key column of a model's table.
+
+    :param model_cls: model class
+    :type model_cls: Type[Any]
+    :return: primary key column
+    :rtype: sqlalchemy.Column
+    """
+    alias = model_cls.get_column_alias(model_cls.ormar_config.pkname)
+    return model_cls.ormar_config.table.c[alias]
+
+
+def primary_key_bind(column: sqlalchemy.Column) -> BindParameter:
+    """
+    Return the named bind parameter of a primary key filter.
+
+    :param column: primary key column
+    :type column: sqlalchemy.Column
+    :return: named bind parameter
+    :rtype: BindParameter
+    """
+    return sqlalchemy.bindparam(PK_SLOT, type_=column.type)
+
+
+def value_binds(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Dict[Any, Any]:
+    """
+    Return named bind parameters for the written columns, ``ormar_v{i}`` in
+    the given column order.
+
+    :param table: written table
+    :type table: sqlalchemy.Table
+    :param names: written column names, sorted
+    :type names: Tuple[str, ...]
+    :return: bind parameter per column
+    :rtype: Dict[Any, Any]
+    """
+    return {
+        table.c[name]: sqlalchemy.bindparam(f"ormar_v{index}", type_=table.c[name].type)
+        for index, name in enumerate(names)
+    }
+
+
+def value_params(names: Tuple[str, ...], values: Mapping[str, Any]) -> Dict[str, Any]:
+    """
+    Return the written values keyed by their bind parameter names.
+
+    :param names: written column names, sorted
+    :type names: Tuple[str, ...]
+    :param values: written values by column name
+    :type values: Mapping[str, Any]
+    :return: values by bind parameter name
+    :rtype: Dict[str, Any]
+    """
+    return {f"ormar_v{index}": values[name] for index, name in enumerate(names)}
+
+
+def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:
+    """
+    Build an insert of the given columns with named value binds.
+
+    :param table: written table
+    :type table: sqlalchemy.Table
+    :param names: written column names, sorted
+    :type names: Tuple[str, ...]
+    :return: insert statement
+    :rtype: Executable
+    """
+    return table.insert().values(value_binds(table, names))
+
+
+def build_update(
+    table: sqlalchemy.Table, names: Tuple[str, ...], pk_column: sqlalchemy.Column
+) -> Executable:
+    """
+    Build an update of the given columns of one row, by primary key.
+
+    :param table: written table
+    :type table: sqlalchemy.Table
+    :param names: updated column names, sorted
+    :type names: Tuple[str, ...]
+    :param pk_column: primary key column
+    :type pk_column: sqlalchemy.Column
+    :return: update statement
+    :rtype: Executable
+    """
+    return (
+        table.update()
+        .values(value_binds(table, names))
+        .where(pk_column == primary_key_bind(pk_column))
+    )
+
+
+def build_delete(table: sqlalchemy.Table, pk_column: sqlalchemy.Column) -> Executable:
+    """
+    Build a delete of one row, by primary key.
+
+    :param table: written table
+    :type table: sqlalchemy.Table
+    :param pk_column: primary key column
+    :type pk_column: sqlalchemy.Column
+    :return: delete statement
+    :rtype: Executable
+    """
+    return table.delete().where(pk_column == primary_key_bind(pk_column))
+
+
+def build_pk_select(
+    table: sqlalchemy.Table, pk_column: sqlalchemy.Column
+) -> Executable:
+    """
+    Build a select of one row, by primary key.
+
+    :param table: queried table
+    :type table: sqlalchemy.Table
+    :param pk_column: primary key column
+    :type pk_column: sqlalchemy.Column
+    :return: select statement
+    :rtype: Executable
+    """
+    return table.select().where(pk_column == primary_key_bind(pk_column))
+
+
+def insert_template(model_cls: Type[Any], values: Mapping[str, Any]) -> WriteTemplate:
+    """
+    Return the insert of a model for the given column values.
+
+    :param model_cls: inserted model
+    :type model_cls: Type[Any]
+    :param values: values by column name
+    :type values: Mapping[str, Any]
+    :return: statement and values to bind
+    :rtype: WriteTemplate
+    """
+    names = tuple(sorted(values))
+    table = model_cls.ormar_config.table
+    statement = cached_statement(
+        model_cls, ("insert", names), build_insert, table, names
+    )
+    return WriteTemplate(statement, value_params(names, values))
+
+
+def update_template(
+    model_cls: Type[Any], values: Mapping[str, Any], pk: Any
+) -> WriteTemplate:
+    """
+    Return the update of one row of a model for the given column values.
+
+    :param model_cls: updated model
+    :type model_cls: Type[Any]
+    :param values: values by column name
+    :type values: Mapping[str, Any]
+    :param pk: primary key of the row
+    :type pk: Any
+    :return: statement and values to bind
+    :rtype: WriteTemplate
+    """
+    names = tuple(sorted(values))
+    table = model_cls.ormar_config.table
+    statement = cached_statement(
+        model_cls,
+        ("update", names),
+        build_update,
+        table,
+        names,
+        primary_key_column(model_cls),
+    )
+    return WriteTemplate(statement, {**value_params(names, values), PK_SLOT: pk})
+
+
+def delete_template(model_cls: Type[Any], pk: Any) -> WriteTemplate:
+    """
+    Return the delete of one row of a model.
+
+    :param model_cls: model
+    :type model_cls: Type[Any]
+    :param pk: primary key of the row
+    :type pk: Any
+    :return: statement and values to bind
+    :rtype: WriteTemplate
+    """
+    statement = cached_statement(
+        model_cls,
+        ("delete",),
+        build_delete,
+        model_cls.ormar_config.table,
+        primary_key_column(model_cls),
+    )
+    return WriteTemplate(statement, {PK_SLOT: pk})
+
+
+def pk_select_template(model_cls: Type[Any], pk: Any) -> WriteTemplate:
+    """
+    Return the select of one row of a model by primary key.
+
+    :param model_cls: model
+    :type model_cls: Type[Any]
+    :param pk: primary key of the row
+    :type pk: Any
+    :return: statement and values to bind
+    :rtype: WriteTemplate
+    """
+    statement = cached_statement(
+        model_cls,
+        ("select_pk",),
+        build_pk_select,
+        model_cls.ormar_config.table,
+        primary_key_column(model_cls),
+    )
+    return WriteTemplate(statement, {PK_SLOT: pk})

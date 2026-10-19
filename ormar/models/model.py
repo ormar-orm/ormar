@@ -7,6 +7,12 @@ import ormar.queryset  # noqa I100
 from ormar.exceptions import ModelPersistenceError, NoMatch
 from ormar.models import NewBaseModel  # noqa I100
 from ormar.models.model_row import ModelRow
+from ormar.queryset.templates import (
+    delete_template,
+    insert_template,
+    pk_select_template,
+    update_template,
+)
 from ormar.queryset.utils import subtract_dict, translate_list_to_dict
 
 T = TypeVar("T", bound="Model")
@@ -29,12 +35,17 @@ class Model(ModelRow):
         }
         return f"{self.__class__.__name__}({str(_repr)})"
 
-    async def _execute_query(self, expr: Executable, is_select: bool = False) -> Any:
+    async def _execute_query(
+        self,
+        expr: Executable,
+        is_select: bool = False,
+        params: Optional[dict] = None,
+    ) -> Any:
         async with self.ormar_config.database.get_query_executor() as executor:
             row = (
-                await executor.fetch_one(expr)
+                await executor.fetch_one(expr, params)
                 if is_select
-                else await executor.execute(expr)
+                else await executor.execute(expr, params)
             )
         return row
 
@@ -85,8 +96,10 @@ class Model(ModelRow):
             return await self.save()
 
         if force_save:
-            expr = self.ormar_config.table.select().where(self.pk_column == self.pk)
-            row = await self._execute_query(expr, is_select=True)
+            template = pk_select_template(type(self), self.pk)
+            row = await self._execute_query(
+                template.statement, is_select=True, params=template.params
+            )
             if not row:
                 return await self.save()
         return await self.update(**kwargs)
@@ -137,12 +150,11 @@ class Model(ModelRow):
         )
 
         self_fields = self.translate_columns_to_aliases(self_fields)
-        expr = self.ormar_config.table.insert()
-        expr = expr.values(**self_fields)
+        template = insert_template(type(self), self_fields)
 
         pkname = self.ormar_config.pkname
         pk_returned_from_insert = False
-        pk = await self._execute_query(expr)
+        pk = await self._execute_query(template.statement, params=template.params)
         if pk and isinstance(pk, self.pk_type()):
             setattr(self, pkname, pk)
             pk_returned_from_insert = True
@@ -319,9 +331,10 @@ class Model(ModelRow):
             }
         if self_fields:
             self_fields = self.translate_columns_to_aliases(self_fields)
-            expr = self.ormar_config.table.update().values(**self_fields)
-            expr = expr.where(self.pk_column == getattr(self, self.ormar_config.pkname))
-            await self._execute_query(expr)
+            template = update_template(
+                type(self), self_fields, getattr(self, self.ormar_config.pkname)
+            )
+            await self._execute_query(template.statement, params=template.params)
         self.set_save_status(True)
         self.__setattr_fields__.clear()
         await self._emit_signal("post_update", instance=self)
@@ -343,9 +356,8 @@ class Model(ModelRow):
         :rtype: int
         """
         await self._emit_signal("pre_delete", instance=self)
-        expr = self.ormar_config.table.delete()
-        expr = expr.where(self.pk_column == (getattr(self, self.ormar_config.pkname)))
-        result = await self._execute_query(expr)
+        template = delete_template(type(self), getattr(self, self.ormar_config.pkname))
+        result = await self._execute_query(template.statement, params=template.params)
         self.set_save_status(False)
         await self._emit_signal("post_delete", instance=self)
         return result
@@ -361,8 +373,10 @@ class Model(ModelRow):
         :return: reloaded Model
         :rtype: Model
         """
-        expr = self.ormar_config.table.select().where(self.pk_column == self.pk)
-        row = await self._execute_query(expr, is_select=True)
+        template = pk_select_template(type(self), self.pk)
+        row = await self._execute_query(
+            template.statement, is_select=True, params=template.params
+        )
         if not row:  # pragma nocover
             raise NoMatch("Instance was deleted from database and cannot be refreshed")
         kwargs = dict(row)

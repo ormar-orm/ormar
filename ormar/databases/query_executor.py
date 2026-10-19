@@ -108,22 +108,25 @@ class QueryExecutor:
         result: CursorResult[Any] = await self._connection.execute(query, params)
         return result.scalar()
 
-    async def execute(self, query: Executable) -> Any:
+    async def execute(
+        self, query: Executable, params: Optional[Mapping[str, Any]] = None
+    ) -> Any:
         """
         Execute a query (INSERT, UPDATE, DELETE).
 
         :param query: SQLAlchemy query expression
+        :param params: values for named bind parameters of the query
         :return: For INSERT, the inserted primary key or ``None`` if the backend
             cannot return one (e.g. Oracle MySQL inserting into a
             non-AUTO_INCREMENT pk with a server default — no RETURNING support).
             For UPDATE/DELETE, the row count.
         """
-        bound = self._bind(query)
+        bound = self._bind(query, params)
         if bound is not None:
             assert self._native is not None
             return await self._run(self._native.adapter.execute, bound, bound.args)
 
-        result: CursorResult[Any] = await self._connection.execute(query)
+        result: CursorResult[Any] = await self._connection.execute(query, params)
 
         # For INSERT queries, try to get the inserted primary key via the
         # dialect's best-available mechanism (RETURNING on PostgreSQL / SQLite
