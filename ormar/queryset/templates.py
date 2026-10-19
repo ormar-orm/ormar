@@ -221,6 +221,19 @@ def assert_same_statement(
         )
 
 
+def value_types(values: dict[str, Any]) -> dict[str, type]:
+    """
+    Return the type of each value, so values that compare equal across types
+    (``1 == 1.0 == True``, str enums and strings) are told apart.
+
+    :param values: field values
+    :type values: dict[str, Any]
+    :return: type per field name
+    :rtype: dict[str, type]
+    """
+    return {name: type(value) for name, value in values.items()}
+
+
 def iter_actions(
     clauses: List[Union["FilterAction", "FilterGroup"]],
 ) -> Iterator["FilterAction"]:

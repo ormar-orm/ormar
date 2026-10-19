@@ -37,6 +37,8 @@ class DriverAdapter(abc.ABC):
     """
 
     driver_errors: Tuple[Type[BaseException], ...]
+    # whether the driver's executemany is atomic outside a transaction
+    atomic_execute_many = False
 
     def __init__(self, dialect: Dialect) -> None:
         """

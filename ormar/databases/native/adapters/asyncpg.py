@@ -20,8 +20,11 @@ class AsyncpgAdapter(DriverAdapter):
     """
     Executes bound statements on an asyncpg connection. Statements always go
     through asyncpg's statement cache; ``prepare()`` is only called once per
-    plan to read the result column type OIDs.
+    plan to read the result column type OIDs. ``executemany`` runs in an
+    implicit transaction when none is open, so it is atomic.
     """
+
+    atomic_execute_many = True
 
     def __init__(self, dialect: Dialect) -> None:
         """

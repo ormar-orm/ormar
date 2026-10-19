@@ -1,16 +1,20 @@
+import datetime
 import functools
 import uuid
 from typing import Optional
+from unittest import mock
 
 import pytest
 import pytest_asyncio
 import sqlalchemy as sa
 
 import ormar
+from ormar.databases.native import compiler
 from ormar.queryset import templates
 from ormar.queryset.templates import (
     build_pk_select,
     delete_template,
+    insert_statement,
     insert_template,
     pk_select_template,
     template_cache_for,
@@ -48,6 +52,15 @@ class Keyed(ormar.Model):
     ormar_config = base_ormar_config.copy(tablename="write_template_keyed")
 
     id: int = ormar.Integer(primary_key=True, name="key_col")
+    name: str = ormar.String(max_length=50)
+
+
+class Stamped(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="write_template_stamped")
+
+    id: int = ormar.Integer(primary_key=True)
+    stamp: datetime.datetime = ormar.DateTime(default=datetime.datetime.now)
+    payload: dict = ormar.JSON(default={})
     name: str = ormar.String(max_length=50)
 
 
@@ -267,3 +280,63 @@ async def test_bulk_create_pk_only_models_inserts_every_row(connected):
     async with base_ormar_config.database.transaction(force_rollback=True):
         await PkOnly.objects.bulk_create([PkOnly(), PkOnly(), PkOnly()])
         assert await PkOnly.objects.count() == 3
+
+
+@pytest.mark.asyncio
+async def test_single_batch_bulk_create_relies_on_atomic_driver(connected, monkeypatch):
+    database = base_ormar_config.database
+    backend = database.native_backend
+    atomic = backend is not None and backend.adapter.atomic_execute_many
+    assert database.atomic_execute_many is atomic
+    counter = mock.Mock(wraps=database.transaction)
+    monkeypatch.setattr(database, "transaction", counter)
+    await Item.objects.bulk_create([Item(name="a1"), Item(name="a2")])
+    assert counter.call_count == (0 if atomic else 1)
+    with pytest.raises(Exception):
+        await Item.objects.bulk_create(
+            [Item(id=9001, name="x"), Item(id=9001, name="y")]
+        )
+    assert await Item.objects.filter(id=9001).count() == 0
+    await Item.objects.filter(name__in=["a1", "a2"]).delete()
+
+
+@pytest.mark.asyncio
+async def test_direct_batch_binding_matches_expanded_binding(connected, monkeypatch):
+    backend = base_ormar_config.database.native_backend
+    if backend is None:  # pragma: no cover
+        pytest.skip("native execution only")
+    names = ("name", "payload", "stamp")
+    statement = insert_statement(Stamped, names)
+    stamp = datetime.datetime(2021, 1, 2, 3, 4, 5)
+    rows = [
+        {"ormar_v0": f"n{i}", "ormar_v1": {"i": i}, "ormar_v2": stamp} for i in range(3)
+    ]
+    direct = backend.compiler.bind_many(statement, rows)
+    monkeypatch.setattr(compiler, "binds_directly", lambda compiled, row: False)
+    expanded = backend.compiler.bind_many(statement, rows)
+    assert direct.sql == expanded.sql
+    assert direct.args_list == expanded.args_list
+
+
+@pytest.mark.asyncio
+async def test_bulk_create_of_trusted_models_skips_model_dump(connected, monkeypatch):
+    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    counter = mock.Mock(wraps=Item.model_dump)
+    monkeypatch.setattr(Item, "model_dump", counter)
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Item.objects.bulk_create([Item(name="d1"), Item(name="d2")])
+        assert counter.call_count == 0
+        assert await Item.objects.filter(name__in=["d1", "d2"]).count() == 2
+
+
+class WrongDump:
+    def __call__(self, *args, **kwargs):
+        return {"name": "other"}
+
+
+@pytest.mark.asyncio
+async def test_trusted_dump_cross_check_detects_mismatch(connected, monkeypatch):
+    monkeypatch.setattr(templates, "CROSS_CHECK", True)
+    monkeypatch.setattr(Item, "model_dump", WrongDump())
+    with pytest.raises(AssertionError, match="Trusted dump mismatch"):
+        await Item.objects.bulk_create([Item(name="w")])

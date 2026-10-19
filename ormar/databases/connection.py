@@ -213,6 +213,20 @@ class DatabaseConnection:
             async with self._autocommit_engine.connect() as conn:
                 yield QueryExecutor(conn, self.native_backend)
 
+    @property
+    def atomic_execute_many(self) -> bool:
+        """
+        Whether ``execute_many`` outside a transaction is atomic on its own
+        (native asyncpg), so a single batch needs no explicit transaction.
+
+        :return: True when a lone batch needs no transaction
+        :rtype: bool
+        """
+        return (
+            self.native_backend is not None
+            and self.native_backend.adapter.atomic_execute_many
+        )
+
     async def start_driver_transaction(self, connection: AsyncConnection) -> None:
         """
         Make sure the driver-level transaction is open on a connection

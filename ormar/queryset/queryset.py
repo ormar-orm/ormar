@@ -58,6 +58,32 @@ from ormar.queryset.values_columns import values_column_map
 
 FLAT_ROWS_CHUNK = 500
 
+
+def dump_for_save(obj: "Model") -> dict:
+    """
+    Return the field values of a model with ``trusted_row_construction()``:
+    without relations or converted fields its ``model_dump()`` equals a copy
+    of its ``__dict__``. With the template cross-check enabled (test suite)
+    the copy is compared with ``model_dump()``.
+
+    :param obj: model to save
+    :type obj: Model
+    :raises AssertionError: when the copy differs from ``model_dump()``
+    :return: field values
+    :rtype: dict
+    """
+    values = dict(obj.__dict__)
+    if templates.CROSS_CHECK:
+        dumped = obj.model_dump()
+        if values != dumped or templates.value_types(values) != templates.value_types(
+            dumped
+        ):
+            raise AssertionError(
+                f"Trusted dump mismatch for {obj.get_name()}: {values} != {dumped}"
+            )
+    return values
+
+
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
     from ormar.models import T
@@ -1670,19 +1696,25 @@ class QuerySet(Generic[T]):
             raise ModelListEmptyError("Bulk create objects are empty!")
 
         ready_objects = []
+        trusted = self.model.trusted_row_construction()
         for i, obj in enumerate(objects):
-            ready_objects.append(obj.prepare_model_to_save(obj.model_dump()))
+            values = dump_for_save(obj) if trusted else obj.model_dump()
+            ready_objects.append(obj.prepare_model_to_save(values))
             if i % 100 == 99:  # pragma: no cover
                 await asyncio.sleep(0)
 
         # rows with different key sets (explicit vs omitted pk or server_default)
         # need different inserts, so each key set runs its own insert template;
-        # anything beyond a single one-row insert runs in one transaction
+        # anything beyond a single statement (or a lone batch the driver runs
+        # atomically) runs in one transaction
         rows_by_keys: dict[frozenset[str], list[dict]] = {}
         for row in ready_objects:
             rows_by_keys.setdefault(frozenset(row), []).append(row)
-        several_statements = len(rows_by_keys) > 1 or len(ready_objects) > 1
-        async with self.model_config.database.get_query_executor(
+        database = self.model_config.database
+        several_statements = len(rows_by_keys) > 1 or (
+            len(ready_objects) > 1 and not database.atomic_execute_many
+        )
+        async with database.get_query_executor(
             transactional=several_statements
         ) as executor:
             for rows in rows_by_keys.values():

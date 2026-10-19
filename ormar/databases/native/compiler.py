@@ -208,6 +208,8 @@ class NativeCompiler:
         """
         key = stmt._generate_cache_key()  # type: ignore[attr-defined]
         plan = self._plan(stmt, key)
+        if rows and binds_directly(plan.compiled, rows[0]):
+            return BoundBatch(plan, plan.compiled.string, direct_args(plan, rows))
         sql = ""
         args_list = []
         for row in rows:
@@ -366,6 +368,57 @@ def expand(
         for name in expanded.positiontup or []
     ]
     return expanded.statement, args
+
+
+def binds_directly(compiled: SQLCompiler, row: Mapping[str, Any]) -> bool:
+    """
+    Return whether rows can be bound to a compiled statement by position
+    alone: no expanding or post-compile parameters, no prefetched defaults, no
+    escaped bind names and every positional bind supplied by the row.
+
+    :param compiled: compiled statement
+    :type compiled: SQLCompiler
+    :param row: first row of the batch, keyed by bind parameter name
+    :type row: Mapping[str, Any]
+    :return: True when ``direct_args`` produces the driver arguments
+    :rtype: bool
+    """
+    names = compiled.positiontup
+    return (
+        names is not None
+        and not compiled.post_compile_params
+        and not compiled.insert_prefetch
+        and not compiled.update_prefetch
+        and not compiled.escaped_bind_names
+        and all(name in row for name in names)
+    )
+
+
+def direct_args(
+    plan: StatementPlan, rows: Sequence[Mapping[str, Any]]
+) -> List[List[Any]]:
+    """
+    Build positional driver arguments of a batch straight from its rows,
+    applying the bind processors (same result as ``construct_params`` plus
+    ``expand`` for statements accepted by ``binds_directly``).
+
+    :param plan: plan of the statement
+    :type plan: StatementPlan
+    :param rows: parameter values per row, keyed by bind parameter name
+    :type rows: Sequence[Mapping[str, Any]]
+    :return: positional arguments per row
+    :rtype: List[List[Any]]
+    """
+    compiled = plan.compiled
+    processors: Dict[str, Any] = dict(compiled._bind_processors)
+    binds = [(name, processors.get(name)) for name in compiled.positiontup or []]
+    return [
+        [
+            processor(row[name]) if processor is not None else row[name]
+            for name, processor in binds
+        ]
+        for row in rows
+    ]
 
 
 def pk_param_key(compiled: SQLCompiler) -> Optional[str]:

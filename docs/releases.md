@@ -57,7 +57,12 @@
   such models without `select_related` skip the relation-aware row merging,
   and models without relations skip relation bookkeeping during
   initialization. Loading many rows is 1.7–2.2× faster in the orm-benchmarks
-  suite (small filters 1.3–1.5×), the most on wide models. For such models values stored in the
+  suite (small filters 1.3–1.5×), the most on wide models.
+* `bulk_create()` of such models copies field values instead of calling
+  `model_dump()`, batch parameters are bound by position without per-row
+  expansion, and on asyncpg a bulk insert of one column set runs without an
+  explicit transaction (asyncpg's `executemany` is atomic on its own). Bulk
+  inserts are about 1.6× faster on a warm connection pool. For such models values stored in the
   database are no longer re-validated on load (e.g. a string longer than
   `max_length` written outside ormar loads as is); models with an overwritten
   pydantic type, value-changing `model_config` (`use_enum_values`, string
