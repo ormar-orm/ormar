@@ -62,7 +62,11 @@
   `model_dump()`, batch parameters are bound by position without per-row
   expansion, and on asyncpg a bulk insert of one column set runs without an
   explicit transaction (asyncpg's `executemany` is atomic on its own). Bulk
-  inserts are about 1.6× faster on a warm connection pool. For such models values stored in the
+  inserts are about 1.6× faster on a warm connection pool.
+* Single statements whose values are all named bind parameters are bound by
+  position too, the driver connection of an established connection is read
+  without a greenlet switch, and signals without receivers return immediately:
+  inserts and updates inside a transaction are about 1.15× faster. For such models values stored in the
   database are no longer re-validated on load (e.g. a string longer than
   `max_length` written outside ormar loads as is); models with an overwritten
   pydantic type, value-changing `model_config` (`use_enum_values`, string

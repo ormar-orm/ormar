@@ -340,3 +340,19 @@ async def test_trusted_dump_cross_check_detects_mismatch(connected, monkeypatch)
     monkeypatch.setattr(Item, "model_dump", WrongDump())
     with pytest.raises(AssertionError, match="Trusted dump mismatch"):
         await Item.objects.bulk_create([Item(name="w")])
+
+
+@pytest.mark.asyncio
+async def test_direct_binding_of_one_statement_matches_expanded(connected, monkeypatch):
+    backend = base_ormar_config.database.native_backend
+    if backend is None:  # pragma: no cover
+        pytest.skip("native execution only")
+    stamp = datetime.datetime(2021, 1, 2, 3, 4, 5)
+    template = update_template(
+        Stamped, {"name": "n", "payload": {"a": 1}, "stamp": stamp}, 7
+    )
+    direct = backend.compiler.bind(template.statement, template.params)
+    monkeypatch.setattr(compiler, "binds_directly", lambda compiled, row: False)
+    expanded = backend.compiler.bind(template.statement, template.params)
+    assert direct.sql == expanded.sql
+    assert direct.args == expanded.args

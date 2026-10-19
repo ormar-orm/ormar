@@ -182,6 +182,9 @@ class NativeCompiler:
         """
         key = stmt._generate_cache_key()  # type: ignore[attr-defined]
         plan = self._plan(stmt, key)
+        if params is not None and binds_directly(plan.compiled, params):
+            args = direct_args(plan, [params])[0]
+            return BoundStatement(plan, plan.compiled.string, args, dict(params))
         bound_params = plan.compiled.construct_params(
             params=params,
             extracted_parameters=key[1] if key is not None else None,
