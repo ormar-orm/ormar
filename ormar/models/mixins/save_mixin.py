@@ -131,7 +131,7 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         :rtype: dict
         """
         for name, field in cls.ormar_config.model_fields.items():
-            if field.__type__ == uuid.UUID and name in model_dict:
+            if field.__type__ == uuid.UUID and model_dict.get(name) is not None:
                 parsers = {"string": lambda x: str(x), "hex": lambda x: "%.32x" % x.int}
                 uuid_format = field.column_type.uuid_format
                 parser: Callable[..., Any] = parsers.get(uuid_format, lambda x: x)

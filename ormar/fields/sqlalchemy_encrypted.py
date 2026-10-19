@@ -163,6 +163,8 @@ class EncryptedString(types.TypeDecorator):
         if value is None:
             return value
         self._refresh()
+        if isinstance(value, Enum):
+            value = value.name
         try:
             value = self._underlying_type.process_bind_param(value, dialect)
         except AttributeError:
@@ -194,6 +196,8 @@ class EncryptedString(types.TypeDecorator):
                     [additional_parameter] if additional_parameter else []
                 )
                 return decoder(*params)  # type: ignore
+            if issubclass(self.type_, Enum):
+                return self.type_[decrypted_value]
 
             return self._field_type.__type__(decrypted_value)  # type: ignore
 
