@@ -4,7 +4,12 @@ from sqlalchemy import event, text
 import ormar
 from ormar.databases.connection import DatabaseConnection
 from tests.lifespan import init_tests
-from tests.settings import ASYNC_DATABASE_URL, DATABASE_URL, create_config
+from tests.settings import (
+    ASYNC_DATABASE_URL,
+    DATABASE_URL,
+    MYSQL_DRIVER,
+    create_config,
+)
 
 base_ormar_config = create_config()
 
@@ -24,7 +29,7 @@ def test_url_is_replaced_to_async_and_accessible():
     assert database.url == ASYNC_DATABASE_URL
 
     expected_drivers = {
-        "mysql": "mysql+aiomysql",
+        "mysql": f"mysql+{MYSQL_DRIVER}",
         "sqlite": "sqlite+aiosqlite",
         "postgresql": "postgresql+asyncpg",
     }

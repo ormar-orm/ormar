@@ -33,9 +33,9 @@ Database URLs must now use async drivers:
 # OLD: "postgresql://user:pass@localhost/db"
 # NEW: "postgresql+asyncpg://user:pass@localhost/db"
 
-# MySQL - use +aiomysql
+# MySQL - use +asyncmy (recommended) or +aiomysql
 # OLD: "mysql://user:pass@localhost/db"
-# NEW: "mysql+aiomysql://user:pass@localhost/db"
+# NEW: "mysql+asyncmy://user:pass@localhost/db"
 ```
 
 ### 3. Engine Parameter No Longer Needed

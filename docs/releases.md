@@ -32,6 +32,12 @@
 
 ### ✨ Features
 
+* `asyncmy` is now the recommended MySQL driver (`mysql+asyncmy://...`) and
+  `pip install ormar[mysql]` installs it alongside `aiomysql` and `pymysql`.
+  On MySQL it is ~1.2× faster overall and up to 2.5× faster when fetching
+  larger result sets than `aiomysql`, which stays supported, so existing
+  `mysql+aiomysql://` URLs keep working. The test suite now runs against both
+  drivers.
 * Add `IndexColumns(..., case_insensitive=True)` to build a case-insensitive
   unique index (each named column wrapped in `LOWER()`), so values that differ
   only in case cannot both be stored. `IndexColumns` now also accepts SQLAlchemy

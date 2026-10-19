@@ -36,7 +36,11 @@ Will install also `asyncpg` and `psycopg2`.
 pip install ormar[mysql]
 ```
 
-Will install also `aiomysql` and `pymysql`.
+Will install also `asyncmy`, `aiomysql` and `pymysql`.
+
+`asyncmy` is the recommended async driver (`mysql+asyncmy://...`): it parses results in C
+and is noticeably faster on reads than `aiomysql`. `aiomysql` (`mysql+aiomysql://...`) is
+still supported.
 
 #### Sqlite
 
