@@ -272,6 +272,15 @@ async def test_related_model_fields_properly_decrypted():
 
 
 @pytest.mark.asyncio
+async def test_bulk_update_encrypts_values():
+    async with base_ormar_config.database:
+        item = await Filter(name="before").save()
+        item.name = "after"
+        await Filter.objects.bulk_update([item])
+        assert (await Filter.objects.get(id=item.id)).name == "after"
+
+
+@pytest.mark.asyncio
 async def test_encrypted_enum_round_trip():
     async with base_ormar_config.database:
         red = await Paint.objects.create(color=Color.RED)

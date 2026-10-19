@@ -64,6 +64,10 @@
 
 ### 🐛 Fixes
 
+* Fix `bulk_update()` writing encrypted fields as plain text. The update now
+  runs as a SQLAlchemy statement, so column types process the values like in
+  `save()` and `update()`.
+  [#1866](https://github.com/ormar-orm/ormar/issues/1866)
 * Fix `bulk_update()` failing on a nullable `uuid` field that is `None`.
   [#1854](https://github.com/ormar-orm/ormar/issues/1854)
 * Fix encrypted `Enum` fields storing a value that could not be read back,
