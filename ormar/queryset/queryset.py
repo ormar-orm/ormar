@@ -1,4 +1,5 @@
 import asyncio
+import functools
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -32,9 +33,12 @@ from ormar.queryset.queries.query import Query
 from ormar.queryset.templates import (
     SelectTemplate,
     SlotBinder,
+    aggregate_statement,
     canonical_actions,
     clauses_shape,
+    count_statement,
     excludable_shape,
+    exists_statement,
     order_shape,
     template_cache_for,
     template_params,
@@ -841,9 +845,9 @@ class QuerySet(Generic[T]):
             if excludable is self._excludable
             else self.rebuild_self(excludable=excludable)
         )
-        expr = projected.build_select_expression()
+        template = projected.build_select_template()
         async with self.model_config.database.get_query_executor() as executor:
-            rows = await executor.fetch_all(expr)
+            rows = await executor.fetch_all(template.statement, template.params)
         if not rows:
             return []
         column_map = values_column_map(
@@ -906,10 +910,11 @@ class QuerySet(Generic[T]):
         :return: result of the check
         :rtype: bool
         """
-        expr = self.build_select_expression()
-        expr = sqlalchemy.exists(expr).select()
+        template = self.build_select_template(("exists",), wrap=exists_statement)
         async with self.model_config.database.get_query_executor() as executor:
-            result = await executor.fetch_val(expr)
+            result = await executor.fetch_val(
+                template.statement, params=template.params
+            )
             return bool(result)
 
     async def count(self, distinct: bool = True) -> int:
@@ -928,14 +933,16 @@ class QuerySet(Generic[T]):
         :return: number of rows
         :rtype: int
         """
-        expr = self.build_select_expression().alias("subquery_for_count")
-        expr = sqlalchemy.func.count().select().select_from(expr)  # type: ignore
-        if distinct:
-            pk_column_name = self.model.get_column_alias(self.model_config.pkname)
-            expr_distinct = expr.group_by(pk_column_name).alias("subquery_for_group")  # type: ignore
-            expr = sqlalchemy.func.count().select().select_from(expr_distinct)  # type: ignore
+        wrap = functools.partial(
+            count_statement,
+            distinct=distinct,
+            pk_column_name=self.model.get_column_alias(self.model_config.pkname),
+        )
+        template = self.build_select_template(("count", distinct), wrap=wrap)
         async with self.model_config.database.get_query_executor() as executor:
-            result = await executor.fetch_val(expr)  # type: ignore
+            result = await executor.fetch_val(
+                template.statement, params=template.params
+            )
             return int(result) if result is not None else 0
 
     async def _query_aggr_function(self, func_name: str, columns: list) -> Any:
@@ -954,11 +961,14 @@ class QuerySet(Generic[T]):
                 "existing columns of the target model"
             )
         select_columns = [x.apply_func(func, use_label=True) for x in select_actions]
-        expr = self.build_select_expression().alias(f"subquery_for_{func_name}")
-        expr = sqlalchemy.select(*select_columns).select_from(expr)  # type: ignore
-        # print("\n", expr.compile(compile_kwargs={"literal_binds": True}))
+        wrap = functools.partial(
+            aggregate_statement, func_name=func_name, select_columns=select_columns
+        )
+        template = self.build_select_template(
+            ("aggregate", func_name, tuple(columns)), wrap=wrap
+        )
         async with self.model_config.database.get_query_executor() as executor:
-            result = await executor.fetch_one(expr)  # type: ignore
+            result = await executor.fetch_one(template.statement, template.params)
         return dict(result) if len(result) > 1 else result[columns[0]]  # type: ignore
 
     async def max(self, columns: Union[str, list[str]]) -> Any:  # noqa: A003
@@ -1192,9 +1202,9 @@ class QuerySet(Generic[T]):
         :return: the single fetched model
         :rtype: Model
         """
-        expr = self.build_select_expression(limit=1, order_bys=order_bys)
+        template = self.build_select_template(limit=1, order_bys=order_bys)
         async with self.model_config.database.get_query_executor() as executor:
-            rows = await executor.fetch_all(expr)
+            rows = await executor.fetch_all(template.statement, template.params)
         processed_rows = await self._process_query_result_rows(rows)
         if self._prefetch_related and processed_rows:
             processed_rows = await self._prefetch_related_models(processed_rows, rows)
@@ -1326,7 +1336,7 @@ class QuerySet(Generic[T]):
             return await self.filter(*args, **kwargs).get()
 
         if not (self.filter_clauses or self.exclude_clauses):
-            expr = self.build_select_expression(
+            template = self.build_select_template(
                 limit=1,
                 order_bys=(
                     [
@@ -1341,10 +1351,10 @@ class QuerySet(Generic[T]):
                 + self.order_bys,
             )
         else:
-            expr = self.build_select_expression()
+            template = self.build_select_template()
 
         async with self.model_config.database.get_query_executor() as executor:
-            rows = await executor.fetch_all(expr)
+            rows = await executor.fetch_all(template.statement, template.params)
         processed_rows = await self._process_query_result_rows(rows)
         if self._prefetch_related and processed_rows:
             processed_rows = await self._prefetch_related_models(processed_rows, rows)
@@ -1436,9 +1446,9 @@ class QuerySet(Generic[T]):
         if kwargs or args:
             return await self.filter(*args, **kwargs).all()
 
-        expr = self.build_select_expression()
+        template = self.build_select_template()
         async with self.model_config.database.get_query_executor() as executor:
-            rows = await executor.fetch_all(expr)
+            rows = await executor.fetch_all(template.statement, template.params)
         result_rows = await self._process_query_result_rows(rows)
         if self._prefetch_related and result_rows:
             result_rows = await self._prefetch_related_models(result_rows, rows)
@@ -1476,7 +1486,7 @@ class QuerySet(Generic[T]):
                 yield result
             return
 
-        expr = self.build_select_expression()
+        template = self.build_select_template()
 
         rows: list = []
         last_primary_key = None
@@ -1490,7 +1500,7 @@ class QuerySet(Generic[T]):
         async with self.model_config.database.get_query_executor(
             transactional=True
         ) as executor:
-            async for row in executor.iterate(expr):
+            async for row in executor.iterate(template.statement, template.params):
                 current_primary_key = row[pk_alias]
                 if last_primary_key == current_primary_key or last_primary_key is None:
                     last_primary_key = current_primary_key

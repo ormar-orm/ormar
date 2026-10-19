@@ -193,6 +193,8 @@ async def test_hit_without_cross_check_skips_building(connected, monkeypatch):
     monkeypatch.setattr(Query, "build_select_expression", counter)
     Book.objects.filter(title="hit").build_select_template()
     assert counter.calls == 0
+    Book.objects.filter(year=5).build_select_template()
+    assert counter.calls == 1
 
 
 @pytest.mark.asyncio
@@ -215,3 +217,30 @@ async def test_cross_check_passes_for_matching_hit(connected, monkeypatch):
     first = queryset.build_select_template()
     second = Book.objects.select_related("author").filter(title="b").limit(3)
     assert second.build_select_template().statement is first.statement
+
+
+async def run_reads(title):
+    await Book.objects.filter(title=title).all()
+    await Book.objects.get_or_none(title=title)
+    await Book.objects.filter(title=title).first_or_none()
+    await Book.objects.filter(title=title).values(["id", "title"])
+    await Book.objects.filter(title=title).count()
+    await Book.objects.filter(title=title).count(distinct=False)
+    await Book.objects.filter(title=title).exists()
+    await Book.objects.filter(title=title).max("year")
+    await Book.objects.filter(title=title).sum(["year", "id"])
+    await Book.objects.get_or_none()
+    return [book async for book in Book.objects.filter(title=title).iterate()]
+
+
+@pytest.mark.asyncio
+async def test_read_paths_use_templates(connected, monkeypatch):
+    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Book.objects.create(title="warm", year=1)
+        await run_reads("warm")
+        counter = BuildCounter(Query.build_select_expression)
+        monkeypatch.setattr(Query, "build_select_expression", counter)
+        streamed = await run_reads("warm")
+    assert counter.calls == 0
+    assert [book.title for book in streamed] == ["warm"]

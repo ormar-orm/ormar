@@ -351,3 +351,59 @@ def order_shape(order_bys: Iterable["OrderAction"]) -> Tuple[Any, ...]:
         (order.query_str, order.direction, order.table_prefix, order.nulls_ordering)
         for order in order_bys
     )
+
+
+def exists_statement(select: sqlalchemy.sql.Select) -> Executable:
+    """
+    Wrap a read select into ``SELECT EXISTS (...)``.
+
+    :param select: read select of the queryset
+    :type select: sqlalchemy.sql.Select
+    :return: exists statement
+    :rtype: Executable
+    """
+    return sqlalchemy.exists(select).select()
+
+
+def count_statement(
+    select: sqlalchemy.sql.Select, distinct: bool, pk_column_name: str
+) -> Executable:
+    """
+    Wrap a read select into a row count, optionally of distinct primary keys.
+
+    :param select: read select of the queryset
+    :type select: sqlalchemy.sql.Select
+    :param distinct: count distinct primary keys only
+    :type distinct: bool
+    :param pk_column_name: primary key column alias of the model
+    :type pk_column_name: str
+    :return: count statement
+    :rtype: Executable
+    """
+    subquery = select.alias("subquery_for_count")
+    expr = sqlalchemy.func.count().select().select_from(subquery)
+    if distinct:
+        grouped = expr.group_by(pk_column_name).alias(  # type: ignore[arg-type]
+            "subquery_for_group"
+        )
+        expr = sqlalchemy.func.count().select().select_from(grouped)
+    return expr
+
+
+def aggregate_statement(
+    select: sqlalchemy.sql.Select, func_name: str, select_columns: List[Any]
+) -> Executable:
+    """
+    Wrap a read select into aggregate function columns.
+
+    :param select: read select of the queryset
+    :type select: sqlalchemy.sql.Select
+    :param func_name: aggregate function name
+    :type func_name: str
+    :param select_columns: aggregate column expressions
+    :type select_columns: List[Any]
+    :return: aggregate statement
+    :rtype: Executable
+    """
+    subquery = select.alias(f"subquery_for_{func_name}")
+    return sqlalchemy.select(*select_columns).select_from(subquery)
