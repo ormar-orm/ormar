@@ -137,6 +137,21 @@ class FilterAction(QueryAction):
             return self.filter_value.pk
         return self.filter_value
 
+    def binds_slot(self) -> bool:
+        """
+        Return whether the value is bound as a parameter: SQLAlchemy renders
+        ``None`` (``IS NULL``), booleans and ``isnull`` checks into the SQL text.
+
+        :return: True when the value is sent as a bound parameter
+        :rtype: bool
+        """
+        value = self.bound_value()
+        return (
+            self.operator != "isnull"
+            and value is not None
+            and not isinstance(value, bool)
+        )
+
     def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
         """
         Escapes characters if it's required.
@@ -155,7 +170,7 @@ class FilterAction(QueryAction):
             filter_value = None
         else:
             filter_value = value
-            if binder is not None and value is not None:
+            if binder is not None and self.binds_slot():
                 filter_value = binder.bind(self, value)
         if self.table_prefix:
             aliased_table = prefixed_table(self.table_prefix, self.column.table)

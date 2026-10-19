@@ -4,6 +4,8 @@ statement built once per query shape can be reused with new values.
 """
 
 import os
+import re
+import weakref
 from collections import OrderedDict
 from typing import (
     TYPE_CHECKING,
@@ -20,9 +22,12 @@ from typing import (
 )
 
 import sqlalchemy
+from sqlalchemy.dialects.sqlite.base import SQLiteDialect
 from sqlalchemy.engine.interfaces import Dialect
-from sqlalchemy.sql import Executable
+from sqlalchemy.sql import Executable, operators, visitors
 from sqlalchemy.sql.elements import BindParameter
+
+from ormar.queryset.actions.filter_action import FILTER_OPERATORS
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.models.excludable import ExcludableItems
@@ -32,7 +37,20 @@ if TYPE_CHECKING:  # pragma: no cover
 
 LIMIT_SLOT = "ormar_limit"
 OFFSET_SLOT = "ormar_offset"
+NUMBERED = re.compile(r"[$:](\d+)")
 TEMPLATE_CACHE_SIZE = 512
+# SQLAlchemy operators of ormar's filter operator methods, used to type bound
+# values exactly like a plain ``column <op> value`` comparison would.
+COMPARISON_OPERATORS = {
+    "__eq__": operators.eq,
+    "like": operators.like_op,
+    "ilike": operators.ilike_op,
+    "in_": operators.in_op,
+    "__gt__": operators.gt,
+    "__ge__": operators.ge,
+    "__lt__": operators.lt,
+    "__le__": operators.le,
+}
 # Test-suite safety net: every template hit is also built fresh and compared.
 CROSS_CHECK = os.environ.get("ORMAR_TEMPLATE_CROSS_CHECK") == "1"
 
@@ -66,7 +84,10 @@ class TemplateCache:
         """
         statement = self.entries.get(key)
         if statement is not None:
-            self.entries.move_to_end(key)
+            try:
+                self.entries.move_to_end(key)
+            except KeyError:  # pragma: no cover - evicted concurrently
+                pass
         return statement
 
     def put(self, key: Any, statement: Any) -> None:
@@ -87,7 +108,9 @@ class TemplateCache:
         self.entries.clear()
 
 
-TEMPLATE_CACHES: Dict[type, TemplateCache] = {}
+TEMPLATE_CACHES: "weakref.WeakKeyDictionary[type, TemplateCache]" = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def template_cache_for(model_cls: Type[Any]) -> TemplateCache:
@@ -123,9 +146,8 @@ def template_params(
     """
     params = {}
     for index, action in enumerate(actions):
-        value = action.bound_value()
-        if action.operator != "isnull" and value is not None:
-            params[f"ormar_p{index}"] = value
+        if action.binds_slot():
+            params[f"ormar_p{index}"] = action.bound_value()
     if limit is not None:
         params[LIMIT_SLOT] = limit
     if offset:
@@ -133,16 +155,54 @@ def template_params(
     return params
 
 
+def rendered_statement(
+    statement: Executable, params: Optional[Dict[str, Any]], dialect: Dialect
+) -> Tuple[Any, ...]:
+    """
+    Render a statement to positional SQL, values and bind types, so statements
+    with differently named parameters can be compared.
+
+    :param statement: statement to render
+    :type statement: Executable
+    :param params: values for named bind parameters, or None to use the
+        values stored on the statement
+    :type params: Optional[Dict[str, Any]]
+    :param dialect: dialect to render with
+    :type dialect: Dialect
+    :return: SQL, positional values and bind type classes
+    :rtype: Tuple[Any, ...]
+    """
+    if not dialect.positional:  # pragma: no cover - aiopg only
+        dialect = SQLiteDialect()
+    compiled = statement.compile(dialect=dialect)  # type: ignore[attr-defined]
+    bound = compiled.construct_params(params)
+    expanded = compiled.construct_expanded_state(bound)
+    names = list(expanded.positiontup or [])
+    sql = expanded.statement
+    if dialect.paramstyle.startswith("numeric"):
+        # numbered placeholders render a repeated parameter once; list it per
+        # occurrence so one shared slot equals two separate parameters
+        names = [names[int(number) - 1] for number in NUMBERED.findall(sql)]
+        sql = NUMBERED.sub("?", sql)
+    values = [expanded.parameters[name] for name in names]
+    types = [
+        type(compiled.binds[name].type).__name__
+        for name in names
+        if name in compiled.binds
+    ]
+    return sql, values, types
+
+
 def assert_same_statement(
     cached: Executable, fresh: Executable, params: Dict[str, Any], dialect: Dialect
 ) -> None:
     """
-    Fail if a cached template would run different SQL or values than the
-    statement built fresh for the same call.
+    Fail if a cached template would run different SQL, values or bind types
+    than the statement built without templates for the same call.
 
     :param cached: statement taken from the template cache
     :type cached: Executable
-    :param fresh: statement built for this call
+    :param fresh: statement built without named slots for this call
     :type fresh: Executable
     :param params: values bound to the cached statement
     :type params: Dict[str, Any]
@@ -150,14 +210,11 @@ def assert_same_statement(
     :type dialect: Dialect
     :raises AssertionError: when the statements differ
     """
-    cached_sql = cached.compile(dialect=dialect)  # type: ignore[attr-defined]
-    fresh_sql = fresh.compile(dialect=dialect)  # type: ignore[attr-defined]
-    cached_values = cached_sql.construct_params(params)
-    if str(cached_sql) != str(fresh_sql) or cached_values != fresh_sql.params:
+    cached_render = rendered_statement(cached, params, dialect)
+    fresh_render = rendered_statement(fresh, None, dialect)
+    if cached_render != fresh_render:
         raise AssertionError(
-            "Query template mismatch:\n"
-            f"cached: {cached_sql} {cached_values}\n"
-            f"fresh:  {fresh_sql} {fresh_sql.params}"
+            f"Query template mismatch:\ncached: {cached_render}\nfresh:  {fresh_render}"
         )
 
 
@@ -226,11 +283,13 @@ class SlotBinder:
         :return: named bind parameter
         :rtype: BindParameter
         """
-        return sqlalchemy.bindparam(
+        operator = COMPARISON_OPERATORS[FILTER_OPERATORS[action.operator]]
+        return BindParameter(
             self.slots[id(action)],
             value,
-            type_=action.column.type,
             expanding=action.operator == "in",
+            _compared_to_operator=operator,
+            _compared_to_type=action.column.type,
         )
 
     def limit(self, value: int) -> BindParameter:
@@ -272,7 +331,9 @@ def value_kind(action: "FilterAction") -> Any:
         return ("isnull", bool(value))
     if action.operator == "in":
         return "in"
-    return "none" if value is None else "value"
+    if not action.binds_slot():
+        return ("literal", value)
+    return ("value", type(value))
 
 
 def action_shape(action: "FilterAction") -> Tuple[Any, ...]:
@@ -407,3 +468,17 @@ def aggregate_statement(
     """
     subquery = select.alias(f"subquery_for_{func_name}")
     return sqlalchemy.select(*select_columns).select_from(subquery)
+
+
+def release_values(statement: Executable) -> None:
+    """
+    Drop the values of a template's named slots (SQLAlchemy may have cloned the
+    bind parameters while building), so a cached statement does not keep the
+    first call's values alive; every call binds its own values.
+
+    :param statement: built template statement
+    :type statement: Executable
+    """
+    for element in visitors.iterate(statement):  # type: ignore[arg-type]
+        if isinstance(element, BindParameter) and str(element.key).startswith("ormar_"):
+            element.value = None

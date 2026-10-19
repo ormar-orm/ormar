@@ -1,8 +1,11 @@
+import datetime
 import functools
 from typing import Optional
 
 import pytest
 import pytest_asyncio
+import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
 
 import ormar
 from ormar.queryset import templates
@@ -11,10 +14,11 @@ from ormar.queryset.templates import (
     SlotBinder,
     TemplateCache,
     canonical_actions,
+    rendered_statement,
     template_cache_for,
 )
 from tests.lifespan import init_tests
-from tests.settings import create_config
+from tests.settings import DATABASE_URL, create_config
 
 base_ormar_config = create_config()
 
@@ -33,6 +37,17 @@ class Book(ormar.Model):
     title: str = ormar.String(max_length=100)
     year: int = ormar.Integer(default=2000)
     author: Optional[Author] = ormar.ForeignKey(Author)
+
+
+class Event(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="template_events")
+
+    id: int = ormar.Integer(primary_key=True)
+    data: dict = ormar.JSON(default={})
+    day: datetime.date = ormar.Date(default=datetime.date(2020, 6, 1))
+    at: datetime.datetime = ormar.DateTime(default=datetime.datetime(2020, 6, 1, 12, 0))
+    moment: datetime.time = ormar.Time(default=datetime.time(10, 0))
+    flag: bool = ormar.Boolean(default=True)
 
 
 create_test_database = init_tests(base_ormar_config)
@@ -244,3 +259,67 @@ async def test_read_paths_use_templates(connected, monkeypatch):
         streamed = await run_reads("warm")
     assert counter.calls == 0
     assert [book.title for book in streamed] == ["warm"]
+
+
+@pytest.mark.asyncio
+async def test_boolean_filters_stay_literal(connected):
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Event.objects.create(data={"name": "abc"})
+        for _ in range(2):
+            assert await Event.objects.filter(flag=True).count() == 1
+            assert await Event.objects.filter(flag=False).count() == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    DATABASE_URL.startswith("postgresql"),
+    reason="PostgreSQL rejects json LIKE text and date/time vs text comparisons",
+)
+async def test_string_values_on_typed_columns_bind_like_sqlalchemy(  # noqa: E501
+    connected,
+):  # pragma: no cover
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Event.objects.create(data={"name": "abc"})
+        for _ in range(2):
+            assert await Event.objects.filter(data__contains="abc").count() == 1
+            assert await Event.objects.filter(day__gte="2020-01-01").count() == 1
+            assert await Event.objects.filter(at__gte="2020-01-01").count() == 1
+            assert await Event.objects.filter(moment__gte="09:00").count() == 1
+
+
+def test_numbered_placeholders_compare_per_occurrence():
+    shared = sa.bindparam("ormar_p0", type_=sa.Integer())
+    table = Book.ormar_config.table
+    stmt = table.select().where(table.c.id == shared).where(table.c.year == shared)
+    sql, values, types = rendered_statement(stmt, {"ormar_p0": 4}, PGDialect_asyncpg())
+    assert sql.count("?") == 2 and "$" not in sql
+    assert values == [4, 4] and types == ["Integer", "Integer"]
+
+
+@pytest.mark.asyncio
+async def test_value_type_is_part_of_shape(connected):
+    assert key(Event.objects.filter(day__gte="2020-01-01")) != key(
+        Event.objects.filter(day__gte=datetime.date(2020, 1, 1))
+    )
+
+
+@pytest.mark.asyncio
+async def test_limit_zero_does_not_share_paginated_template(connected):
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        author = await Author.objects.create(name="a1")
+        for title in ("x", "y", "z"):
+            await Book.objects.create(title=title, author=author)
+        empty = await Author.objects.select_related("books").limit(0).all()
+        limited = await Author.objects.select_related("books").limit(1).all()
+    assert empty == []
+    assert len(limited[0].books) == 3
+
+
+@pytest.mark.asyncio
+async def test_cached_statement_holds_no_values(connected):
+    template_cache_for(Book).clear()
+    template = Book.objects.filter(id__in=list(range(50))).build_select_template()
+    values = [
+        bind.value for bind in template.statement._generate_cache_key().bindparams
+    ]
+    assert values and all(value is None for value in values)
