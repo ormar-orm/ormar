@@ -114,6 +114,16 @@ class UniqueBook(ormar.Model):
     )
 
 
+class Tag(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="bulk_tags")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=50)
+    note: Optional[str] = ormar.String(
+        max_length=20, nullable=True, server_default="srv"
+    )
+
+
 class NullableUuid(ormar.Model):
     ormar_config = base_ormar_config.copy(tablename="nullable_uuids")
 
@@ -396,6 +406,33 @@ async def test_bulk_create():
 
             with pytest.raises(ormar.exceptions.ModelListEmptyError):
                 await ToDo.objects.bulk_create([])
+
+
+@pytest.mark.asyncio
+async def test_bulk_create_mixed_server_default_values():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            await Tag.objects.bulk_create(
+                [Tag(name="a"), Tag(name="b", note="q"), Tag(name="c")]
+            )
+            tags = await Tag.objects.order_by("name").all()
+            assert [(t.name, t.note) for t in tags] == [
+                ("a", "srv"),
+                ("b", "q"),
+                ("c", "srv"),
+            ]
+
+
+@pytest.mark.asyncio
+async def test_bulk_create_mixed_explicit_pk():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            await Tag.objects.bulk_create([Tag(name="x"), Tag(id=50, name="y")])
+            await Tag.objects.bulk_create([Tag(id=60, name="z"), Tag(name="w")])
+            tags = await Tag.objects.order_by("name").all()
+            assert {t.name: t.id for t in tags}["y"] == 50
+            assert {t.name: t.id for t in tags}["z"] == 60
+            assert len(tags) == 4
 
 
 @pytest.mark.asyncio
