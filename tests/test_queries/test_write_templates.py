@@ -9,9 +9,7 @@ import sqlalchemy as sa
 import ormar
 from ormar.queryset import templates
 from ormar.queryset.templates import (
-    build_delete,
     build_pk_select,
-    cached_statement,
     delete_template,
     insert_template,
     pk_select_template,
@@ -39,7 +37,40 @@ class Token(ormar.Model):
     name: str = ormar.String(max_length=100)
 
 
+class Big(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="write_template_big")
+
+    id: int = ormar.BigInteger(primary_key=True, autoincrement=False)
+    name: str = ormar.String(max_length=50)
+
+
+class Keyed(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="write_template_keyed")
+
+    id: int = ormar.Integer(primary_key=True, name="key_col")
+    name: str = ormar.String(max_length=50)
+
+
+class PkOnly(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="write_template_pk_only")
+
+    id: int = ormar.Integer(primary_key=True)
+
+
 create_test_database = init_tests(base_ormar_config)
+
+
+class Owner(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="write_template_owners")
+
+    id: int = ormar.Integer(primary_key=True)
+
+
+class Thing(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="write_template_things")
+
+    id: int = ormar.Integer(primary_key=True)
+    owner: Optional[Owner] = ormar.ForeignKey(Owner, related_name="items")
 
 
 class CallCounter:
@@ -138,9 +169,11 @@ async def test_write_cross_check_detects_mismatch(connected, monkeypatch):
     monkeypatch.setattr(templates, "CROSS_CHECK", True)
     template_cache_for(Item).clear()
     table = Item.ormar_config.table
-    cached_statement(Item, ("shared",), build_delete, table, table.c.id)
+    wrong = build_pk_select(table, table.c.id)
+    template_cache_for(Item).put(("delete",), wrong)
     with pytest.raises(AssertionError, match="template mismatch"):
-        cached_statement(Item, ("shared",), build_pk_select, table, table.c.id)
+        delete_template(Item, 1)
+    template_cache_for(Item).clear()
 
 
 @pytest.mark.asyncio
@@ -201,3 +234,36 @@ async def test_bulk_ops_use_templates(connected, monkeypatch):
     assert stored == {
         name: f"n-{name}" for name in ("w1", "w2", "h1", "h2", "h3", "single")
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [True, False])
+async def test_explicit_pk_kept_on_both_execution_paths(connected, native):
+    database = base_ormar_config.database
+    backend = database.native_backend
+    if not native:
+        database.native_backend = None
+    try:
+        async with database.transaction(force_rollback=True):
+            big = await Big(id=1000, name="b").save()
+            keyed = await Keyed(id=77, name="k").save()
+            token_id = uuid.uuid4()
+            token = await Token(id=token_id, name="t").save()
+            assert (big.pk, keyed.pk, token.pk) == (1000, 77, token_id)
+            await big.update(name="b2")
+            assert (await Big.objects.get(id=1000)).name == "b2"
+    finally:
+        database.native_backend = backend
+
+
+@pytest.mark.asyncio
+async def test_update_with_non_column_value_raises_compile_error(connected):
+    with pytest.raises(sa.exc.CompileError, match="Unconsumed column names"):
+        await Owner.objects.filter(id=1).update(each=False, items=[])
+
+
+@pytest.mark.asyncio
+async def test_bulk_create_pk_only_models_inserts_every_row(connected):
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await PkOnly.objects.bulk_create([PkOnly(), PkOnly(), PkOnly()])
+        assert await PkOnly.objects.count() == 3

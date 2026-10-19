@@ -58,7 +58,10 @@
   one transaction instead of building one multi-row statement per call, which
   also removes the driver's bound-parameter limit on large batches. In the
   orm-benchmarks suite on PostgreSQL, inserts are 1.1–4.8× and updates
-  1.4–2.9× faster, the most on wide models.
+  1.4–2.9× faster, the most on wide models. `bulk_create()` of models with only
+  a primary key now inserts every row (it inserted a single row before).
+  Context-sensitive SQLAlchemy column defaults (`default=callable(context)`)
+  see the bound parameters of these statements under generated names.
 * Read queries (`get()`, `first()`, `all()`, `iterate()`, `values()`,
   `count()`, `exists()` and aggregates) now cache the built SQLAlchemy
   statement per query shape and only bind the new values on later calls,
