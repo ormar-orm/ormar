@@ -33,6 +33,7 @@ from ormar.queryset.queries.query import Query
 from ormar.queryset.templates import (
     SelectTemplate,
     SlotBinder,
+    WriteTemplate,
     aggregate_statement,
     canonical_actions,
     clauses_shape,
@@ -43,6 +44,8 @@ from ormar.queryset.templates import (
     release_values,
     template_cache_for,
     template_params,
+    value_binds,
+    value_params,
 )
 from ormar.queryset.utils import (
     extract_access_chains,
@@ -401,6 +404,83 @@ class QuerySet(Generic[T]):
         statement = wrap(select) if wrap is not None else select
         release_values(statement)
         return statement
+
+    def build_write_template(self, kind: str, values: dict) -> WriteTemplate:
+        """
+        Return the filtered update (``kind="update"``) or delete of this
+        queryset from the model's template cache, with the values to bind.
+
+        :param kind: ``"update"`` or ``"delete"``
+        :type kind: str
+        :param values: updated values by column name (empty for delete)
+        :type values: dict
+        :return: statement and values to bind
+        :rtype: WriteTemplate
+        """
+        actions = canonical_actions(self.filter_clauses, self.exclude_clauses)
+        names = tuple(sorted(values))
+        params = {
+            **template_params(actions, None, None),
+            **value_params(names, values),
+        }
+        key = (
+            kind,
+            clauses_shape(self.filter_clauses),
+            clauses_shape(self.exclude_clauses),
+            names,
+        )
+        cache = template_cache_for(self.model)
+        statement = cache.get(key)
+        if statement is None:
+            statement = self.build_write_statement(kind, names, SlotBinder(actions))
+            release_values(statement)
+            cache.put(key, statement)
+        elif templates.CROSS_CHECK:
+            fresh = self.build_write_statement(kind, names, None, values)
+            templates.assert_same_statement(
+                statement, fresh, params, self.model_config.database.dialect
+            )
+        return WriteTemplate(statement, params)
+
+    def build_write_statement(
+        self,
+        kind: str,
+        names: tuple,
+        binder: Optional[SlotBinder],
+        values: Optional[dict] = None,
+    ) -> Any:
+        """
+        Build the filtered update or delete, with named slots when a binder is
+        given, otherwise with the literal values (as without templates).
+
+        :param kind: ``"update"`` or ``"delete"``
+        :type kind: str
+        :param names: updated column names, sorted
+        :type names: tuple
+        :param binder: names filter values for templates, if given
+        :type binder: Optional[SlotBinder]
+        :param values: literal updated values, used without a binder
+        :type values: Optional[dict]
+        :return: statement to execute
+        :rtype: Any
+        """
+        table = self.table
+        expr: Any
+        if kind == "update":
+            assignments = (
+                value_binds(table, names)
+                if binder is not None
+                else {table.c[name]: (values or {})[name] for name in names}
+            )
+            expr = table.update().values(assignments)
+        else:
+            expr = table.delete()
+        expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
+            expr
+        )
+        return FilterQuery(
+            filter_clauses=self.exclude_clauses, exclude=True, binder=binder
+        ).apply(expr)
 
     def effective_limit_shape(self, limit: Optional[int]) -> tuple:
         """
@@ -1082,14 +1162,9 @@ class QuerySet(Generic[T]):
         updates = self.model.validate_enums(updates)
         updates = self.model.translate_columns_to_aliases(updates)
 
-        expr = FilterQuery(filter_clauses=self.filter_clauses).apply(
-            self.table.update().values(**updates)  # type: ignore
-        )
-        expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
-            expr
-        )
+        template = self.build_write_template("update", updates)
         async with self.model_config.database.get_query_executor() as executor:
-            return await executor.execute(expr)
+            return await executor.execute(template.statement, template.params)
 
     async def delete(self, *args: Any, each: bool = False, **kwargs: Any) -> int:
         """
@@ -1113,14 +1188,9 @@ class QuerySet(Generic[T]):
                 "If you want to delete all rows use delete(each=True)"
             )
         self._verify_no_related_filters("delete")
-        expr = FilterQuery(filter_clauses=self.filter_clauses).apply(
-            self.table.delete()  # type: ignore
-        )
-        expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
-            expr
-        )
+        template = self.build_write_template("delete", {})
         async with self.model_config.database.get_query_executor() as executor:
-            return await executor.execute(expr)
+            return await executor.execute(template.statement, template.params)
 
     def paginate(self, page: int, page_size: int = 20) -> "QuerySet[T]":
         """

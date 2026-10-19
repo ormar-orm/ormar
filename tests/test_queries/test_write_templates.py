@@ -148,3 +148,26 @@ async def test_pk_column_property(connected):
     item = Item(name="x")
     assert item.pk_column is Item.ormar_config.table.c.id
     assert item.pk_column is Item.ormar_config.table.c.id
+
+
+@pytest.mark.asyncio
+async def test_queryset_writes_use_templates(connected, monkeypatch):
+    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Item.objects.bulk_create([Item(name=f"q{i}") for i in range(4)])
+        await Item.objects.filter(name="q0").update(note="warm")
+        await Item.objects.filter(name="q0").delete()
+        counters = {
+            name: CallCounter(getattr(sa.Table, name)) for name in ("update", "delete")
+        }
+        for name, counter in counters.items():
+            monkeypatch.setattr(sa.Table, name, counter)
+        updated = await Item.objects.filter(name="q1").update(note="hit")
+        deleted = await Item.objects.filter(name="q2").delete()
+        notes = {item.name: item.note for item in await Item.objects.all()}
+    assert {name: counter.calls for name, counter in counters.items()} == {
+        "update": 0,
+        "delete": 0,
+    }
+    assert (updated, deleted) == (1, 1)
+    assert notes == {"q1": "hit", "q3": None}
