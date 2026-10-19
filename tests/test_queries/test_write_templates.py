@@ -171,3 +171,33 @@ async def test_queryset_writes_use_templates(connected, monkeypatch):
     }
     assert (updated, deleted) == (1, 1)
     assert notes == {"q1": "hit", "q3": None}
+
+
+@pytest.mark.asyncio
+async def test_bulk_ops_use_templates(connected, monkeypatch):
+    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Item.objects.bulk_create([Item(name="w1"), Item(name="w2")])
+        warm = await Item.objects.all()
+        await Item.objects.bulk_update(warm)
+        counters = {
+            name: CallCounter(getattr(sa.Table, name)) for name in ("insert", "update")
+        }
+        for name, counter in counters.items():
+            monkeypatch.setattr(sa.Table, name, counter)
+        await Item.objects.bulk_create(
+            [Item(name="h1"), Item(name="h2"), Item(name="h3")]
+        )
+        await Item.objects.bulk_create([Item(name="single")])
+        items = await Item.objects.all()
+        for item in items:
+            item.note = f"n-{item.name}"
+        await Item.objects.bulk_update(items)
+        stored = {item.name: item.note for item in await Item.objects.all()}
+    assert {name: counter.calls for name, counter in counters.items()} == {
+        "insert": 0,
+        "update": 0,
+    }
+    assert stored == {
+        name: f"n-{name}" for name in ("w1", "w2", "h1", "h2", "h3", "single")
+    }

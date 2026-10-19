@@ -739,3 +739,26 @@ def release_values(statement: Executable) -> None:
     for element in visitors.iterate(statement):  # type: ignore[arg-type]
         if isinstance(element, BindParameter) and str(element.key).startswith("ormar_"):
             element.value = None
+
+
+def build_bulk_update(
+    table: sqlalchemy.Table, pk_column: sqlalchemy.Column, columns: Tuple[str, ...]
+) -> Executable:
+    """
+    Build the per-row update used by ``bulk_update``: values and the primary
+    key come from ``new_<column>`` parameters of each row.
+
+    :param table: updated table
+    :type table: sqlalchemy.Table
+    :param pk_column: primary key column
+    :type pk_column: sqlalchemy.Column
+    :param columns: updated column names
+    :type columns: Tuple[str, ...]
+    :return: update statement
+    :rtype: Executable
+    """
+    return (
+        table.update()
+        .where(pk_column == sqlalchemy.bindparam("new_" + pk_column.name))
+        .values({name: sqlalchemy.bindparam("new_" + name) for name in columns})
+    )

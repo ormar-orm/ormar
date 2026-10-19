@@ -15,7 +15,6 @@ from typing import (
 )
 
 import sqlalchemy
-from sqlalchemy import bindparam
 
 import ormar  # noqa I100
 from ormar import MultipleMatches, NoMatch
@@ -35,11 +34,14 @@ from ormar.queryset.templates import (
     SlotBinder,
     WriteTemplate,
     aggregate_statement,
+    build_bulk_update,
+    cached_statement,
     canonical_actions,
     clauses_shape,
     count_statement,
     excludable_shape,
     exists_statement,
+    insert_template,
     order_shape,
     release_values,
     template_cache_for,
@@ -1640,16 +1642,24 @@ class QuerySet(Generic[T]):
                 await asyncio.sleep(0)
 
         # rows with different key sets (explicit vs omitted pk or server_default)
-        # cannot share one VALUES clause, so insert each key set separately;
-        # only a split insert needs a transaction to stay atomic
+        # need different inserts, so each key set runs its own insert template;
+        # anything beyond a single one-row insert runs in one transaction
         rows_by_keys: dict[frozenset[str], list[dict]] = {}
         for row in ready_objects:
             rows_by_keys.setdefault(frozenset(row), []).append(row)
+        several_statements = len(rows_by_keys) > 1 or len(ready_objects) > 1
         async with self.model_config.database.get_query_executor(
-            transactional=len(rows_by_keys) > 1
+            transactional=several_statements
         ) as executor:
             for rows in rows_by_keys.values():
-                await executor.execute(self.table.insert().values(rows))
+                template = insert_template(self.model, rows[0])
+                if len(rows) == 1:
+                    await executor.execute(template.statement, template.params)
+                    continue
+                names = tuple(sorted(rows[0]))
+                await executor.execute_many(
+                    template.statement, [value_params(names, row) for row in rows]
+                )
 
         for obj in objects:
             obj.set_save_status(True)
@@ -1725,15 +1735,16 @@ class QuerySet(Generic[T]):
         ]
         pk_column_name = self.model.get_column_alias(pk_name)
         table_columns = [c.name for c in self.model_config.table.c]
-        expr = self.table.update().where(
-            pk_column == bindparam("new_" + pk_column_name)
+        updated = tuple(
+            k for k in columns if k != pk_column_name and k in table_columns
         )
-        expr = expr.values(
-            **{
-                k: bindparam("new_" + k)
-                for k in columns
-                if k != pk_column_name and k in table_columns
-            }
+        expr = cached_statement(
+            self.model,
+            ("bulk_update", updated),
+            build_bulk_update,
+            self.table,
+            pk_column,
+            updated,
         )
         # Multi-row execute_many: run in an explicit transaction so all rows
         # share a single COMMIT instead of one per row under AUTOCOMMIT.
