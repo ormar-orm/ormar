@@ -51,6 +51,12 @@
 
 ### ⚡ Performance
 
+* Rows of models without relations, custom validators, encrypted or base64
+  fields are turned into models directly from the already converted column
+  values instead of going through `__init__` and validation again, and models
+  without relations skip relation bookkeeping during initialization. Loading
+  many rows is 1.25–1.6× faster in the orm-benchmarks suite (small filters
+  1.15–1.5×), the most on wide models.
 * Writes (`save()`, `update()`, `delete()`, `load()`, `upsert()`,
   `QuerySet.update()`/`delete()`, `bulk_create()` and `bulk_update()`) now reuse
   one statement per write shape and only bind the values, like read queries.
