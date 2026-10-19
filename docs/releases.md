@@ -46,6 +46,11 @@
 
 ### ⚡ Performance
 
+* The default connection pool size of `DatabaseConnection` is raised from 5 to
+  10. SQLAlchemy closes overflow connections on checkin, so with more than 5
+  concurrent queries every extra one opened a new database connection; with
+  10 concurrent `get()` calls on PostgreSQL this is 4–6× faster. Pass
+  `pool_size` to `DatabaseConnection` to size the pool for your concurrency.
 * Adding an already saved child to a reverse `ForeignKey` relation with
   `add()` no longer queries the database to check that the child exists
   first; the check now runs only for unsaved children (e.g. with a preset
