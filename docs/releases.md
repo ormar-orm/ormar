@@ -70,6 +70,9 @@
   [#1866](https://github.com/ormar-orm/ormar/issues/1866)
 * Fix `bulk_update()` failing on a nullable `uuid` field that is `None`.
   [#1854](https://github.com/ormar-orm/ormar/issues/1854)
+* Fix encrypted `Enum` fields storing a value that could not be read back,
+  they are now saved by member name and decrypted to the enum member
+  [#1855](https://github.com/ormar-orm/ormar/issues/1855)
 * Fix `get_pydantic()` cache being keyed by model class name, so same-named
   models from different modules could get each other's generated models.
 
