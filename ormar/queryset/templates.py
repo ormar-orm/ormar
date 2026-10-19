@@ -3,13 +3,15 @@ Read statement templates: per-call values become named bind parameters so a
 statement built once per query shape can be reused with new values.
 """
 
-from typing import TYPE_CHECKING, Any, Iterator, List, Union
+from typing import TYPE_CHECKING, Any, Iterable, Iterator, List, Tuple, Union
 
 import sqlalchemy
 from sqlalchemy.sql.elements import BindParameter
 
 if TYPE_CHECKING:  # pragma: no cover
+    from ormar.models.excludable import ExcludableItems
     from ormar.queryset.actions.filter_action import FilterAction
+    from ormar.queryset.actions.order_action import OrderAction
     from ormar.queryset.clause import FilterGroup
 
 LIMIT_SLOT = "ormar_limit"
@@ -109,3 +111,100 @@ class SlotBinder:
         :rtype: BindParameter
         """
         return sqlalchemy.bindparam(OFFSET_SLOT, value, type_=sqlalchemy.Integer())
+
+
+def value_kind(action: "FilterAction") -> Any:
+    """
+    Return the part of a filter value that changes the SQL text: ``IS NULL`` /
+    ``IS NOT NULL`` for ``isnull``, ``IS NULL`` for a ``None`` value, an
+    expanding ``IN`` list, or a plain bound value.
+
+    :param action: filter action
+    :type action: FilterAction
+    :return: hashable value kind
+    :rtype: Any
+    """
+    value = action.bound_value()
+    if action.operator == "isnull":
+        return ("isnull", bool(value))
+    if action.operator == "in":
+        return "in"
+    return "none" if value is None else "value"
+
+
+def action_shape(action: "FilterAction") -> Tuple[Any, ...]:
+    """
+    Return everything about a filter action that changes the SQL text.
+
+    :param action: filter action
+    :type action: FilterAction
+    :return: hashable shape of the action
+    :rtype: Tuple[Any, ...]
+    """
+    return (
+        action.query_str,
+        action.table_prefix,
+        action.operator,
+        value_kind(action),
+        action.has_escaped_character,
+    )
+
+
+def clauses_shape(clauses: Iterable[Any]) -> Tuple[Any, ...]:
+    """
+    Return the shape of a list of filter actions and filter groups, keeping
+    the and/or/not nesting.
+
+    :param clauses: filter actions and filter groups
+    :type clauses: Iterable[Any]
+    :return: hashable shape of the clauses
+    :rtype: Tuple[Any, ...]
+    """
+    return tuple(
+        (
+            "group",
+            clause.filter_type,
+            clause.exclude,
+            clauses_shape(clause._nested_groups),
+            tuple(action_shape(action) for action in clause.actions),
+        )
+        if hasattr(clause, "_nested_groups")
+        else action_shape(clause)
+        for clause in clauses
+    )
+
+
+def excludable_shape(excludable: "ExcludableItems") -> Tuple[Any, ...]:
+    """
+    Return the fields included and excluded per model and relation.
+
+    :param excludable: queryset's fields to include and exclude
+    :type excludable: ExcludableItems
+    :return: hashable shape of the projection
+    :rtype: Tuple[Any, ...]
+    """
+    return tuple(
+        (
+            key,
+            tuple(sorted(item.include, key=repr)),
+            tuple(sorted(item.exclude, key=repr)),
+            tuple(sorted(item.flatten, key=repr)),
+            item.pk_only,
+        )
+        for key, item in sorted(excludable.items.items())
+    )
+
+
+def order_shape(order_bys: Iterable["OrderAction"]) -> Tuple[Any, ...]:
+    """
+    Return the shape of the requested orderings.
+
+    :param order_bys: order actions of the query
+    :type order_bys: Iterable[OrderAction]
+    :return: hashable shape of the ordering
+    :rtype: Tuple[Any, ...]
+    """
+    return tuple(
+        (order.query_str, order.direction, order.table_prefix, order.nulls_ordering)
+        for order in order_bys
+    )

@@ -28,7 +28,12 @@ from ormar.queryset.actions.order_action import OrderAction
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
-from ormar.queryset.templates import SlotBinder
+from ormar.queryset.templates import (
+    SlotBinder,
+    clauses_shape,
+    excludable_shape,
+    order_shape,
+)
 from ormar.queryset.utils import (
     extract_access_chains,
     get_relationship_alias_model_and_str,
@@ -304,6 +309,41 @@ class QuerySet(Generic[T]):
         exp = qry.build_select_expression()
         # print("\n", exp.compile(compile_kwargs={"literal_binds": True}))
         return exp
+
+    def template_key(
+        self,
+        variant: tuple,
+        limit: Optional[int],
+        offset: Optional[int],
+        order_bys: Optional[list],
+    ) -> tuple:
+        """
+        Return the shape of the statement ``build_select_expression`` would build
+        with the given arguments: everything that changes its SQL text and none
+        of the bound values.
+
+        :param variant: how the select is used (plain, count, aggregate, ...)
+        :type variant: tuple
+        :param limit: limit passed to ``build_select_expression``
+        :type limit: Optional[int]
+        :param offset: offset passed to ``build_select_expression``
+        :type offset: Optional[int]
+        :param order_bys: order actions passed to ``build_select_expression``
+        :type order_bys: Optional[list]
+        :return: hashable statement shape
+        :rtype: tuple
+        """
+        return (
+            variant,
+            clauses_shape(self.filter_clauses),
+            clauses_shape(self.exclude_clauses),
+            tuple(self._select_related),
+            excludable_shape(self._excludable),
+            order_shape(order_bys or self.order_bys),
+            (limit if limit is not None else self.limit_count) is not None,
+            bool(offset or self.query_offset),
+            self.limit_sql_raw,
+        )
 
     def filter(  # noqa: A003
         self, *args: Any, _exclude: bool = False, **kwargs: Any

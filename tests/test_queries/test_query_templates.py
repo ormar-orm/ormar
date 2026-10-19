@@ -83,3 +83,54 @@ async def test_binder_handles_groups_in_and_model_values(connected):
 async def test_no_binder_keeps_anonymous_parameters(connected):
     queryset = Book.objects.select_related("author").filter(title="a").limit(2)
     assert "ormar_" not in str(queryset.build_select_expression().compile())
+
+
+def key(queryset, variant=(), limit=None, offset=None, order_bys=None):
+    return queryset.template_key(variant, limit, offset, order_bys)
+
+
+@pytest.mark.asyncio
+async def test_same_shape_different_values_share_key(connected):
+    assert key(Book.objects.filter(title="a", id__gt=1)) == key(
+        Book.objects.filter(title="b", id__gt=9)
+    )
+    assert key(Book.objects.filter(id__in=[1, 2])) == key(
+        Book.objects.filter(id__in=[1, 2, 3, 4])
+    )
+    assert key(Book.objects.limit(1).offset(5)) == key(Book.objects.limit(9).offset(2))
+
+
+@pytest.mark.asyncio
+async def test_model_value_shares_key_with_its_pk(connected):
+    author = Author(id=3, name="x")
+    assert key(Book.objects.filter(author=author)) == key(Book.objects.filter(author=3))
+    unsaved = Author(name="y")
+    assert key(Book.objects.filter(author=unsaved)) == key(
+        Book.objects.filter(author=None)
+    )
+
+
+@pytest.mark.asyncio
+async def test_sql_changing_differences_get_distinct_keys(connected):
+    variants = [
+        Book.objects.filter(title=None),
+        Book.objects.filter(title="a"),
+        Book.objects.filter(title__contains="50%"),
+        Book.objects.filter(title__contains="ab"),
+        Book.objects.filter(title__isnull=True),
+        Book.objects.filter(title__isnull=False),
+        Book.objects.filter(title__in=["a"]),
+        Book.objects.exclude(title="a"),
+        Book.objects.select_related("author").filter(title="a"),
+        Book.objects.fields(["id", "title"]).filter(title="a"),
+        Book.objects.exclude_fields(["year"]).filter(title="a"),
+        Book.objects.order_by("-title").filter(title="a"),
+        Book.objects.filter(title="a").limit(1),
+        Book.objects.filter(title="a").offset(3),
+        Book.objects.filter(ormar.or_(title="a", year=1)),
+        Book.objects.filter(ormar.and_(title="a", year=1)),
+        Book.objects.filter(~ormar.and_(title="a", year=1)),
+    ]
+    keys = [key(queryset) for queryset in variants]
+    assert len(set(keys)) == len(keys)
+    assert key(variants[1], variant=("count",)) != keys[1]
