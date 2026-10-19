@@ -539,6 +539,22 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :return: (if needed) registered Model
         :rtype: Model
         """
+        model = self.construct_pk_only_model(value)
+        if to_register:
+            self.register_relation(model=model, child=child)
+        return model
+
+    def construct_pk_only_model(self, value: Any) -> "Model":
+        """
+        Takes a pk value and creates a dummy instance of the related model
+        with only the pk populated, without registering it on any side.
+
+        :param value: value of a related pk / fk column
+        :type value: Any
+        :raises RelationshipInstanceError: if value does not match the pk type
+        :return: related model with only pk set
+        :rtype: Model
+        """
         if self.to.pk_type() == uuid.UUID and isinstance(value, str):  # pragma: nocover
             value = uuid.UUID(value)
         if not isinstance(value, self.to.pk_type()):
@@ -550,10 +566,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
                     f"is of type {self.to.pk_type()} "
                     f"while {type(value)} passed as a parameter."
                 )
-        model = create_dummy_instance(fk=self.to, pk=value)
-        if to_register:
-            self.register_relation(model=model, child=child)
-        return model
+        return create_dummy_instance(fk=self.to, pk=value)
 
     def register_relation(self, model: "Model", child: "Model") -> None:
         """
