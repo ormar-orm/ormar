@@ -124,6 +124,11 @@
   `filter(category__name="x")`), instead of generating an invalid statement
   that ignores or fails on the missing join
   — thanks @moneebullah25 [#1817](https://github.com/ormar-orm/ormar/issues/1817)
+* Fix `bulk_create()` losing explicit values (a primary key or a field with a
+  `server_default`) when the objects in one call had different sets of values
+  set: the insert now runs once per distinct set of keys, so objects with
+  mixed key sets are not inserted in list order.
+  [#1859](https://github.com/ormar-orm/ormar/issues/1859)
 
 ## 0.26.0
 

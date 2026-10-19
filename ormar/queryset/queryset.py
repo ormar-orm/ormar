@@ -1412,11 +1412,17 @@ class QuerySet(Generic[T]):
             if i % 100 == 99:  # pragma: no cover
                 await asyncio.sleep(0)
 
-        # don't use execute_many, as in databases it's executed in a loop
-        # instead of using execute_many from drivers
-        expr = self.table.insert().values(ready_objects)
-        async with self.model_config.database.get_query_executor() as executor:
-            await executor.execute(expr)
+        # rows with different key sets (explicit vs omitted pk or server_default)
+        # cannot share one VALUES clause, so insert each key set separately;
+        # only a split insert needs a transaction to stay atomic
+        rows_by_keys: dict[frozenset[str], list[dict]] = {}
+        for row in ready_objects:
+            rows_by_keys.setdefault(frozenset(row), []).append(row)
+        async with self.model_config.database.get_query_executor(
+            transactional=len(rows_by_keys) > 1
+        ) as executor:
+            for rows in rows_by_keys.values():
+                await executor.execute(self.table.insert().values(rows))
 
         for obj in objects:
             obj.set_save_status(True)
