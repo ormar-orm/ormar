@@ -153,9 +153,10 @@ class ConstructCounter:
 
 def test_eligibility():
     assert Plain.trusted_row_construction() is True
+    assert Pet.trusted_row_construction() and Owner.trusted_row_construction()
+    assert Plain.flat_row_model() is True
+    assert Pet.flat_row_model() is False and Owner.flat_row_model() is False
     untrusted = (
-        Pet,
-        Owner,
         Validated,
         Encoded,
         Secret,
@@ -251,7 +252,7 @@ async def test_cross_check_detects_trusted_mismatch(connected, monkeypatch):
 
 def test_reverse_relation_resets_eligibility():
     assert EARLY_TRUSTED_BEFORE_RELATION is True
-    assert Early.trusted_row_construction() is False
+    assert Early.flat_row_model() is False
 
 
 @pytest.mark.asyncio
@@ -306,3 +307,19 @@ async def test_flat_queries_skip_from_row_and_yield_between_chunks(
         assert loaded[0].model_dump(exclude={"uid"})["name"] == "n0"
         pets = await Pet.objects.select_related("owner").all()
         assert pets == []
+
+
+@pytest.mark.asyncio
+async def test_rows_without_related_values_skip_init(connected, monkeypatch):
+    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        owner = await Owner.objects.create()
+        await Pet.objects.create(owner=None)
+        await Pet.objects.create(owner=owner)
+        counter = ConstructCounter(Pet._construct_with_excluded)
+        monkeypatch.setattr(Pet, "_construct_with_excluded", counter)
+        pets = await Pet.objects.order_by("id").all()
+        assert counter.calls == 1
+        assert pets[0].owner is None
+        assert pets[1].owner.pk == owner.pk
+        assert pets[1] in (await Owner.objects.select_related("pets").get()).pets

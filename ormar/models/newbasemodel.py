@@ -143,6 +143,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         _allowed_kwarg_names: Optional[frozenset[str]]
         _relation_field_names: Optional[frozenset[str]]
         _required_row_fields: frozenset[str]
+        _row_relation_names: tuple[str, ...]
         _trusted_rows: Optional[bool]
         ormar_config: OrmarConfig
 
@@ -257,7 +258,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         """
         Return whether rows of this model can be turned into instances without
         running ``__init__``: only when validation could not change a value the
-        column type already converted - no relations, no custom ``__init__``,
+        column type already converted - no through fields, no custom ``__init__``,
         validators, private attributes or post-init hook, no extra fields, no
         fields with an overwritten pydantic type, encryption or base64
         representation and no value-changing model config (enum values, string
@@ -273,10 +274,10 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         model_fields = cls.ormar_config.model_fields
         trusted = (
             cls.__init__ is NewBaseModel.__init__
-            and not cls.extract_related_fields()
+            and not cls.extract_through_names()
             and set(cls.model_fields) == set(model_fields)
             and all(
-                field.__pydantic_type__ is field.__type__
+                (field.is_relation or field.__pydantic_type__ is field.__type__)
                 and not field.encrypt_secret
                 and not field.represent_as_base64_str
                 for field in model_fields.values()
@@ -299,8 +300,21 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 name for name, info in cls.model_fields.items() if info.is_required()
             ),
         )
+        type.__setattr__(cls, "_row_relation_names", tuple(cls.extract_related_names()))
         type.__setattr__(cls, "_trusted_rows", trusted)
         return trusted
+
+    @classmethod
+    def flat_row_model(cls) -> bool:
+        """
+        Return whether the model has ``trusted_row_construction()`` and no
+        relations at all, so its rows and its ``model_dump()`` hold plain column
+        values only.
+
+        :return: True for trusted models without relations
+        :rtype: bool
+        """
+        return cls.trusted_row_construction() and not cls._row_relation_names
 
     @classmethod
     def _construct_from_row(
@@ -310,7 +324,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         Build an instance straight from database row values, which the column
         types already converted, skipping ``__init__`` and validation. Only for
         models with ``trusted_row_construction()`` and rows holding every
-        required field; fields missing from the row or excluded are None, like
+        required field and no relation value; fields missing from the row or
+        excluded are None, like
         after ``_construct_with_excluded``.
 
         :param excluded: field names excluded from the query

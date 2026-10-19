@@ -61,8 +61,8 @@ FLAT_ROWS_CHUNK = 500
 
 def dump_for_save(obj: "Model") -> dict:
     """
-    Return the field values of a model with ``trusted_row_construction()``:
-    without relations or converted fields its ``model_dump()`` equals a copy
+    Return the field values of a model with ``flat_row_model()``: without
+    relations or converted fields its ``model_dump()`` equals a copy
     of its ``__dict__``. With the template cross-check enabled (test suite)
     the copy is compared with ``model_dump()``.
 
@@ -265,7 +265,8 @@ class QuerySet(Generic[T]):
 
     async def _process_flat_rows(self, rows: list, plan_cache: dict) -> list["T"]:
         """
-        Build models of rows without joined relations, in chunks of
+        Build models of rows without joined relations of models with
+        ``trusted_row_construction()``, in chunks of
         ``FLAT_ROWS_CHUNK`` rows yielding to the event loop in between.
 
         :param rows: list of database rows from query result
@@ -276,6 +277,7 @@ class QuerySet(Generic[T]):
         :rtype: list[Model]
         """
         result: list["T"] = []
+        fallback = functools.partial(self._model_from_row, RowRegistry(), plan_cache)
         for start in range(0, len(rows), FLAT_ROWS_CHUNK):
             if start:
                 await asyncio.sleep(0)
@@ -283,10 +285,38 @@ class QuerySet(Generic[T]):
             result.extend(
                 cast(
                     list["T"],
-                    self.model.from_flat_rows(chunk, self._excludable, plan_cache),
+                    self.model.from_flat_rows(
+                        chunk, self._excludable, plan_cache, fallback
+                    ),
                 )
             )
         return result
+
+    def _model_from_row(
+        self, registry: RowRegistry, plan_cache: dict, row: Any
+    ) -> "Model":
+        """
+        Build the model of one row through ``from_row``, sharing the query's
+        identity map (rows of the main model always hold its pk).
+
+        :param registry: identity map of the query
+        :type registry: RowRegistry
+        :param plan_cache: row-extraction plan cache
+        :type plan_cache: dict
+        :param row: database row
+        :type row: Any
+        :return: model of the row
+        :rtype: Model
+        """
+        return self.model.from_row(  # type: ignore[return-value]
+            row=row,
+            select_related=self._select_related,
+            excludable=self._excludable,
+            source_model=self.model,
+            proxy_source_model=self.proxy_source_model,
+            plan_cache=plan_cache,
+            registry=registry,
+        )
 
     def _resolve_filter_groups(
         self, groups: Any
@@ -1696,7 +1726,7 @@ class QuerySet(Generic[T]):
             raise ModelListEmptyError("Bulk create objects are empty!")
 
         ready_objects = []
-        trusted = self.model.trusted_row_construction()
+        trusted = self.model.flat_row_model()
         for i, obj in enumerate(objects):
             values = dump_for_save(obj) if trusted else obj.model_dump()
             ready_objects.append(obj.prepare_model_to_save(values))

@@ -1,6 +1,15 @@
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, AbstractSet, Any, Optional, Sequence, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    AbstractSet,
+    Any,
+    Callable,
+    Optional,
+    Sequence,
+    Union,
+    cast,
+)
 
 try:
     from sqlalchemy.engine.result import ResultProxy  # type: ignore
@@ -162,12 +171,14 @@ class ModelRow(NewBaseModel):
         rows: Sequence[Any],
         excludable: ExcludableItems,
         plan_cache: Optional[PlanCache],
+        fallback: Callable[[Any], "Model"],
     ) -> list["Model"]:
         """
         Build models of a query without joined relations of a model with
-        ``trusted_row_construction()``: no relations means rows map one to one
-        to models, so the per-row plan lookup, identity map, nested models and
-        merging of ``from_row`` are skipped.
+        ``trusted_row_construction()``: such rows map one to one to models, so
+        the per-row plan lookup, identity map, nested models and merging of
+        ``from_row`` are skipped. Rows holding a related value (a foreign key
+        that needs registering) are built by ``fallback``.
 
         :param rows: database rows of the main model only
         :type rows: Sequence[Any]
@@ -175,18 +186,26 @@ class ModelRow(NewBaseModel):
         :type excludable: ExcludableItems
         :param plan_cache: per-queryset plan cache
         :type plan_cache: Optional[PlanCache]
+        :param fallback: builds the model of a row with related values
+        :type fallback: Callable[[Any], Model]
         :return: models built from the rows
         :rtype: list[Model]
         """
         plan = cls.get_or_build_row_plan("", excludable, plan_cache)
         mappings = plan.column_mappings
+        relation_names = cls._row_relation_names
         instances: list["Model"] = []
         for row in rows:
             item = {field_name: row[column] for column, field_name in mappings}
-            instance = cls.construct_row_instance(plan, item)
-            object.__setattr__(instance, "_orm_saved", True)
+            if relation_names and any(
+                item.get(name) is not None for name in relation_names
+            ):
+                instance = fallback(row)
+            else:
+                instance = cast("Model", cls.construct_row_instance(plan, item))
+                object.__setattr__(instance, "_orm_saved", True)
             object.__setattr__(instance, "__ormar_excludable__", excludable)
-            instances.append(cast("Model", instance))
+            instances.append(instance)
         return instances
 
     @classmethod
@@ -196,8 +215,9 @@ class ModelRow(NewBaseModel):
         """
         Build the model instance of one row: directly from the row values for
         models with ``trusted_row_construction()`` when the row holds every
-        required field, otherwise through ``_construct_with_excluded`` (which
-        also raises for excluded required fields). With the template cross-check enabled
+        required field and no related model (relations need registering),
+        otherwise through ``_construct_with_excluded`` (which also raises for
+        excluded required fields). With the template cross-check enabled
         (test suite), a trusted build is compared with the regular one.
 
         :param plan: extraction plan of the row position
@@ -208,8 +228,10 @@ class ModelRow(NewBaseModel):
         :return: model instance
         :rtype: ModelRow
         """
-        if not cls.trusted_row_construction() or not cls._required_row_fields.issubset(
-            item
+        if (
+            not cls.trusted_row_construction()
+            or not cls._required_row_fields.issubset(item)
+            or any(item.get(name) is not None for name in cls._row_relation_names)
         ):
             return cls._construct_with_excluded(plan.excluded_field_names, **item)
         if not templates.CROSS_CHECK:
