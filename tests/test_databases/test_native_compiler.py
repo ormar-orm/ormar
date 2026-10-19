@@ -231,3 +231,13 @@ def test_duplicate_result_labels_fall_back():
     compiler = NativeCompiler(SQLiteDialect_aiosqlite())
     stmt = sa.select(items.c.id, sa.literal(1).label("id"))
     assert compiler.bind(stmt).plan.fallback is True
+
+
+@pytest.mark.parametrize("dialect_cls", DIALECTS)
+def test_bind_overrides_named_params(dialect_cls):
+    compiler = NativeCompiler(dialect_cls())
+    stmt = items.select().where(items.c.id == sa.bindparam("ormar_p0", 1))
+    default = compiler.bind(stmt)
+    overridden = compiler.bind(stmt, {"ormar_p0": 5})
+    assert (default.args, overridden.args) == ([1], [5])
+    assert default.plan is overridden.plan

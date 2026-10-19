@@ -53,47 +53,59 @@ class QueryExecutor:
         self._native = native
         self._raw: Any = None
 
-    async def fetch_all(self, query: Executable) -> List[Any]:
+    async def fetch_all(
+        self, query: Executable, params: Optional[Mapping[str, Any]] = None
+    ) -> List[Any]:
         """
         Execute a query and fetch all rows.
 
         :param query: SQLAlchemy query expression
+        :param params: values for named bind parameters of the query
         :return: List of rows, accessible by result label
         """
-        bound = self._bind(query)
+        bound = self._bind(query, params)
         if bound is not None:
             return await self._fetch_native(bound)
-        result: CursorResult[Any] = await self._connection.execute(query)
+        result: CursorResult[Any] = await self._connection.execute(query, params)
         return list(result.mappings().all())
 
-    async def fetch_one(self, query: Executable) -> Optional[Mapping[Any, Any]]:
+    async def fetch_one(
+        self, query: Executable, params: Optional[Mapping[str, Any]] = None
+    ) -> Optional[Mapping[Any, Any]]:
         """
         Execute a query and fetch one row.
 
         :param query: SQLAlchemy query expression
+        :param params: values for named bind parameters of the query
         :return: Single row or None
         """
-        bound = self._bind(query)
+        bound = self._bind(query, params)
         if bound is not None:
             rows = await self._fetch_native(bound)
             return rows[0] if rows else None
-        result: CursorResult[Any] = await self._connection.execute(query)
+        result: CursorResult[Any] = await self._connection.execute(query, params)
         row = result.mappings().first()
         return row
 
-    async def fetch_val(self, query: Executable, column: int = 0) -> Optional[Any]:
+    async def fetch_val(
+        self,
+        query: Executable,
+        column: int = 0,
+        params: Optional[Mapping[str, Any]] = None,
+    ) -> Optional[Any]:
         """
         Execute a query and fetch a single scalar value.
 
         :param query: SQLAlchemy query expression
         :param column: Column index to fetch (default 0)
+        :param params: values for named bind parameters of the query
         :return: Scalar value or None
         """
-        bound = self._bind(query)
+        bound = self._bind(query, params)
         if bound is not None:
             rows = await self._fetch_native(bound)
             return list(rows[0].values())[column] if rows else None
-        result: CursorResult[Any] = await self._connection.execute(query)
+        result: CursorResult[Any] = await self._connection.execute(query, params)
         return result.scalar()
 
     async def execute(self, query: Executable) -> Any:
@@ -152,14 +164,17 @@ class QueryExecutor:
         exec_query = text(query) if isinstance(query, str) else query
         await self._connection.execute(exec_query, values)
 
-    async def iterate(self, query: Executable) -> AsyncIterator[Any]:
+    async def iterate(
+        self, query: Executable, params: Optional[Mapping[str, Any]] = None
+    ) -> AsyncIterator[Any]:
         """
         Execute a query and iterate over results.
 
         :param query: SQLAlchemy query expression
+        :param params: values for named bind parameters of the query
         :return: Async iterator of rows, accessible by result label
         """
-        bound = self._bind(query)
+        bound = self._bind(query, params)
         if bound is not None:
             assert self._native is not None
             raw = await self._raw_connection()
@@ -175,7 +190,7 @@ class QueryExecutor:
                 except BaseException as error:
                     await self._reraise_interrupted(error)
             return
-        async with self._connection.stream(query) as result:
+        async with self._connection.stream(query, params) as result:
             async for mapping in result.mappings():
                 yield mapping
 
@@ -189,16 +204,19 @@ class QueryExecutor:
         assert self._native is not None
         return await self._run(self._native.adapter.fetch_all, bound, bound.args)
 
-    def _bind(self, query: Executable) -> Optional[BoundStatement]:
+    def _bind(
+        self, query: Executable, params: Optional[Mapping[str, Any]] = None
+    ) -> Optional[BoundStatement]:
         """
         Bind the query for native execution.
 
         :param query: SQLAlchemy query expression
+        :param params: values for named bind parameters of the query
         :return: bound statement, or None when it must run through SQLAlchemy
         """
         if self._native is None or not is_plannable(query):
             return None
-        bound = self._native.compiler.bind(query)
+        bound = self._native.compiler.bind(query, params)
         return None if bound.plan.fallback else bound
 
     async def _raw_connection(self) -> Any:

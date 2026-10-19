@@ -198,3 +198,28 @@ async def test_closing_iterate_early_keeps_connection_usable(database):
                 async for _ in stream:
                     break
             assert await executor.fetch_val(sa.select(sa.func.count(rows.c.id))) >= 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [True, False])
+async def test_executor_params_on_both_paths(database, native):
+    stmt = rows.select().where(rows.c.id == sa.bindparam("ormar_p0", -1))
+    if not native:
+        database.native_backend = None
+    async with database.get_query_executor(transactional=True) as executor:
+        await executor.execute(rows.insert().values(id=31, name="p"))
+        params = {"ormar_p0": 31}
+        assert [dict(r) for r in await executor.fetch_all(stmt, params)] == [
+            {"id": 31, "name": "p"}
+        ]
+        assert dict(await executor.fetch_one(stmt, params)) == {"id": 31, "name": "p"}
+        assert (
+            await executor.fetch_val(
+                sa.select(rows.c.name).where(rows.c.id == sa.bindparam("ormar_p0", -1)),
+                params=params,
+            )
+            == "p"
+        )
+        assert [dict(r) async for r in executor.iterate(stmt, params)] == [
+            {"id": 31, "name": "p"}
+        ]

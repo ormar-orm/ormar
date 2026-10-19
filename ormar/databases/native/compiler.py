@@ -166,25 +166,30 @@ class NativeCompiler:
         self.max_plans = max_plans
         self._plans: "OrderedDict[Any, StatementPlan]" = OrderedDict()
 
-    def bind(self, stmt: Executable) -> BoundStatement:
+    def bind(
+        self, stmt: Executable, params: Optional[Mapping[str, Any]] = None
+    ) -> BoundStatement:
         """
         Compile (or reuse) the statement and bind its values.
 
         :param stmt: statement to execute
         :type stmt: Executable
+        :param params: values overriding named bind parameters
+        :type params: Optional[Mapping[str, Any]]
         :return: plan, SQL string and positional driver arguments
         :rtype: BoundStatement
         """
         key = stmt._generate_cache_key()  # type: ignore[attr-defined]
         plan = self._plan(stmt, key)
-        params = plan.compiled.construct_params(
+        bound_params = plan.compiled.construct_params(
+            params=params,
             extracted_parameters=key[1] if key is not None else None,
             escape_names=True,
             _no_postcompile=True,
         )
-        apply_prefetch_defaults(plan.compiled, params)
-        sql, args = expand(plan.compiled, params)
-        return BoundStatement(plan, sql, args, params)
+        apply_prefetch_defaults(plan.compiled, bound_params)
+        sql, args = expand(plan.compiled, bound_params)
+        return BoundStatement(plan, sql, args, bound_params)
 
     def bind_many(
         self, stmt: Executable, rows: Sequence[Mapping[str, Any]]
