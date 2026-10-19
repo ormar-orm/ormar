@@ -11,6 +11,7 @@ from ormar.models import NewBaseModel  # noqa: I202
 from ormar.models.excludable import ExcludableItems
 from ormar.models.helpers.models import group_related_list
 from ormar.models.row_registry import RegistryKey, RowRegistry, selects_multi_relation
+from ormar.queryset import templates
 from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -156,6 +157,39 @@ class ModelRow(NewBaseModel):
         return instance
 
     @classmethod
+    def construct_row_instance(
+        cls, plan: RowExtractionPlan, item: dict[str, Any]
+    ) -> "ModelRow":
+        """
+        Build the model instance of one row: directly from the row values for
+        models with ``trusted_row_construction()``, otherwise through
+        ``_construct_with_excluded``. With the template cross-check enabled
+        (test suite), a trusted build is compared with the regular one.
+
+        :param plan: extraction plan of the row position
+        :type plan: RowExtractionPlan
+        :param item: field values of the row
+        :type item: dict[str, Any]
+        :raises AssertionError: when trusted and regular builds differ
+        :return: model instance
+        :rtype: ModelRow
+        """
+        if not cls.trusted_row_construction():
+            return cls._construct_with_excluded(plan.excluded_field_names, **item)
+        instance = cls._construct_from_row(plan.excluded_field_names, item)
+        if templates.CROSS_CHECK:
+            built = cls._construct_with_excluded(plan.excluded_field_names, **item)
+            if (
+                instance.__dict__ != built.__dict__
+                or instance.__pydantic_fields_set__ != built.__pydantic_fields_set__
+            ):
+                raise AssertionError(
+                    f"Trusted row construction mismatch for {cls.__name__}: "
+                    f"{instance.__dict__} != {built.__dict__}"
+                )
+        return instance
+
+    @classmethod
     def _materialize_row(  # noqa: CFQ002
         cls,
         row: ResultProxy,
@@ -248,10 +282,7 @@ class ModelRow(NewBaseModel):
 
         instance: Optional["Model"] = None
         if item.get(plan.pk_field_name, None) is not None:
-            instance = cast(
-                "Model",
-                cls._construct_with_excluded(plan.excluded_field_names, **item),
-            )
+            instance = cast("Model", cls.construct_row_instance(plan, item))
             instance.set_save_status(True)
             if key is not None:
                 registry.instances[key] = instance  # type: ignore[union-attr]

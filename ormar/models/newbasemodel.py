@@ -242,6 +242,78 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             )
 
     @classmethod
+    def trusted_row_construction(cls) -> bool:
+        """
+        Return whether rows of this model can be turned into instances without
+        running ``__init__``: the model has no relations, no user validators,
+        no private attributes or post-init hook, no extra fields and no fields
+        whose stored value is converted during validation (base64 bytes,
+        encrypted values). Computed once per class.
+
+        :return: True when database rows can be trusted as field values
+        :rtype: bool
+        """
+        cached = cls.__dict__.get("_trusted_rows")
+        if cached is not None:
+            return cast(bool, cached)
+        decorators = cls.__pydantic_decorators__
+        model_fields = cls.ormar_config.model_fields
+        trusted = (
+            not cls.extract_related_fields()
+            and set(cls.model_fields) == set(model_fields)
+            and not any(
+                field.encrypt_secret or field.represent_as_base64_str
+                for field in model_fields.values()
+            )
+            and not (
+                decorators.validators
+                or decorators.field_validators
+                or decorators.root_validators
+                or decorators.model_validators
+            )
+            and not cls.__private_attributes__
+            and cls.__pydantic_post_init__ is None
+            and cls.model_config.get("extra") != "allow"
+        )
+        type.__setattr__(cls, "_trusted_rows", trusted)
+        return trusted
+
+    @classmethod
+    def _construct_from_row(
+        cls, excluded: AbstractSet[str], values: dict[str, Any]
+    ) -> typing_extensions.Self:
+        """
+        Build an instance straight from database row values, which the column
+        types already converted, skipping ``__init__`` and validation. Only for
+        models with ``trusted_row_construction()``; fields missing from the row
+        (excluded) are None, like after ``_construct_with_excluded``.
+
+        :param excluded: field names excluded from the query
+        :type excluded: AbstractSet[str]
+        :param values: field values of the row
+        :type values: dict[str, Any]
+        :return: model instance
+        :rtype: Self
+        """
+        instance = cls.__new__(cls)
+        object.__setattr__(instance, "_orm_saved", False)
+        object.__setattr__(instance, "_pk_column", None)
+        object.__setattr__(instance, "__setattr_fields__", set())
+        object.__setattr__(
+            instance,
+            "_orm",
+            RelationsManager(related_fields=[], owner=cast("Model", instance)),
+        )
+        object.__setattr__(instance, "__pk_only__", False)
+        object.__setattr__(instance, "__ormar_excludable__", None)
+        data = {name: values.get(name) for name in cls.model_fields}
+        object.__setattr__(instance, "__dict__", data)
+        object.__setattr__(instance, "__pydantic_fields_set__", set(values))
+        object.__setattr__(instance, "__pydantic_extra__", None)
+        object.__setattr__(instance, "__pydantic_private__", None)
+        return instance
+
+    @classmethod
     def _construct_with_excluded(
         cls, excluded: AbstractSet[str], **kwargs: Any
     ) -> typing_extensions.Self:
