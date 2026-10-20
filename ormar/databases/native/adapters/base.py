@@ -185,7 +185,9 @@ class DriverAdapter(abc.ABC):
         :type coltypes: List[Any]
         """
         if bound.plan.result_processors is None:
-            resolve_result_processors(bound.plan, self.dialect, coltypes)
+            resolve_result_processors(
+                plan=bound.plan, dialect=self.dialect, coltypes=coltypes
+            )
 
 
 def inserted_primary_key(
@@ -232,7 +234,7 @@ def first_value(bound: BoundStatement, row: Any) -> Any:
     """
     if row is None:
         return None
-    return next(iter(row_to_dict(bound.plan, row).values()))
+    return next(iter(row_to_dict(plan=bound.plan, values=row).values()))
 
 
 def execute_mutex(raw: Any) -> AsyncContextManager[Any]:

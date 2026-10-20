@@ -28,9 +28,9 @@ class OffsetQuery:
         """
         if self.query_offset:
             value = (
-                self.binder.offset(self.query_offset)
+                self.binder.offset(value=self.query_offset)
                 if self.binder is not None
                 else self.query_offset
             )
-            expr = expr.offset(value)
+            expr = expr.offset(offset=value)
         return expr

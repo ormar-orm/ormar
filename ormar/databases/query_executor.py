@@ -70,10 +70,12 @@ class QueryExecutor:
         :param params: values for named bind parameters of the query
         :return: List of rows, accessible by result label
         """
-        bound = self._bind(query, params)
+        bound = self._bind(query=query, params=params)
         if bound is not None:
-            return await self._fetch_native(bound)
-        result: CursorResult[Any] = await self._connection.execute(query, params)
+            return await self._fetch_native(bound=bound)
+        result: CursorResult[Any] = await self._connection.execute(
+            statement=query, parameters=params
+        )
         return list(result.mappings().all())
 
     async def fetch_one(
@@ -86,11 +88,13 @@ class QueryExecutor:
         :param params: values for named bind parameters of the query
         :return: Single row or None
         """
-        bound = self._bind(query, params)
+        bound = self._bind(query=query, params=params)
         if bound is not None:
-            rows = await self._fetch_native(bound)
+            rows = await self._fetch_native(bound=bound)
             return rows[0] if rows else None
-        result: CursorResult[Any] = await self._connection.execute(query, params)
+        result: CursorResult[Any] = await self._connection.execute(
+            statement=query, parameters=params
+        )
         row = result.mappings().first()
         return row
 
@@ -108,11 +112,13 @@ class QueryExecutor:
         :param params: values for named bind parameters of the query
         :return: Scalar value or None
         """
-        bound = self._bind(query, params)
+        bound = self._bind(query=query, params=params)
         if bound is not None:
-            rows = await self._fetch_native(bound)
+            rows = await self._fetch_native(bound=bound)
             return list(rows[0].values())[column] if rows else None
-        result: CursorResult[Any] = await self._connection.execute(query, params)
+        result: CursorResult[Any] = await self._connection.execute(
+            statement=query, parameters=params
+        )
         return result.scalar()
 
     async def execute(
@@ -128,12 +134,16 @@ class QueryExecutor:
             non-AUTO_INCREMENT pk with a server default — no RETURNING support).
             For UPDATE/DELETE, the row count.
         """
-        bound = self._bind(query, params)
+        bound = self._bind(query=query, params=params)
         if bound is not None:
             assert self._native is not None
-            return await self._run(self._native.adapter.execute, bound, bound.args)
+            return await self._run(
+                method=self._native.adapter.execute, payload=bound, args=bound.args
+            )
 
-        result: CursorResult[Any] = await self._connection.execute(query, params)
+        result: CursorResult[Any] = await self._connection.execute(
+            statement=query, parameters=params
+        )
 
         # For INSERT queries, try to get the inserted primary key via the
         # dialect's best-available mechanism (RETURNING on PostgreSQL / SQLite
@@ -144,7 +154,7 @@ class QueryExecutor:
             # a primary key bound by name (statement templates) is returned as
             # bound; SQLAlchemy only looks it up under the column key
             compiled = cast(SQLCompiler, result.context.compiled)
-            key = pk_param_key(compiled) if params else None
+            key = pk_param_key(compiled=compiled) if params else None
             if key is not None and params and params.get(key) is not None:
                 return params[key]
             if result.inserted_primary_key:
@@ -170,15 +180,17 @@ class QueryExecutor:
         """
         # SQLAlchemy runs a statement given no parameter sets once; leave
         # that case to it so both paths behave the same.
-        if self._native is not None and values and is_plannable(query):
-            batch = self._native.compiler.bind_many(query, values)
+        if self._native is not None and values and is_plannable(stmt=query):
+            batch = self._native.compiler.bind_many(stmt=query, rows=values)
             if not batch.plan.fallback:
                 await self._run(
-                    self._native.adapter.execute_many, batch, batch.args_list
+                    method=self._native.adapter.execute_many,
+                    payload=batch,
+                    args=batch.args_list,
                 )
                 return
-        exec_query = text(query) if isinstance(query, str) else query
-        await self._connection.execute(exec_query, values)
+        exec_query = text(text=query) if isinstance(query, str) else query
+        await self._connection.execute(statement=exec_query, parameters=values)
 
     async def iterate(
         self, query: Executable, params: Optional[Mapping[str, Any]] = None
@@ -190,23 +202,27 @@ class QueryExecutor:
         :param params: values for named bind parameters of the query
         :return: Async iterator of rows, accessible by result label
         """
-        bound = self._bind(query, params)
+        bound = self._bind(query=query, params=params)
         if bound is not None:
             assert self._native is not None
             raw = await self._raw_connection()
-            rows = self._native.adapter.stream(raw, bound, ITERATE_BATCH_SIZE)
+            rows = self._native.adapter.stream(
+                raw=raw, bound=bound, batch_size=ITERATE_BATCH_SIZE
+            )
             async with contextlib.aclosing(rows):
                 try:
                     async for row in rows:
                         yield row
                 except self._native.adapter.driver_errors as error:
-                    await self._translate(error, bound.sql, bound.args)
+                    await self._translate(error=error, sql=bound.sql, args=bound.args)
                 except GeneratorExit:
                     raise
                 except BaseException as error:
-                    await self._reraise_interrupted(error)
+                    await self._reraise_interrupted(error=error)
             return
-        async with self._connection.stream(query, params) as result:
+        async with self._connection.stream(
+            statement=query, parameters=params
+        ) as result:
             async for mapping in result.mappings():
                 yield mapping
 
@@ -218,7 +234,9 @@ class QueryExecutor:
         :return: rows keyed by result label
         """
         assert self._native is not None
-        return await self._run(self._native.adapter.fetch_all, bound, bound.args)
+        return await self._run(
+            method=self._native.adapter.fetch_all, payload=bound, args=bound.args
+        )
 
     def _bind(
         self, query: Executable, params: Optional[Mapping[str, Any]] = None
@@ -230,9 +248,9 @@ class QueryExecutor:
         :param params: values for named bind parameters of the query
         :return: bound statement, or None when it must run through SQLAlchemy
         """
-        if self._native is None or not is_plannable(query):
+        if self._native is None or not is_plannable(stmt=query):
             return None
-        bound = self._native.compiler.bind(query, params)
+        bound = self._native.compiler.bind(stmt=query, params=params)
         return None if bound.plan.fallback else bound
 
     async def _raw_connection(self) -> Any:
@@ -273,10 +291,13 @@ class QueryExecutor:
             return await method(raw, payload)
         except self._native.adapter.driver_errors as error:
             await self._translate(
-                error, payload.sql, args, ismulti=isinstance(payload, BoundBatch)
+                error=error,
+                sql=payload.sql,
+                args=args,
+                ismulti=isinstance(payload, BoundBatch),
             )
         except BaseException as error:
-            await self._reraise_interrupted(error)
+            await self._reraise_interrupted(error=error)
 
     async def _reraise_interrupted(self, error: BaseException) -> NoReturn:
         """
@@ -287,7 +308,7 @@ class QueryExecutor:
 
         :param error: exception raised during the call
         """
-        if util.is_exit_exception(error):
+        if util.is_exit_exception(e=error):
             await self._connection.invalidate()
         raise error
 
@@ -308,7 +329,7 @@ class QueryExecutor:
         """
         assert self._native is not None
         await raise_translated(
-            error,
+            error=error,
             backend=self._native,
             sa_connection=self._connection,
             sql=sql,

@@ -33,7 +33,7 @@ class AiosqliteAdapter(DriverAdapter):
         :param dialect: dialect of the connected database
         :type dialect: Dialect
         """
-        super().__init__(dialect)
+        super().__init__(dialect=dialect)
         self.driver_errors = (sqlite3.Error,)
 
     async def fetch_all(self, raw: Any, bound: BoundStatement) -> List[Dict[str, Any]]:
@@ -47,11 +47,15 @@ class AiosqliteAdapter(DriverAdapter):
         :return: rows
         :rtype: List[Dict[str, Any]]
         """
-        async with execute_mutex(raw):
-            async with raw.driver_connection.execute(bound.sql, bound.args) as cursor:
+        async with execute_mutex(raw=raw):
+            async with raw.driver_connection.execute(
+                sql=bound.sql, parameters=bound.args
+            ) as cursor:
                 rows = await cursor.fetchall()
-        self.resolve_processors(bound, [None] * len(bound.plan.result_keys))
-        return [row_to_dict(bound.plan, row) for row in rows]
+        self.resolve_processors(
+            bound=bound, coltypes=[None] * len(bound.plan.result_keys)
+        )
+        return [row_to_dict(plan=bound.plan, values=row) for row in rows]
 
     async def execute(self, raw: Any, bound: BoundStatement) -> Any:
         """
@@ -65,14 +69,20 @@ class AiosqliteAdapter(DriverAdapter):
         :return: inserted primary key for INSERT, row count otherwise
         :rtype: Any
         """
-        async with execute_mutex(raw):
-            async with raw.driver_connection.execute(bound.sql, bound.args) as cursor:
+        async with execute_mutex(raw=raw):
+            async with raw.driver_connection.execute(
+                sql=bound.sql, parameters=bound.args
+            ) as cursor:
                 returned = None
                 if bound.plan.returning:
-                    self.resolve_processors(bound, [None] * len(bound.plan.result_keys))
-                    returned = first_value(bound, await cursor.fetchone())
+                    self.resolve_processors(
+                        bound=bound, coltypes=[None] * len(bound.plan.result_keys)
+                    )
+                    returned = first_value(bound=bound, row=await cursor.fetchone())
                 if bound.plan.is_insert:
-                    return inserted_primary_key(bound, returned, cursor.lastrowid)
+                    return inserted_primary_key(
+                        bound=bound, returned=returned, lastrowid=cursor.lastrowid
+                    )
                 return cursor.rowcount if cursor.rowcount is not None else 0
 
     async def execute_many(self, raw: Any, batch: BoundBatch) -> None:
@@ -84,8 +94,10 @@ class AiosqliteAdapter(DriverAdapter):
         :param batch: statement and arguments per row
         :type batch: BoundBatch
         """
-        async with execute_mutex(raw):
-            await raw.driver_connection.executemany(batch.sql, batch.args_list)
+        async with execute_mutex(raw=raw):
+            await raw.driver_connection.executemany(
+                sql=batch.sql, parameters=batch.args_list
+            )
 
     async def stream(
         self, raw: Any, bound: BoundStatement, batch_size: int
@@ -104,8 +116,12 @@ class AiosqliteAdapter(DriverAdapter):
         :return: rows keyed by result label
         :rtype: AsyncGenerator[Dict[str, Any], None]
         """
-        self.resolve_processors(bound, [None] * len(bound.plan.result_keys))
-        async with raw.driver_connection.execute(bound.sql, bound.args) as cursor:
-            while rows := await cursor.fetchmany(batch_size):
+        self.resolve_processors(
+            bound=bound, coltypes=[None] * len(bound.plan.result_keys)
+        )
+        async with raw.driver_connection.execute(
+            sql=bound.sql, parameters=bound.args
+        ) as cursor:
+            while rows := await cursor.fetchmany(size=batch_size):
                 for row in rows:
                     yield row_to_dict(bound.plan, row)

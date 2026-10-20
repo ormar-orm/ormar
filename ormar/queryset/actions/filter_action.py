@@ -171,7 +171,7 @@ class FilterAction(QueryAction):
         else:
             filter_value = value
             if binder is not None and self.binds_slot():
-                filter_value = binder.bind(self, value)
+                filter_value = binder.bind(action=self, value=value)
         if self.table_prefix:
             aliased_table = prefixed_table(self.table_prefix, self.column.table)
             aliased_column = getattr(aliased_table.c, self.column.name)

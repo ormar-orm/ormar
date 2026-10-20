@@ -436,29 +436,40 @@ class QuerySet(Generic[T]):
         :return: statement and values to bind
         :rtype: StatementTemplate
         """
-        actions = canonical_actions(self.filter_clauses, self.exclude_clauses)
-        params = template_params(
-            actions,
-            limit if limit is not None else self.limit_count,
-            offset or self.query_offset,
+        actions = canonical_actions(
+            filter_clauses=self.filter_clauses, exclude_clauses=self.exclude_clauses
         )
-        key = self.template_key(variant, limit, offset, order_bys)
-        cache = template_cache_for(self.model)
+        params = template_params(
+            actions=actions,
+            limit=limit if limit is not None else self.limit_count,
+            offset=offset or self.query_offset,
+        )
+        key = self.template_key(
+            variant=variant, limit=limit, offset=offset, order_bys=order_bys
+        )
+        cache = template_cache_for(model_cls=self.model)
         statement = cache.get(key)
         if statement is None:
             statement = self.build_template_statement(
-                actions, limit, offset, order_bys, wrap
+                actions=actions,
+                limit=limit,
+                offset=offset,
+                order_bys=order_bys,
+                wrap=wrap,
             )
-            cache.put(key, statement)
+            cache.put(key=key, statement=statement)
         elif templates.CROSS_CHECK:
             fresh = self.build_select_expression(
                 limit=limit, offset=offset, order_bys=order_bys
             )
             fresh = wrap(fresh) if wrap is not None else fresh
             templates.assert_same_statement(
-                statement, fresh, params, self.model_config.database.dialect
+                cached=statement,
+                fresh=fresh,
+                params=params,
+                dialect=self.model_config.database.dialect,
             )
-        return StatementTemplate(statement, params)
+        return StatementTemplate(statement=statement, params=params)
 
     def build_template_statement(
         self,
@@ -484,12 +495,12 @@ class QuerySet(Generic[T]):
         :return: statement to execute
         :rtype: Any
         """
-        binder = SlotBinder(actions)
+        binder = SlotBinder(actions=actions)
         select = self.build_select_expression(
             limit=limit, offset=offset, order_bys=order_bys, binder=binder
         )
         statement = wrap(select) if wrap is not None else select
-        release_values(statement)
+        release_values(statement=statement)
         return statement
 
     def build_write_template(self, kind: str, values: dict) -> StatementTemplate:
@@ -504,30 +515,39 @@ class QuerySet(Generic[T]):
         :return: statement and values to bind
         :rtype: StatementTemplate
         """
-        actions = canonical_actions(self.filter_clauses, self.exclude_clauses)
+        actions = canonical_actions(
+            filter_clauses=self.filter_clauses, exclude_clauses=self.exclude_clauses
+        )
         names = tuple(sorted(values))
         params = {
-            **template_params(actions, None, None),
-            **value_params(names, values),
+            **template_params(actions=actions, limit=None, offset=None),
+            **value_params(names=names, values=values),
         }
         key = (
             kind,
-            clauses_shape(self.filter_clauses),
-            clauses_shape(self.exclude_clauses),
+            clauses_shape(clauses=self.filter_clauses),
+            clauses_shape(clauses=self.exclude_clauses),
             names,
         )
-        cache = template_cache_for(self.model)
+        cache = template_cache_for(model_cls=self.model)
         statement = cache.get(key)
         if statement is None:
-            statement = self.build_write_statement(kind, names, SlotBinder(actions))
-            release_values(statement)
-            cache.put(key, statement)
-        elif templates.CROSS_CHECK:
-            fresh = self.build_write_statement(kind, names, None, values)
-            templates.assert_same_statement(
-                statement, fresh, params, self.model_config.database.dialect
+            statement = self.build_write_statement(
+                kind=kind, names=names, binder=SlotBinder(actions=actions)
             )
-        return StatementTemplate(statement, params)
+            release_values(statement=statement)
+            cache.put(key=key, statement=statement)
+        elif templates.CROSS_CHECK:
+            fresh = self.build_write_statement(
+                kind=kind, names=names, binder=None, values=values
+            )
+            templates.assert_same_statement(
+                cached=statement,
+                fresh=fresh,
+                params=params,
+                dialect=self.model_config.database.dialect,
+            )
+        return StatementTemplate(statement=statement, params=params)
 
     def build_write_statement(
         self,
@@ -555,7 +575,7 @@ class QuerySet(Generic[T]):
         expr: Any
         if kind == "update":
             assignments = (
-                value_binds(table, names)
+                value_binds(table=table, names=names)
                 if binder is not None
                 else {table.c[name]: (values or {})[name] for name in names}
             )
@@ -563,11 +583,11 @@ class QuerySet(Generic[T]):
         else:
             expr = table.delete()
         expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
-            expr
+            expr=expr
         )
         return FilterQuery(
             filter_clauses=self.exclude_clauses, exclude=True, binder=binder
-        ).apply(expr)
+        ).apply(expr=expr)
 
     def effective_limit_shape(self, limit: Optional[int]) -> tuple:
         """
@@ -608,12 +628,12 @@ class QuerySet(Generic[T]):
         """
         return (
             variant,
-            clauses_shape(self.filter_clauses),
-            clauses_shape(self.exclude_clauses),
+            clauses_shape(clauses=self.filter_clauses),
+            clauses_shape(clauses=self.exclude_clauses),
             tuple(self._select_related),
-            excludable_shape(self._excludable),
-            order_shape(order_bys or self.order_bys),
-            self.effective_limit_shape(limit),
+            excludable_shape(excludable=self._excludable),
+            order_shape(order_bys=order_bys or self.order_bys),
+            self.effective_limit_shape(limit=limit),
             bool(offset or self.query_offset),
             self.limit_sql_raw,
         )
@@ -1093,10 +1113,12 @@ class QuerySet(Generic[T]):
         :return: result of the check
         :rtype: bool
         """
-        template = self.build_select_template(("exists",), wrap=exists_statement)
+        template = self.build_select_template(
+            variant=("exists",), wrap=exists_statement
+        )
         async with self.model_config.database.get_query_executor() as executor:
             result = await executor.fetch_val(
-                template.statement, params=template.params
+                query=template.statement, params=template.params
             )
             return bool(result)
 
@@ -1119,12 +1141,14 @@ class QuerySet(Generic[T]):
         wrap = functools.partial(
             count_statement,
             distinct=distinct,
-            pk_column_name=self.model.get_column_alias(self.model_config.pkname),
+            pk_column_name=self.model.get_column_alias(
+                field_name=self.model_config.pkname
+            ),
         )
-        template = self.build_select_template(("count", distinct), wrap=wrap)
+        template = self.build_select_template(variant=("count", distinct), wrap=wrap)
         async with self.model_config.database.get_query_executor() as executor:
             result = await executor.fetch_val(
-                template.statement, params=template.params
+                query=template.statement, params=template.params
             )
             return int(result) if result is not None else 0
 
@@ -1148,10 +1172,12 @@ class QuerySet(Generic[T]):
             aggregate_statement, func_name=func_name, select_columns=select_columns
         )
         template = self.build_select_template(
-            ("aggregate", func_name, tuple(columns)), wrap=wrap
+            variant=("aggregate", func_name, tuple(columns)), wrap=wrap
         )
         async with self.model_config.database.get_query_executor() as executor:
-            result = await executor.fetch_one(template.statement, template.params)
+            result = await executor.fetch_one(
+                query=template.statement, params=template.params
+            )
         return dict(result) if len(result) > 1 else result[columns[0]]  # type: ignore
 
     async def max(self, columns: Union[str, list[str]]) -> Any:  # noqa: A003
@@ -1254,7 +1280,7 @@ class QuerySet(Generic[T]):
                 f"Unconsumed column names: {', '.join(unconsumed)}"
             )
 
-        template = self.build_write_template("update", updates)
+        template = self.build_write_template(kind="update", values=updates)
         async with self.model_config.database.get_query_executor() as executor:
             return await executor.execute(template.statement, template.params)
 
@@ -1280,7 +1306,7 @@ class QuerySet(Generic[T]):
                 "If you want to delete all rows use delete(each=True)"
             )
         self._verify_no_related_filters("delete")
-        template = self.build_write_template("delete", {})
+        template = self.build_write_template(kind="delete", values={})
         async with self.model_config.database.get_query_executor() as executor:
             return await executor.execute(template.statement, template.params)
 
@@ -1749,13 +1775,13 @@ class QuerySet(Generic[T]):
         ) as executor:
             for rows in rows_by_keys.values():
                 if len(rows) == 1:
-                    template = insert_template(self.model, rows[0])
+                    template = insert_template(model_cls=self.model, values=rows[0])
                     await executor.execute(template.statement, template.params)
                     continue
                 names = tuple(sorted(rows[0]))
                 await executor.execute_many(
-                    insert_statement(self.model, names),
-                    [value_params(names, row) for row in rows],
+                    insert_statement(model_cls=self.model, names=names),
+                    [value_params(names=names, values=row) for row in rows],
                 )
 
         for obj in objects:
@@ -1836,12 +1862,12 @@ class QuerySet(Generic[T]):
             k for k in columns if k != pk_column_name and k in table_columns
         )
         expr = cached_statement(
-            self.model,
-            ("bulk_update", updated),
-            build_bulk_update,
-            self.table,
-            pk_column,
-            updated,
+            model_cls=self.model,
+            key=("bulk_update", updated),
+            builder=build_bulk_update,
+            table=self.table,
+            pk_column=pk_column,
+            columns=updated,
         )
         # Multi-row execute_many: run in an explicit transaction so all rows
         # share a single COMMIT instead of one per row under AUTOCOMMIT.

@@ -29,10 +29,10 @@ class LimitQuery:
 
         if self.limit_count is not None:
             value = (
-                self.binder.limit(self.limit_count)
+                self.binder.limit(value=self.limit_count)
                 if self.binder is not None
                 else self.limit_count
             )
-            expr = expr.limit(value)
+            expr = expr.limit(limit=value)
 
         return expr

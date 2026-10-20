@@ -66,7 +66,7 @@ class StatementPlan:
         self.result_keys: Tuple[str, ...] = tuple(col[0] for col in result_columns)
         self.result_types: Tuple[Any, ...] = tuple(col[3] for col in result_columns)
         self.result_processors: Optional[List[ResultProcessor]] = None
-        self.row_class = row_class_for(result_columns)
+        self.row_class = row_class_for(result_columns=result_columns)
         self.returning = bool(compiled.effective_returning)
         self.is_insert = bool(compiled.isinsert)
         self.pk_param_key: Optional[str] = None
@@ -80,7 +80,7 @@ class StatementPlan:
             or duplicate_labels
             or any(
                 not (default.is_scalar or default.is_callable)
-                for default in prefetch_defaults(compiled)
+                for default in prefetch_defaults(compiled=compiled)
             )
         )
 
@@ -277,9 +277,9 @@ class NativeCompiler:
             escape_names=True,
             _no_postcompile=True,
         )
-        apply_prefetch_defaults(plan.compiled, bound_params)
-        sql, args = expand(plan.compiled, bound_params)
-        return BoundStatement(plan, sql, args, bound_params)
+        apply_prefetch_defaults(compiled=plan.compiled, params=bound_params)
+        sql, args = expand(compiled=plan.compiled, params=bound_params)
+        return BoundStatement(plan=plan, sql=sql, args=args, params=bound_params)
 
     def bind_many(
         self, stmt: Executable, rows: Sequence[Mapping[str, Any]]
@@ -315,10 +315,10 @@ class NativeCompiler:
                 escape_names=True,
                 _no_postcompile=True,
             )
-            apply_prefetch_defaults(plan.compiled, params)
-            sql, args = expand(plan.compiled, params)
+            apply_prefetch_defaults(compiled=plan.compiled, params=params)
+            sql, args = expand(compiled=plan.compiled, params=params)
             args_list.append(args)
-        return BoundBatch(plan, sql, args_list)
+        return BoundBatch(plan=plan, sql=sql, args_list=args_list)
 
     def _plan(self, stmt: Executable, key: Any) -> StatementPlan:
         """
@@ -334,12 +334,12 @@ class NativeCompiler:
         :rtype: StatementPlan
         """
         if key is None:
-            return self._compile(stmt, key)
+            return self._compile(stmt=stmt, key=key)
         plan = self._plans.get(key.key)
         if plan is not None:
             self._plans.move_to_end(key.key)
             return plan
-        plan = self._compile(stmt, key)
+        plan = self._compile(stmt=stmt, key=key)
         self._plans[key.key] = plan
         if len(self._plans) > self.max_plans:
             self._plans.popitem(last=False)
@@ -359,11 +359,11 @@ class NativeCompiler:
         :rtype: StatementPlan
         """
         compiled = stmt._compiler(  # type: ignore[attr-defined]
-            self.dialect, cache_key=key
+            dialect=self.dialect, cache_key=key
         )
-        plan = StatementPlan(compiled)
+        plan = StatementPlan(compiled=compiled)
         if plan.is_insert:
-            plan.pk_param_key = pk_param_key(compiled)
+            plan.pk_param_key = pk_param_key(compiled=compiled)
         return plan
 
 
@@ -438,7 +438,10 @@ def apply_prefetch_defaults(
             if default.is_scalar:
                 params[key_getter(column)] = default.arg
             elif default.is_callable:
-                context = DefaultContext(unescaped_view(compiled, params), column)
+                context = DefaultContext(
+                    params=unescaped_view(compiled=compiled, params=params),
+                    column=column,
+                )
                 params[key_getter(column)] = default.arg(context)
 
 
@@ -493,7 +496,7 @@ def expand(
     :return: SQL string and positional arguments
     :rtype: Tuple[str, List[Any]]
     """
-    expanded = compiled.construct_expanded_state(params, escape_names=False)
+    expanded = compiled.construct_expanded_state(params=params, escape_names=False)
     processors: Dict[str, Any] = {
         **compiled._bind_processors,
         **expanded.processors,
@@ -664,7 +667,7 @@ def resolve_result_processors(
     :type coltypes: Sequence[Any]
     """
     plan.result_processors = [
-        type_._cached_result_processor(dialect, coltype)
+        type_._cached_result_processor(dialect=dialect, coltype=coltype)
         for type_, coltype in zip(plan.result_types, coltypes)
     ]
 

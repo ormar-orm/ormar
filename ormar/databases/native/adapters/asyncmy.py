@@ -32,7 +32,7 @@ class AsyncmyAdapter(DriverAdapter):
         :param dialect: dialect of the connected database
         :type dialect: Dialect
         """
-        super().__init__(dialect)
+        super().__init__(dialect=dialect)
         dbapi = dialect.dbapi
         # asyncmy raises AttributeError when its transport is gone mid-call;
         # SQLAlchemy's adapter turns it into a disconnect InternalError.
@@ -51,11 +51,13 @@ class AsyncmyAdapter(DriverAdapter):
         :return: rows
         :rtype: List[Dict[str, Any]]
         """
-        async with execute_mutex(raw), raw.driver_connection.cursor() as cursor:
-            await cursor.execute(bound.sql, tuple(bound.args))
-            self.resolve_processors(bound, [desc[1] for desc in cursor.description])
+        async with execute_mutex(raw=raw), raw.driver_connection.cursor() as cursor:
+            await cursor.execute(query=bound.sql, args=tuple(bound.args))
+            self.resolve_processors(
+                bound=bound, coltypes=[desc[1] for desc in cursor.description]
+            )
             rows = await cursor.fetchall()
-        return [row_to_dict(bound.plan, row) for row in rows]
+        return [row_to_dict(plan=bound.plan, values=row) for row in rows]
 
     async def execute(self, raw: Any, bound: BoundStatement) -> Any:
         """
@@ -70,10 +72,12 @@ class AsyncmyAdapter(DriverAdapter):
         :return: inserted primary key for INSERT, row count otherwise
         :rtype: Any
         """
-        async with execute_mutex(raw), raw.driver_connection.cursor() as cursor:
-            await cursor.execute(bound.sql, tuple(bound.args))
+        async with execute_mutex(raw=raw), raw.driver_connection.cursor() as cursor:
+            await cursor.execute(query=bound.sql, args=tuple(bound.args))
             if bound.plan.is_insert:
-                return inserted_primary_key(bound, None, cursor.lastrowid)
+                return inserted_primary_key(
+                    bound=bound, returned=None, lastrowid=cursor.lastrowid
+                )
             return cursor.rowcount
 
     async def execute_many(self, raw: Any, batch: BoundBatch) -> None:
@@ -85,8 +89,10 @@ class AsyncmyAdapter(DriverAdapter):
         :param batch: statement and arguments per row
         :type batch: BoundBatch
         """
-        async with execute_mutex(raw), raw.driver_connection.cursor() as cursor:
-            await cursor.executemany(batch.sql, [tuple(a) for a in batch.args_list])
+        async with execute_mutex(raw=raw), raw.driver_connection.cursor() as cursor:
+            await cursor.executemany(
+                query=batch.sql, args=[tuple(a) for a in batch.args_list]
+            )
 
     async def stream(
         self, raw: Any, bound: BoundStatement, batch_size: int
@@ -108,20 +114,22 @@ class AsyncmyAdapter(DriverAdapter):
         :return: rows keyed by result label
         :rtype: AsyncGenerator[Dict[str, Any], None]
         """
-        cursor = raw.driver_connection.cursor(self.unbuffered_cursor)
+        cursor = raw.driver_connection.cursor(cursor=self.unbuffered_cursor)
         try:
-            async with execute_mutex(raw):
-                await cursor.execute(bound.sql, tuple(bound.args))
-                self.resolve_processors(bound, [desc[1] for desc in cursor.description])
+            async with execute_mutex(raw=raw):
+                await cursor.execute(query=bound.sql, args=tuple(bound.args))
+                self.resolve_processors(
+                    bound=bound, coltypes=[desc[1] for desc in cursor.description]
+                )
             while True:
-                async with execute_mutex(raw):
-                    rows = await cursor.fetchmany(batch_size)
+                async with execute_mutex(raw=raw):
+                    rows = await cursor.fetchmany(size=batch_size)
                 if not rows:
                     return
                 for row in rows:
-                    yield row_to_dict(bound.plan, row)
+                    yield row_to_dict(plan=bound.plan, values=row)
         finally:
-            async with execute_mutex(raw):
+            async with execute_mutex(raw=raw):
                 await cursor.close()
 
     def translate_error(
@@ -141,7 +149,7 @@ class AsyncmyAdapter(DriverAdapter):
         :rtype: BaseException
         """
         try:
-            dbapi_connection._handle_exception(error)
+            dbapi_connection._handle_exception(error=error)
         except Exception as translated:
             return translated
         return error  # pragma: no cover
