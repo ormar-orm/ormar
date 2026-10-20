@@ -22,8 +22,15 @@ async def raise_translated(
 ) -> NoReturn:
     """
     Re-raise a driver exception as the ``sqlalchemy.exc`` exception SQLAlchemy
-    would raise for it, invalidating the pooled connection on a disconnect so
-    it never returns to the pool.
+    would raise for it, so user code catches the same errors on both paths::
+
+        asyncpg.UniqueViolationError
+        # -> sqlalchemy.exc.IntegrityError: (...UniqueViolationError) duplicate key
+        #    [SQL: INSERT INTO users ...] [parameters: (...)]
+
+    When the dialect recognises the error as a lost connection, the
+    connection is invalidated first, so it is closed instead of going back to
+    the pool for the next query to fail on.
 
     :param error: exception raised by the driver
     :type error: BaseException

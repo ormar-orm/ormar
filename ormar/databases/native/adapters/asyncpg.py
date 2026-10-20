@@ -1,5 +1,5 @@
 """
-Native execution adapter for asyncpg.
+Native execution adapter for asyncpg (``postgresql+asyncpg://`` URLs).
 """
 
 from typing import Any, AsyncGenerator, Dict, List
@@ -18,10 +18,17 @@ from ormar.databases.native.compiler import BoundBatch, BoundStatement, row_to_d
 
 class AsyncpgAdapter(DriverAdapter):
     """
-    Executes bound statements on an asyncpg connection. Statements always go
-    through asyncpg's statement cache; ``prepare()`` is only called once per
-    plan to read the result column type OIDs. ``executemany`` runs in an
-    implicit transaction when none is open, so it is atomic.
+    Runs bound statements with asyncpg's own API, which takes ``$1``-style SQL
+    and positional arguments::
+
+        await driver.fetch("SELECT users.id FROM users WHERE users.id = $1", 5)
+
+    asyncpg prepares and caches statements by SQL text on its own. It does
+    not report result column types on ``fetch``, so ``prepare()`` is called
+    once per plan only to read them (see ``resolve_column_types``).
+
+    asyncpg's ``executemany`` runs in an implicit transaction when none is
+    open, so a failing row leaves no rows inserted (``atomic_execute_many``).
     """
 
     atomic_execute_many = True
@@ -38,7 +45,8 @@ class AsyncpgAdapter(DriverAdapter):
 
     async def fetch_all(self, raw: Any, bound: BoundStatement) -> List[Dict[str, Any]]:
         """
-        Execute a statement and return all rows keyed by result label.
+        Run a statement with ``fetch`` and turn asyncpg's ``Record`` rows into
+        rows keyed by result label.
 
         :param raw: pooled raw connection
         :type raw: Any
@@ -55,7 +63,11 @@ class AsyncpgAdapter(DriverAdapter):
 
     async def execute(self, raw: Any, bound: BoundStatement) -> Any:
         """
-        Execute a write statement.
+        Run a write statement. An INSERT with ``RETURNING`` reads the returned pk
+        with ``fetchrow``; other statements use ``execute``, whose status string
+        carries the row count::
+
+            await driver.execute("DELETE FROM users")  # -> "DELETE 3" -> 3
 
         :param raw: pooled raw connection
         :type raw: Any
@@ -77,7 +89,8 @@ class AsyncpgAdapter(DriverAdapter):
 
     async def execute_many(self, raw: Any, batch: BoundBatch) -> None:
         """
-        Execute a statement once per set of arguments.
+        Run a statement once per row with asyncpg's ``executemany``, which sends
+        all rows in one pipelined call and is atomic on its own.
 
         :param raw: pooled raw connection
         :type raw: Any
@@ -91,10 +104,13 @@ class AsyncpgAdapter(DriverAdapter):
         self, raw: Any, bound: BoundStatement, batch_size: int
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Stream rows of a statement through a server-side cursor, fetching
-        ``batch_size`` rows at a time. Requires an open transaction. The
-        execution lock is held per fetch only, so other statements can run on
-        the same connection between batches.
+        Stream rows through a PostgreSQL server-side cursor, fetching
+        ``batch_size`` rows at a time; PostgreSQL only allows such cursors
+        inside a transaction, which ``QuerySet.iterate()`` opens.
+
+        The execution lock is held per fetch only, so a query issued inside
+        the ``async for`` loop on the same connection can run between
+        batches instead of waiting forever for the lock.
 
         :param raw: pooled raw connection
         :type raw: Any
@@ -119,8 +135,12 @@ class AsyncpgAdapter(DriverAdapter):
 
     async def start_transaction(self, sa_connection: AsyncConnection) -> None:
         """
-        Start the asyncpg transaction SQLAlchemy only starts lazily on its own
-        first statement, so natively executed statements run inside it.
+        Send ``BEGIN`` now for a transaction SQLAlchemy began.
+
+        SQLAlchemy's asyncpg wrapper only marks the transaction as begun and
+        sends ``BEGIN`` with its own first statement (``_started`` flag).
+        Native statements skip the wrapper, so without this they would run
+        and commit on their own, outside the transaction.
 
         :param sa_connection: connection the transaction was begun on
         :type sa_connection: AsyncConnection
@@ -133,7 +153,10 @@ class AsyncpgAdapter(DriverAdapter):
         self, error: BaseException, dbapi_connection: Any
     ) -> BaseException:
         """
-        Translate an asyncpg exception into SQLAlchemy's DBAPI-level exception.
+        Map an asyncpg exception to the DBAPI class SQLAlchemy's asyncpg
+        wrapper uses, e.g. ``UniqueViolationError`` to its ``IntegrityError``.
+        The wrapper's ``_handle_exception`` raises the mapped exception, so it
+        is caught and returned.
 
         :param error: exception raised by asyncpg
         :type error: BaseException
@@ -150,8 +173,12 @@ class AsyncpgAdapter(DriverAdapter):
 
     async def resolve_column_types(self, driver: Any, bound: BoundStatement) -> None:
         """
-        Resolve the plan's result processors from the column type OIDs on its
-        first execution.
+        On a plan's first execution, read its result column types from
+        ``prepare()`` and look up its result processors.
+
+        asyncpg reports types as PostgreSQL type OIDs (e.g. ``1700`` for
+        ``NUMERIC``), the same codes SQLAlchemy's own path passes to the
+        types, so both paths pick the same processors.
 
         :param driver: asyncpg connection
         :type driver: Any

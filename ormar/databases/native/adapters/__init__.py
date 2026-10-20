@@ -1,5 +1,8 @@
 """
 Per-driver adapters for native statement execution.
+
+Only the drivers listed in ``ADAPTERS`` run natively; any other driver
+(e.g. aiomysql, aiopg) keeps running every statement through SQLAlchemy.
 """
 
 from typing import Dict, Optional, Type
@@ -21,7 +24,12 @@ ADAPTERS: Dict[str, Type[DriverAdapter]] = {
 def select_adapter(dialect: Dialect) -> Optional[DriverAdapter]:
     """
     Return the native adapter for the dialect's driver, or None when the driver
-    runs on the SQLAlchemy execution path.
+    has none and statements run through SQLAlchemy::
+
+        select_adapter(create_async_engine("postgresql+asyncpg://...").dialect)
+        # -> AsyncpgAdapter
+        select_adapter(create_async_engine("mysql+aiomysql://...").dialect)
+        # -> None
 
     :param dialect: dialect of the connected database
     :type dialect: Dialect
