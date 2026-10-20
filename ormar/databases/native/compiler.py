@@ -270,9 +270,9 @@ class NativeCompiler:
             escape_names=True,
             _no_postcompile=True,
         )
-        apply_prefetch_defaults(plan.compiled, bound_params)
-        sql, args = expand(plan.compiled, bound_params)
-        return BoundStatement(plan, sql, args, bound_params)
+        apply_prefetch_defaults(compiled=plan.compiled, params=bound_params)
+        sql, args = expand(compiled=plan.compiled, params=bound_params)
+        return BoundStatement(plan=plan, sql=sql, args=args, params=bound_params)
 
     def bind_many(
         self, stmt: Executable, rows: Sequence[Mapping[str, Any]]

@@ -117,8 +117,8 @@ class FilterGroup:
         :return: list of text queries from actions and nested groups
         :rtype: list[sqlalchemy.sql.elements.TextClause]
         """
-        return [x.get_text_clause(binder) for x in self._nested_groups] + [
-            x.get_text_clause(binder) for x in self.actions
+        return [x.get_text_clause(binder=binder) for x in self._nested_groups] + [
+            x.get_text_clause(binder=binder) for x in self.actions
         ]
 
     def get_text_clause(
@@ -136,7 +136,7 @@ class FilterGroup:
         :return: complied and escaped clause
         :rtype: sqlalchemy.sql.elements.TextClause
         """
-        clauses = self._get_text_clauses(binder)
+        clauses = self._get_text_clauses(binder=binder)
         if self.filter_type == FilterType.AND:
             clause = sqlalchemy.sql.and_(*clauses).self_group()
         else:

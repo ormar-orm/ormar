@@ -63,10 +63,12 @@ class QueryExecutor:
         :param params: values for named bind parameters of the query
         :return: List of rows, accessible by result label
         """
-        bound = self._bind(query, params)
+        bound = self._bind(query=query, params=params)
         if bound is not None:
             return await self._fetch_native(bound=bound)
-        result: CursorResult[Any] = await self._connection.execute(query, params)
+        result: CursorResult[Any] = await self._connection.execute(
+            statement=query, parameters=params
+        )
         return list(result.mappings().all())
 
     async def fetch_one(
@@ -79,11 +81,13 @@ class QueryExecutor:
         :param params: values for named bind parameters of the query
         :return: Single row or None
         """
-        bound = self._bind(query, params)
+        bound = self._bind(query=query, params=params)
         if bound is not None:
             rows = await self._fetch_native(bound=bound)
             return rows[0] if rows else None
-        result: CursorResult[Any] = await self._connection.execute(query, params)
+        result: CursorResult[Any] = await self._connection.execute(
+            statement=query, parameters=params
+        )
         row = result.mappings().first()
         return row
 
@@ -101,11 +105,13 @@ class QueryExecutor:
         :param params: values for named bind parameters of the query
         :return: Scalar value or None
         """
-        bound = self._bind(query, params)
+        bound = self._bind(query=query, params=params)
         if bound is not None:
             rows = await self._fetch_native(bound=bound)
             return list(rows[0].values())[column] if rows else None
-        result: CursorResult[Any] = await self._connection.execute(query, params)
+        result: CursorResult[Any] = await self._connection.execute(
+            statement=query, parameters=params
+        )
         return result.scalar()
 
     async def execute(self, query: Executable) -> Any:
@@ -178,7 +184,7 @@ class QueryExecutor:
         :param params: values for named bind parameters of the query
         :return: Async iterator of rows, accessible by result label
         """
-        bound = self._bind(query, params)
+        bound = self._bind(query=query, params=params)
         if bound is not None:
             assert self._native is not None
             raw = await self._raw_connection()
@@ -196,7 +202,9 @@ class QueryExecutor:
                 except BaseException as error:
                     await self._reraise_interrupted(error=error)
             return
-        async with self._connection.stream(query, params) as result:
+        async with self._connection.stream(
+            statement=query, parameters=params
+        ) as result:
             async for mapping in result.mappings():
                 yield mapping
 
@@ -224,7 +232,7 @@ class QueryExecutor:
         """
         if self._native is None or not is_plannable(stmt=query):
             return None
-        bound = self._native.compiler.bind(query, params)
+        bound = self._native.compiler.bind(stmt=query, params=params)
         return None if bound.plan.fallback else bound
 
     async def _raw_connection(self) -> Any:
