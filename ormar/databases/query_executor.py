@@ -134,14 +134,16 @@ class QueryExecutor:
             non-AUTO_INCREMENT pk with a server default — no RETURNING support).
             For UPDATE/DELETE, the row count.
         """
-        bound = self._bind(query, params)
+        bound = self._bind(query=query, params=params)
         if bound is not None:
             assert self._native is not None
             return await self._run(
                 method=self._native.adapter.execute, payload=bound, args=bound.args
             )
 
-        result: CursorResult[Any] = await self._connection.execute(query, params)
+        result: CursorResult[Any] = await self._connection.execute(
+            statement=query, parameters=params
+        )
 
         # For INSERT queries, try to get the inserted primary key via the
         # dialect's best-available mechanism (RETURNING on PostgreSQL / SQLite
@@ -152,7 +154,7 @@ class QueryExecutor:
             # a primary key bound by name (statement templates) is returned as
             # bound; SQLAlchemy only looks it up under the column key
             compiled = cast(SQLCompiler, result.context.compiled)
-            key = pk_param_key(compiled) if params else None
+            key = pk_param_key(compiled=compiled) if params else None
             if key is not None and params and params.get(key) is not None:
                 return params[key]
             if result.inserted_primary_key:

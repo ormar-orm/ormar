@@ -384,7 +384,7 @@ class QuerySet(Generic[T]):
                 params=params,
                 dialect=self.model_config.database.dialect,
             )
-        return StatementTemplate(statement, params)
+        return StatementTemplate(statement=statement, params=params)
 
     def build_template_statement(
         self,
@@ -430,30 +430,39 @@ class QuerySet(Generic[T]):
         :return: statement and values to bind
         :rtype: StatementTemplate
         """
-        actions = canonical_actions(self.filter_clauses, self.exclude_clauses)
+        actions = canonical_actions(
+            filter_clauses=self.filter_clauses, exclude_clauses=self.exclude_clauses
+        )
         names = tuple(sorted(values))
         params = {
-            **template_params(actions, None, None),
-            **value_params(names, values),
+            **template_params(actions=actions, limit=None, offset=None),
+            **value_params(names=names, values=values),
         }
         key = (
             kind,
-            clauses_shape(self.filter_clauses),
-            clauses_shape(self.exclude_clauses),
+            clauses_shape(clauses=self.filter_clauses),
+            clauses_shape(clauses=self.exclude_clauses),
             names,
         )
-        cache = template_cache_for(self.model)
+        cache = template_cache_for(model_cls=self.model)
         statement = cache.get(key)
         if statement is None:
-            statement = self.build_write_statement(kind, names, SlotBinder(actions))
-            release_values(statement)
-            cache.put(key, statement)
-        elif templates.CROSS_CHECK:
-            fresh = self.build_write_statement(kind, names, None, values)
-            templates.assert_same_statement(
-                statement, fresh, params, self.model_config.database.dialect
+            statement = self.build_write_statement(
+                kind=kind, names=names, binder=SlotBinder(actions=actions)
             )
-        return StatementTemplate(statement, params)
+            release_values(statement=statement)
+            cache.put(key=key, statement=statement)
+        elif templates.CROSS_CHECK:
+            fresh = self.build_write_statement(
+                kind=kind, names=names, binder=None, values=values
+            )
+            templates.assert_same_statement(
+                cached=statement,
+                fresh=fresh,
+                params=params,
+                dialect=self.model_config.database.dialect,
+            )
+        return StatementTemplate(statement=statement, params=params)
 
     def build_write_statement(
         self,
@@ -481,7 +490,7 @@ class QuerySet(Generic[T]):
         expr: Any
         if kind == "update":
             assignments = (
-                value_binds(table, names)
+                value_binds(table=table, names=names)
                 if binder is not None
                 else {table.c[name]: (values or {})[name] for name in names}
             )
@@ -489,11 +498,11 @@ class QuerySet(Generic[T]):
         else:
             expr = table.delete()
         expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
-            expr
+            expr=expr
         )
         return FilterQuery(
             filter_clauses=self.exclude_clauses, exclude=True, binder=binder
-        ).apply(expr)
+        ).apply(expr=expr)
 
     def effective_limit_shape(self, limit: Optional[int]) -> tuple:
         """
@@ -1186,7 +1195,7 @@ class QuerySet(Generic[T]):
                 f"Unconsumed column names: {', '.join(unconsumed)}"
             )
 
-        template = self.build_write_template("update", updates)
+        template = self.build_write_template(kind="update", values=updates)
         async with self.model_config.database.get_query_executor() as executor:
             return await executor.execute(template.statement, template.params)
 
@@ -1212,7 +1221,7 @@ class QuerySet(Generic[T]):
                 "If you want to delete all rows use delete(each=True)"
             )
         self._verify_no_related_filters("delete")
-        template = self.build_write_template("delete", {})
+        template = self.build_write_template(kind="delete", values={})
         async with self.model_config.database.get_query_executor() as executor:
             return await executor.execute(template.statement, template.params)
 
@@ -1675,13 +1684,13 @@ class QuerySet(Generic[T]):
         ) as executor:
             for rows in rows_by_keys.values():
                 if len(rows) == 1:
-                    template = insert_template(self.model, rows[0])
+                    template = insert_template(model_cls=self.model, values=rows[0])
                     await executor.execute(template.statement, template.params)
                     continue
                 names = tuple(sorted(rows[0]))
                 await executor.execute_many(
-                    insert_statement(self.model, names),
-                    [value_params(names, row) for row in rows],
+                    insert_statement(model_cls=self.model, names=names),
+                    [value_params(names=names, values=row) for row in rows],
                 )
 
         for obj in objects:
@@ -1762,12 +1771,12 @@ class QuerySet(Generic[T]):
             k for k in columns if k != pk_column_name and k in table_columns
         )
         expr = cached_statement(
-            self.model,
-            ("bulk_update", updated),
-            build_bulk_update,
-            self.table,
-            pk_column,
-            updated,
+            model_cls=self.model,
+            key=("bulk_update", updated),
+            builder=build_bulk_update,
+            table=self.table,
+            pk_column=pk_column,
+            columns=updated,
         )
         # Multi-row execute_many: run in an explicit transaction so all rows
         # share a single COMMIT instead of one per row under AUTOCOMMIT.
