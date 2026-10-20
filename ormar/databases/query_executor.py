@@ -233,7 +233,6 @@ class QueryExecutor:
             await self._translate(
                 error, payload.sql, args, ismulti=isinstance(payload, BoundBatch)
             )
-            raise  # pragma: no cover
         except BaseException as error:
             await self._reraise_interrupted(error)
 
@@ -256,7 +255,7 @@ class QueryExecutor:
         sql: str,
         args: Sequence[Any],
         ismulti: bool = False,
-    ) -> None:
+    ) -> NoReturn:
         """
         Re-raise a driver error as the matching SQLAlchemy exception.
 
