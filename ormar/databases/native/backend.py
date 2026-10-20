@@ -12,7 +12,12 @@ from ormar.databases.native.compiler import NativeCompiler
 
 @dataclass
 class NativeBackend:
-    """Dialect, driver adapter and statement compiler of one database."""
+    """
+    What a ``DatabaseConnection`` needs to run statements natively, created
+    once on ``connect()`` when the driver has an adapter: the dialect, the
+    driver adapter that runs statements, and the compiler whose plan cache is
+    shared by all queries on that database.
+    """
 
     dialect: Dialect
     adapter: DriverAdapter
