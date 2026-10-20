@@ -1,6 +1,19 @@
 """
-Compiles SQLAlchemy statements once per shape and binds their values for
-execution directly on a native async driver.
+Turns SQLAlchemy statements into SQL text plus positional arguments that a
+native async driver can run directly, skipping SQLAlchemy's execution layer.
+
+SQLAlchemy still builds and compiles every statement; this module reuses its
+compiled output. A compiled statement holds its SQL with the driver's
+placeholders and the names of its bind parameters in placeholder order, so
+running it natively means looking each value up by name in that order::
+
+    stmt = select(users.c.id, users.c.name).where(users.c.id == 5)
+    # compiled for asyncpg
+    sql == "SELECT users.id, users.name FROM users WHERE users.id = $1::INTEGER"
+    args == [5]  # value of the bind parameter named "id_1"
+
+Compiling is the expensive part, so compiled statements are cached per
+statement shape and only the values are bound on each call.
 """
 
 from collections import OrderedDict
@@ -29,8 +42,16 @@ ResultProcessor = Optional[Callable[[Any], Any]]
 
 class StatementPlan:
     """
-    Data derived once per compiled statement shape and reused by every
-    execution of that shape.
+    Everything needed to run one statement shape natively, worked out once
+    when the shape is first compiled and reused by every later execution.
+
+    ``select(users.c.id).where(users.c.id == 5)`` and the same query with ``7``
+    have one shape, so they share one plan; only their bound values differ.
+
+    It holds the compiled statement, the result labels and types used to build
+    rows, and ``fallback``: True for statements that must run through
+    SQLAlchemy instead (plain text without result columns, duplicate result
+    labels, or column defaults that have to run in the database first).
     """
 
     def __init__(self, compiled: SQLCompiler) -> None:
@@ -66,15 +87,25 @@ class StatementPlan:
 
 class NativeRow(dict):
     """
-    A result row keyed by result label that, like SQLAlchemy's ``RowMapping``,
-    can also be indexed by the selected column objects.
+    A result row of native execution: a dict keyed by result label, which is
+    how ormar reads rows.
+
+    It also accepts the selected column objects as keys, like SQLAlchemy's
+    ``RowMapping`` does, so code indexing rows that way keeps working::
+
+        row = NativeRow({"id": 1, "name": "a"})
+        row["name"] == row[users.c.name] == "a"
+
+    Each plan builds its own subclass (``row_class_for``) whose
+    ``object_keys`` maps the selected column objects to their labels.
     """
 
     object_keys: Dict[int, str] = {}
 
     def __missing__(self, key: Any) -> Any:
         """
-        Resolve a column object to its result label.
+        Called by dict lookup when the key is not a label: treat the key as a
+        selected column object (``row[users.c.name]``) and return its value.
 
         :param key: column object (or unknown key)
         :type key: Any
@@ -90,8 +121,15 @@ class NativeRow(dict):
 
 def row_class_for(result_columns: Sequence[Any]) -> type:
     """
-    Build the row class of a plan, mapping each selected column object (by
-    identity, as column ``==`` builds SQL expressions) to its result label.
+    Build the ``NativeRow`` subclass of one plan, so its rows can be indexed by
+    the selected column objects as well as by label.
+
+    Column objects are matched by ``id()``, because ``==`` on a column builds a
+    SQL expression instead of comparing. Each entry of SQLAlchemy's
+    ``_result_columns`` lists the objects a result column was selected as::
+
+        ResultColumnsEntry(keyname="name", objects=(Column("name", ...), ...))
+        # -> object_keys == {id(users.c.name): "name", ...}
 
     :param result_columns: SQLAlchemy ``_result_columns`` of the statement
     :type result_columns: Sequence[Any]
@@ -103,7 +141,15 @@ def row_class_for(result_columns: Sequence[Any]) -> type:
 
 
 class BoundStatement(NamedTuple):
-    """A statement plan with the SQL and positional driver arguments of one call."""
+    """
+    One statement ready to send to the driver: the plan of its shape, the
+    final SQL, the positional arguments, and the named parameters they came
+    from (kept so a primary key the caller bound can be returned as is)::
+
+        sql == "SELECT users.id FROM users WHERE users.id IN ($1, $2, $3)"
+        args == [1, 2, 3]
+        params == {"id_1": [1, 2, 3]}
+    """
 
     plan: StatementPlan
     sql: str
@@ -112,7 +158,13 @@ class BoundStatement(NamedTuple):
 
 
 class BoundBatch(NamedTuple):
-    """A statement plan with one list of positional driver arguments per row."""
+    """
+    One statement ready to run once per row with the driver's
+    ``executemany``: the shared SQL and one argument list per row::
+
+        sql == "INSERT INTO users (name) VALUES ($1)"
+        args_list == [["a"], ["b"]]
+    """
 
     plan: StatementPlan
     sql: str
@@ -121,8 +173,18 @@ class BoundBatch(NamedTuple):
 
 class DefaultContext:
     """
-    Minimal stand-in for SQLAlchemy's execution context, passed to callable
-    column defaults.
+    Stand-in for SQLAlchemy's execution context, passed to Python column
+    defaults that take a context argument.
+
+    SQLAlchemy calls such defaults with its execution context; the native path
+    has none, so this offers what those defaults use, the statement's current
+    parameters and the column::
+
+        def slug_default(context):
+            return context.get_current_parameters()["name"].lower()
+
+
+        Column("slug", String, default=slug_default)
     """
 
     def __init__(self, params: MutableMapping[str, Any], column: Any) -> None:
@@ -152,8 +214,15 @@ class DefaultContext:
 
 class NativeCompiler:
     """
-    Compiles statements for one dialect, caching compiled plans by
-    SQLAlchemy's statement cache key.
+    Turns statements into ``BoundStatement`` / ``BoundBatch`` objects for one
+    database dialect.
+
+    Compiling is the costly step, so plans are kept in an LRU cache keyed by
+    SQLAlchemy's statement cache key, which is equal for all statements of one
+    shape whatever their values. On a hit only the new values are bound::
+
+        compiler.bind(select(users).where(users.c.id == 5))  # compiles
+        compiler.bind(select(users).where(users.c.id == 7))  # reuses the plan
     """
 
     def __init__(self, dialect: Dialect, max_plans: int = 2048) -> None:
@@ -171,11 +240,25 @@ class NativeCompiler:
         self, stmt: Executable, params: Optional[Mapping[str, Any]] = None
     ) -> BoundStatement:
         """
-        Compile (or reuse) the statement and bind its values.
+        Compile the statement, or reuse the plan of its shape, and bind its values
+        into SQL and positional driver arguments.
+
+        The values come from the statement's own cache key, which carries the
+        bound values of this particular statement::
+
+            bind(select(users.c.id).where(users.c.id == 7))
+            # -> sql "... WHERE users.id = $1::INTEGER", args [7]
+
+        ``params`` supplies values by bind name instead. ormar's cached query
+        templates use it: one statement built once with named slots, and only
+        the values passed on each call::
+
+            stmt = select(users.c.id).where(users.c.id == bindparam("ormar_p0"))
+            bind(stmt, {"ormar_p0": 7})  # -> args [7]
 
         :param stmt: statement to execute
         :type stmt: Executable
-        :param params: values overriding named bind parameters
+        :param params: values for named bind parameters, by name
         :type params: Optional[Mapping[str, Any]]
         :return: plan, SQL string and positional driver arguments
         :rtype: BoundStatement
@@ -196,8 +279,12 @@ class NativeCompiler:
         self, stmt: Executable, rows: Sequence[Mapping[str, Any]]
     ) -> BoundBatch:
         """
-        Compile (or reuse) a statement with named bind parameters and bind one
-        set of values per row.
+        Compile a statement with named ``bindparam`` placeholders, or reuse its
+        plan, and bind one set of values per row for ``executemany``::
+
+            bind_many(users.insert(), [{"name": "a"}, {"name": "b"}])
+            # -> sql "INSERT INTO users (name) VALUES ($1::VARCHAR)",
+            #    args_list [["a"], ["b"]]
 
         :param stmt: statement with ``bindparam`` placeholders
         :type stmt: Executable
@@ -225,6 +312,8 @@ class NativeCompiler:
     def _plan(self, stmt: Executable, key: Any) -> StatementPlan:
         """
         Return the cached plan for the statement shape, compiling it on a miss.
+        Statements SQLAlchemy cannot cache (no cache key) are compiled every time;
+        past ``max_plans`` the least recently used plan is dropped.
 
         :param stmt: statement to plan
         :type stmt: Executable
@@ -247,7 +336,9 @@ class NativeCompiler:
 
     def _compile(self, stmt: Executable, key: Any) -> StatementPlan:
         """
-        Compile the statement with its cache key and derive the plan.
+        Compile the statement for the dialect and derive its plan. Passing the
+        cache key makes SQLAlchemy record which bind parameters come from the key,
+        so later statements of the same shape can supply their own values.
 
         :param stmt: statement to compile
         :type stmt: Executable
@@ -267,8 +358,11 @@ class NativeCompiler:
 
 def is_plannable(stmt: Any) -> TypeGuard[Executable]:
     """
-    Return whether the statement can be planned for native execution at all;
-    DDL is compiled by a different compiler and always runs through SQLAlchemy.
+    Return whether the statement can go through the native compiler at all.
+
+    DDL (``CREATE TABLE`` and similar) is compiled by a different compiler
+    without cache keys, and raw SQL strings have nothing to compile, so both
+    always run through SQLAlchemy.
 
     :param stmt: statement to execute
     :type stmt: Any
@@ -280,7 +374,18 @@ def is_plannable(stmt: Any) -> TypeGuard[Executable]:
 
 def prefetch_defaults(compiled: SQLCompiler) -> List[Any]:
     """
-    Return the Python-side defaults SQLAlchemy computes at execution time.
+    Return the column defaults SQLAlchemy fills in at execution time because
+    the statement does not set those columns itself.
+
+    SQLAlchemy calls these columns "prefetch": ``insert_prefetch`` for
+    ``default=`` on INSERT and ``update_prefetch`` for ``onupdate=`` on
+    UPDATE::
+
+        Column("token", String, default=lambda: "tok")
+        users.insert().values(name="a")  # -> [CallableColumnDefault(<lambda>)]
+
+    ``StatementPlan`` falls back to SQLAlchemy when one of them is neither a
+    constant nor a Python callable (a SQL expression run before the statement).
 
     :param compiled: compiled statement
     :type compiled: SQLCompiler
@@ -296,8 +401,14 @@ def apply_prefetch_defaults(
     compiled: SQLCompiler, params: MutableMapping[str, Any]
 ) -> None:
     """
-    Fill execution-time Python defaults into the bound parameters, the way
-    SQLAlchemy's execution context does.
+    Fill the values of execution-time column defaults into the bound
+    parameters, which SQLAlchemy's execution context does on its own path.
+
+    Constants are copied, callables are called (with a ``DefaultContext``)::
+
+        Column("token", String, default=lambda: "tok")
+        users.insert().values(name="a")
+        # params {"name": "a"} -> {"name": "a", "token": "tok"}
 
     :param compiled: compiled statement
     :type compiled: SQLCompiler
@@ -324,8 +435,14 @@ def unescaped_view(
     compiled: SQLCompiler, params: MutableMapping[str, Any]
 ) -> MutableMapping[str, Any]:
     """
-    Return the parameters keyed by unescaped bind names, as SQLAlchemy shows
-    them to context-sensitive column defaults.
+    Return the parameters keyed by the original bind names, as SQLAlchemy
+    shows them to column defaults reading ``get_current_parameters()``.
+
+    SQLAlchemy escapes bind names with characters a driver cannot take in a
+    parameter name, and bound parameters use the escaped form::
+
+        Column("my col", Integer)
+        {"my_col": 3}  # -> {"my col": 3}
 
     :param compiled: compiled statement
     :type compiled: SQLCompiler
@@ -345,8 +462,18 @@ def expand(
     compiled: SQLCompiler, params: MutableMapping[str, Any]
 ) -> Tuple[str, List[Any]]:
     """
-    Expand ``IN`` lists and apply bind processors, producing the final SQL and
-    positional driver arguments.
+    Produce the final SQL and positional driver arguments from named
+    parameters.
+
+    SQLAlchemy lists the bind names in placeholder order (``positiontup``), so
+    the arguments are the values looked up in that order. Each value goes
+    through its type's bind processor when it has one, the reverse of a result
+    processor (e.g. a dict to a JSON string on SQLite). ``IN`` lists get one
+    placeholder per value::
+
+        {"id_1": [1, 2, 3]}
+        # -> "... WHERE users.id IN ($1::INTEGER, $2::INTEGER, $3::INTEGER)",
+        #    [1, 2, 3]
 
     :param compiled: compiled statement
     :type compiled: SQLCompiler
@@ -370,7 +497,14 @@ def expand(
 
 def pk_param_key(compiled: SQLCompiler) -> Optional[str]:
     """
-    Return the bind key of the table's primary key if the insert binds it.
+    Return the parameter name the INSERT binds the primary key under, or None
+    when the INSERT does not set it.
+
+    A primary key provided by the caller is returned as the inserted key
+    instead of asking the database, which cannot always report it::
+
+        users.insert().values(id=3, name="a")  # -> "id"
+        users.insert().values(name="a")  # -> None
 
     :param compiled: compiled insert statement
     :type compiled: SQLCompiler
@@ -395,7 +529,24 @@ def resolve_result_processors(
     plan: StatementPlan, dialect: Dialect, coltypes: Sequence[Any]
 ) -> None:
     """
-    Resolve SQLAlchemy's result processors for the plan's result columns.
+    Look up, once per plan, the result processor of each result column.
+
+    A result processor is the function a SQLAlchemy type uses to turn the raw
+    value a driver returns into the Python value of that type. Drivers return
+    what the database stores, which is not always what the column type
+    promises, e.g. on SQLite::
+
+        DateTime  "2024-01-02 03:04:05" -> datetime(2024, 1, 2, 3, 4, 5)
+        JSON      '{"a": 1}'            -> {"a": 1}
+        Enum(C)   "red"                 -> C.red
+        Boolean   1                     -> True
+        Integer   needs none            -> None
+
+    SQLAlchemy runs them on its own path; the native path must run the same
+    ones, or rows would hold driver values. Some types pick their processor by
+    the column type the driver reports (a PostgreSQL ``NUMERIC`` read into a
+    ``Numeric(asdecimal=False)`` column needs a float conversion), so this runs
+    on the first execution, when the driver has reported them.
 
     :param plan: plan to resolve processors for
     :type plan: StatementPlan
@@ -412,8 +563,10 @@ def resolve_result_processors(
 
 def row_to_dict(plan: StatementPlan, values: Sequence[Any]) -> Dict[str, Any]:
     """
-    Convert one driver row into a dict keyed by result label, applying result
-    processors.
+    Convert one driver row into a ``NativeRow`` keyed by result label, running
+    each value through its result processor::
+
+        (1, '{"a": 1}')  # -> {"id": 1, "data": {"a": 1}} on SQLite
 
     :param plan: plan of the executed statement, with resolved processors
     :type plan: StatementPlan
