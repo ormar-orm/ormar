@@ -248,9 +248,16 @@ class NativeCompiler:
             bind(select(users.c.id).where(users.c.id == 7))
             # -> sql "... WHERE users.id = $1::INTEGER", args [7]
 
+        ``params`` supplies values by bind name instead. ormar's cached query
+        templates use it: one statement built once with named slots, and only
+        the values passed on each call::
+
+            stmt = select(users.c.id).where(users.c.id == bindparam("ormar_p0"))
+            bind(stmt, {"ormar_p0": 7})  # -> args [7]
+
         :param stmt: statement to execute
         :type stmt: Executable
-        :param params: values overriding named bind parameters
+        :param params: values for named bind parameters, by name
         :type params: Optional[Mapping[str, Any]]
         :return: plan, SQL string and positional driver arguments
         :rtype: BoundStatement
