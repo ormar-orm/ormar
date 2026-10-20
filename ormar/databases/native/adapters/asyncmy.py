@@ -1,5 +1,5 @@
 """
-Native execution adapter for asyncmy.
+Native execution adapter for asyncmy (``mysql+asyncmy://`` URLs).
 """
 
 from typing import Any, AsyncGenerator, Dict, List
@@ -16,9 +16,15 @@ from ormar.databases.native.compiler import BoundBatch, BoundStatement, row_to_d
 
 class AsyncmyAdapter(DriverAdapter):
     """
-    Executes bound statements on an asyncmy connection. Arguments are always
-    passed as a tuple (even when empty), so ``%%`` escapes in compiled SQL are
-    formatted the same way for every statement.
+    Runs bound statements on asyncmy cursors, which take ``%s``-style SQL and
+    a tuple of arguments::
+
+        await cursor.execute("SELECT users.id FROM users WHERE users.id = %s", (5,))
+
+    Arguments are always passed as a tuple, even when empty. asyncmy only
+    applies ``%`` formatting when arguments are given, and SQLAlchemy compiles
+    a literal ``%`` as ``%%``, so ``LIKE 'a%%'`` would otherwise reach MySQL
+    with the ``%%`` intact.
     """
 
     def __init__(self, dialect: Dialect) -> None:
@@ -35,7 +41,8 @@ class AsyncmyAdapter(DriverAdapter):
 
     async def fetch_all(self, raw: Any, bound: BoundStatement) -> List[Dict[str, Any]]:
         """
-        Execute a statement and return all rows keyed by result label.
+        Run a statement on a cursor and return all rows keyed by result label;
+        the result column types come from ``cursor.description``.
 
         :param raw: pooled raw connection
         :type raw: Any
@@ -52,8 +59,9 @@ class AsyncmyAdapter(DriverAdapter):
 
     async def execute(self, raw: Any, bound: BoundStatement) -> Any:
         """
-        Execute a write statement. MySQL has no RETURNING, so generated primary
-        keys come from ``lastrowid``.
+        Run a write statement. MySQL has no ``RETURNING``, so a generated primary
+        key comes from ``cursor.lastrowid`` and the row count from
+        ``cursor.rowcount``.
 
         :param raw: pooled raw connection
         :type raw: Any
@@ -70,7 +78,7 @@ class AsyncmyAdapter(DriverAdapter):
 
     async def execute_many(self, raw: Any, batch: BoundBatch) -> None:
         """
-        Execute a statement once per set of arguments.
+        Run a statement once per row with the cursor's ``executemany``.
 
         :param raw: pooled raw connection
         :type raw: Any
@@ -84,8 +92,12 @@ class AsyncmyAdapter(DriverAdapter):
         self, raw: Any, bound: BoundStatement, batch_size: int
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Stream rows through an unbuffered cursor, fetching ``batch_size`` rows
-        at a time. The execution lock is held per fetch only.
+        Stream rows through an unbuffered cursor (``SSCursor``), which reads
+        rows from the network as they are fetched instead of loading the whole
+        result first. The cursor is always closed at the end, because MySQL
+        cannot run another statement on the connection while it is open.
+
+        The execution lock is held per fetch only (see the asyncpg adapter).
 
         :param raw: pooled raw connection
         :type raw: Any
@@ -116,8 +128,10 @@ class AsyncmyAdapter(DriverAdapter):
         self, error: BaseException, dbapi_connection: Any
     ) -> BaseException:
         """
-        Translate an asyncmy exception the way SQLAlchemy's asyncmy adapter
-        does (``AttributeError`` becomes a disconnect ``InternalError``).
+        Map an asyncmy exception the way SQLAlchemy's asyncmy wrapper does.
+        asyncmy raises ``AttributeError`` when its connection is gone in the
+        middle of a call; the wrapper turns it into ``InternalError`` so the
+        dialect recognises a disconnect and drops the connection.
 
         :param error: exception raised by asyncmy
         :type error: BaseException

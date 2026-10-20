@@ -1,5 +1,5 @@
 """
-Native execution adapter for aiosqlite.
+Native execution adapter for aiosqlite (``sqlite+aiosqlite://`` URLs).
 """
 
 import sqlite3
@@ -17,7 +17,16 @@ from ormar.databases.native.compiler import BoundBatch, BoundStatement, row_to_d
 
 
 class AiosqliteAdapter(DriverAdapter):
-    """Executes bound statements on an aiosqlite connection."""
+    """
+    Runs bound statements on an aiosqlite connection, which takes ``?``-style
+    SQL and a sequence of arguments::
+
+        await driver.execute("SELECT users.id FROM users WHERE users.id = ?", [5])
+
+    aiosqlite raises the standard ``sqlite3`` exceptions, which are DBAPI
+    classes already, so they need no mapping. SQLite reports no column types,
+    so result processors are looked up without them, as SQLAlchemy does.
+    """
 
     def __init__(self, dialect: Dialect) -> None:
         """
@@ -29,7 +38,7 @@ class AiosqliteAdapter(DriverAdapter):
 
     async def fetch_all(self, raw: Any, bound: BoundStatement) -> List[Dict[str, Any]]:
         """
-        Execute a statement and return all rows keyed by result label.
+        Run a statement and return all rows keyed by result label.
 
         :param raw: pooled raw connection
         :type raw: Any
@@ -46,7 +55,8 @@ class AiosqliteAdapter(DriverAdapter):
 
     async def execute(self, raw: Any, bound: BoundStatement) -> Any:
         """
-        Execute a write statement.
+        Run a write statement. The inserted primary key comes from ``RETURNING``
+        when the statement has it (SQLite 3.35+), else from ``lastrowid``.
 
         :param raw: pooled raw connection
         :type raw: Any
@@ -67,7 +77,7 @@ class AiosqliteAdapter(DriverAdapter):
 
     async def execute_many(self, raw: Any, batch: BoundBatch) -> None:
         """
-        Execute a statement once per set of arguments.
+        Run a statement once per row with aiosqlite's ``executemany``.
 
         :param raw: pooled raw connection
         :type raw: Any
@@ -82,6 +92,8 @@ class AiosqliteAdapter(DriverAdapter):
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         Stream rows of a statement, fetching ``batch_size`` rows at a time.
+        No execution lock is taken: aiosqlite has none, as it runs every call
+        in order on its own thread.
 
         :param raw: pooled raw connection
         :type raw: Any
