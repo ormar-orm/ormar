@@ -37,7 +37,7 @@ def select_adapter(dialect: Dialect) -> Optional[DriverAdapter]:
     :rtype: Optional[DriverAdapter]
     """
     adapter_cls = ADAPTERS.get(dialect.driver)
-    return adapter_cls(dialect) if adapter_cls is not None else None
+    return adapter_cls(dialect=dialect) if adapter_cls is not None else None
 
 
 __all__ = ["DriverAdapter", "select_adapter"]

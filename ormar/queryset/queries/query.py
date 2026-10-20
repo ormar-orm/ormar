@@ -195,7 +195,7 @@ class Query:
         limit_qry = FilterQuery(filter_clauses=self.filter_clauses).apply(limit_qry)
         limit_qry = FilterQuery(
             filter_clauses=self.exclude_clauses, exclude=True
-        ).apply(limit_qry)
+        ).apply(expr=limit_qry)
         limit_qry = limit_qry.group_by(qry_text)
         for order_by in maxes.values():
             limit_qry = limit_qry.order_by(order_by)
