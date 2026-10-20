@@ -167,12 +167,17 @@ async def test_standalone_query_uses_autocommit():
 
     database = base_ormar_config.database
     async with database:
+        # SQLAlchemy events only see statements on the SQLAlchemy path; the
+        # native path's autocommit is covered in test_native_transactions.py.
+        native_backend = database.native_backend
+        database.native_backend = None
         event.listen(database.engine.sync_engine, "before_cursor_execute", capture)
         try:
             await Team.objects.create(name="Standalone")
             await Team.objects.get(name="Standalone")
         finally:
             event.remove(database.engine.sync_engine, "before_cursor_execute", capture)
+            database.native_backend = native_backend
 
         async with database.transaction():
             await Team.objects.create(name="InsideTransaction")

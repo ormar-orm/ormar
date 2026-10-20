@@ -36,8 +36,7 @@
   `pip install ormar[mysql]` installs it alongside `aiomysql` and `pymysql`.
   On MySQL it is ~1.2× faster overall and up to 2.5× faster when fetching
   larger result sets than `aiomysql`, which stays supported, so existing
-  `mysql+aiomysql://` URLs keep working. The test suite now runs against both
-  drivers.
+  `mysql+aiomysql://` URLs keep working.
 * Add `IndexColumns(..., case_insensitive=True)` to build a case-insensitive
   unique index (each named column wrapped in `LOWER()`), so values that differ
   only in case cannot both be stored. `IndexColumns` now also accepts SQLAlchemy
@@ -52,6 +51,17 @@
 
 ### ⚡ Performance
 
+* With `asyncpg`, `asyncmy` and `aiosqlite`, queries now run directly on the
+  driver connection instead of through SQLAlchemy's async execution layer.
+  SQLAlchemy still builds and compiles statements, converts values with its
+  column types and manages the pool and transactions, so results and raised
+  `sqlalchemy.exc` exceptions are unchanged. On PostgreSQL this makes `get()`
+  ~1.2× faster, `values()`/`values_list()` up to 1.7× faster and the
+  orm-benchmarks suite 1.08–1.18× faster overall. SQLAlchemy engine events and
+  `echo=True` no longer see these statements; pass
+  `DatabaseConnection(url, native_execution=False)` to go back to SQLAlchemy's
+  execution layer. `aiopg` and `aiomysql` are unchanged. SQLAlchemy is now
+  pinned to `<2.1`, as native execution relies on its compiler internals.
 * The default connection pool size of `DatabaseConnection` is raised from 5 to
   10. SQLAlchemy closes overflow connections on checkin, so with more than 5
   concurrent queries every extra one opened a new database connection; with
