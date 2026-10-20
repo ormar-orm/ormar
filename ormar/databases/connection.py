@@ -87,7 +87,7 @@ class DatabaseConnection:
             )
 
             self.native_backend = build_native_backend(
-                self._engine.dialect, enabled=self._native_execution
+                dialect=self._engine.dialect, enabled=self._native_execution
             )
 
             # Set up SQLite foreign keys pragma if using SQLite
@@ -199,19 +199,19 @@ class DatabaseConnection:
         trans_conn = self.get_transaction_connection()
         if trans_conn is not None:
             # Inside a transaction - reuse the transaction's connection
-            yield QueryExecutor(trans_conn, self.native_backend)
+            yield QueryExecutor(connection=trans_conn, native=self.native_backend)
         elif transactional:
             async with self.transaction():
                 conn = self.get_transaction_connection()
                 assert conn is not None
-                yield QueryExecutor(conn, self.native_backend)
+                yield QueryExecutor(connection=conn, native=self.native_backend)
         else:
             # Outside transaction: use AUTOCOMMIT view so each statement
             # commits at the driver level with no extra BEGIN/COMMIT
             # round-trip.
             assert self._autocommit_engine is not None
             async with self._autocommit_engine.connect() as conn:
-                yield QueryExecutor(conn, self.native_backend)
+                yield QueryExecutor(connection=conn, native=self.native_backend)
 
     async def start_driver_transaction(self, connection: AsyncConnection) -> None:
         """
@@ -223,7 +223,9 @@ class DatabaseConnection:
         :type connection: AsyncConnection
         """
         if self.native_backend is not None:
-            await self.native_backend.adapter.start_transaction(connection)
+            await self.native_backend.adapter.start_transaction(
+                sa_connection=connection
+            )
 
     def get_transaction_connection(self) -> Optional[AsyncConnection]:
         """Get the current transaction connection if in a transaction."""
@@ -254,7 +256,9 @@ def build_native_backend(dialect: Dialect, enabled: bool) -> Optional[NativeBack
     :return: native backend, or None when disabled or the driver has no adapter
     :rtype: Optional[NativeBackend]
     """
-    adapter = select_adapter(dialect) if enabled else None
+    adapter = select_adapter(dialect=dialect) if enabled else None
     if adapter is None:
         return None
-    return NativeBackend(dialect, adapter, NativeCompiler(dialect))
+    return NativeBackend(
+        dialect=dialect, adapter=adapter, compiler=NativeCompiler(dialect=dialect)
+    )

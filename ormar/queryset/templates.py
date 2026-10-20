@@ -178,8 +178,8 @@ def rendered_statement(
     if not dialect.positional:  # pragma: no cover - aiopg only
         dialect = SQLiteDialect()
     compiled = statement.compile(dialect=dialect)  # type: ignore[attr-defined]
-    bound = compiled.construct_params(params)
-    expanded = compiled.construct_expanded_state(bound)
+    bound = compiled.construct_params(params=params)
+    expanded = compiled.construct_expanded_state(params=bound)
     names = list(expanded.positiontup or [])
     sql = expanded.statement
     if dialect.paramstyle.startswith("numeric"):
@@ -213,8 +213,8 @@ def assert_same_statement(
     :type dialect: Dialect
     :raises AssertionError: when the statements differ
     """
-    cached_render = rendered_statement(cached, params, dialect)
-    fresh_render = rendered_statement(fresh, None, dialect)
+    cached_render = rendered_statement(statement=cached, params=params, dialect=dialect)
+    fresh_render = rendered_statement(statement=fresh, params=None, dialect=dialect)
     if cached_render != fresh_render:
         raise AssertionError(
             f"Query template mismatch:\ncached: {cached_render}\nfresh:  {fresh_render}"
@@ -235,7 +235,7 @@ def iter_actions(
     """
     for clause in clauses:
         if hasattr(clause, "_nested_groups"):
-            yield from iter_actions(clause._nested_groups)  # type: ignore
+            yield from iter_actions(clauses=clause._nested_groups)  # type: ignore
             yield from clause.actions  # type: ignore
         else:
             yield clause  # type: ignore
@@ -255,7 +255,10 @@ def canonical_actions(
     :return: filter actions in canonical order
     :rtype: List[FilterAction]
     """
-    return [*iter_actions(filter_clauses), *iter_actions(exclude_clauses)]
+    return [
+        *iter_actions(clauses=filter_clauses),
+        *iter_actions(clauses=exclude_clauses),
+    ]
 
 
 class SlotBinder:
@@ -288,8 +291,8 @@ class SlotBinder:
         """
         operator = COMPARISON_OPERATORS[FILTER_OPERATORS[action.operator]]
         return BindParameter(
-            self.slots[id(action)],
-            value,
+            key=self.slots[id(action)],
+            value=value,
             expanding=action.operator == "in",
             _compared_to_operator=operator,
             _compared_to_type=action.column.type,
@@ -304,7 +307,9 @@ class SlotBinder:
         :return: named bind parameter
         :rtype: BindParameter
         """
-        return sqlalchemy.bindparam(LIMIT_SLOT, value, type_=sqlalchemy.Integer())
+        return sqlalchemy.bindparam(
+            key=LIMIT_SLOT, value=value, type_=sqlalchemy.Integer()
+        )
 
     def offset(self, value: int) -> BindParameter:
         """
@@ -315,7 +320,9 @@ class SlotBinder:
         :return: named bind parameter
         :rtype: BindParameter
         """
-        return sqlalchemy.bindparam(OFFSET_SLOT, value, type_=sqlalchemy.Integer())
+        return sqlalchemy.bindparam(
+            key=OFFSET_SLOT, value=value, type_=sqlalchemy.Integer()
+        )
 
 
 def value_kind(action: "FilterAction") -> Any:
@@ -352,7 +359,7 @@ def action_shape(action: "FilterAction") -> Tuple[Any, ...]:
         action.query_str,
         action.table_prefix,
         action.operator,
-        value_kind(action),
+        value_kind(action=action),
         action.has_escaped_character,
     )
 
@@ -372,11 +379,11 @@ def clauses_shape(clauses: Iterable[Any]) -> Tuple[Any, ...]:
             "group",
             clause.filter_type,
             clause.exclude,
-            clauses_shape(clause._nested_groups),
-            tuple(action_shape(action) for action in clause.actions),
+            clauses_shape(clauses=clause._nested_groups),
+            tuple(action_shape(action=action) for action in clause.actions),
         )
         if hasattr(clause, "_nested_groups")
-        else action_shape(clause)
+        else action_shape(action=clause)
         for clause in clauses
     )
 
@@ -444,11 +451,11 @@ def count_statement(
     :return: count statement
     :rtype: Executable
     """
-    subquery = select.alias("subquery_for_count")
+    subquery = select.alias(name="subquery_for_count")
     expr = sqlalchemy.func.count().select().select_from(subquery)
     if distinct:
         grouped = expr.group_by(pk_column_name).alias(  # type: ignore[arg-type]
-            "subquery_for_group"
+            name="subquery_for_group"
         )
         expr = sqlalchemy.func.count().select().select_from(grouped)
     return expr
@@ -469,7 +476,7 @@ def aggregate_statement(
     :return: aggregate statement
     :rtype: Executable
     """
-    subquery = select.alias(f"subquery_for_{func_name}")
+    subquery = select.alias(name=f"subquery_for_{func_name}")
     return sqlalchemy.select(*select_columns).select_from(subquery)
 
 

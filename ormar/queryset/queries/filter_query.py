@@ -38,7 +38,7 @@ class FilterQuery:
         """
         if self.filter_clauses:
             clauses: list[Union[TextClause, ColumnElement[Any]]] = [
-                x.get_text_clause(self.binder) for x in self.filter_clauses
+                x.get_text_clause(binder=self.binder) for x in self.filter_clauses
             ]
             if self.exclude:
                 # every exclude() call is negated on its own, all of them are ANDed

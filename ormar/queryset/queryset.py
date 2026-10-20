@@ -351,27 +351,38 @@ class QuerySet(Generic[T]):
         :return: statement and values to bind
         :rtype: StatementTemplate
         """
-        actions = canonical_actions(self.filter_clauses, self.exclude_clauses)
-        params = template_params(
-            actions,
-            limit if limit is not None else self.limit_count,
-            offset or self.query_offset,
+        actions = canonical_actions(
+            filter_clauses=self.filter_clauses, exclude_clauses=self.exclude_clauses
         )
-        key = self.template_key(variant, limit, offset, order_bys)
-        cache = template_cache_for(self.model)
+        params = template_params(
+            actions=actions,
+            limit=limit if limit is not None else self.limit_count,
+            offset=offset or self.query_offset,
+        )
+        key = self.template_key(
+            variant=variant, limit=limit, offset=offset, order_bys=order_bys
+        )
+        cache = template_cache_for(model_cls=self.model)
         statement = cache.get(key)
         if statement is None:
             statement = self.build_template_statement(
-                actions, limit, offset, order_bys, wrap
+                actions=actions,
+                limit=limit,
+                offset=offset,
+                order_bys=order_bys,
+                wrap=wrap,
             )
-            cache.put(key, statement)
+            cache.put(key=key, statement=statement)
         elif templates.CROSS_CHECK:
             fresh = self.build_select_expression(
                 limit=limit, offset=offset, order_bys=order_bys
             )
             fresh = wrap(fresh) if wrap is not None else fresh
             templates.assert_same_statement(
-                statement, fresh, params, self.model_config.database.dialect
+                cached=statement,
+                fresh=fresh,
+                params=params,
+                dialect=self.model_config.database.dialect,
             )
         return StatementTemplate(statement, params)
 
@@ -399,12 +410,12 @@ class QuerySet(Generic[T]):
         :return: statement to execute
         :rtype: Any
         """
-        binder = SlotBinder(actions)
+        binder = SlotBinder(actions=actions)
         select = self.build_select_expression(
             limit=limit, offset=offset, order_bys=order_bys, binder=binder
         )
         statement = wrap(select) if wrap is not None else select
-        release_values(statement)
+        release_values(statement=statement)
         return statement
 
     def build_write_template(self, kind: str, values: dict) -> StatementTemplate:
@@ -523,12 +534,12 @@ class QuerySet(Generic[T]):
         """
         return (
             variant,
-            clauses_shape(self.filter_clauses),
-            clauses_shape(self.exclude_clauses),
+            clauses_shape(clauses=self.filter_clauses),
+            clauses_shape(clauses=self.exclude_clauses),
             tuple(self._select_related),
-            excludable_shape(self._excludable),
-            order_shape(order_bys or self.order_bys),
-            self.effective_limit_shape(limit),
+            excludable_shape(excludable=self._excludable),
+            order_shape(order_bys=order_bys or self.order_bys),
+            self.effective_limit_shape(limit=limit),
             bool(offset or self.query_offset),
             self.limit_sql_raw,
         )
@@ -1008,10 +1019,12 @@ class QuerySet(Generic[T]):
         :return: result of the check
         :rtype: bool
         """
-        template = self.build_select_template(("exists",), wrap=exists_statement)
+        template = self.build_select_template(
+            variant=("exists",), wrap=exists_statement
+        )
         async with self.model_config.database.get_query_executor() as executor:
             result = await executor.fetch_val(
-                template.statement, params=template.params
+                query=template.statement, params=template.params
             )
             return bool(result)
 
@@ -1034,12 +1047,14 @@ class QuerySet(Generic[T]):
         wrap = functools.partial(
             count_statement,
             distinct=distinct,
-            pk_column_name=self.model.get_column_alias(self.model_config.pkname),
+            pk_column_name=self.model.get_column_alias(
+                field_name=self.model_config.pkname
+            ),
         )
-        template = self.build_select_template(("count", distinct), wrap=wrap)
+        template = self.build_select_template(variant=("count", distinct), wrap=wrap)
         async with self.model_config.database.get_query_executor() as executor:
             result = await executor.fetch_val(
-                template.statement, params=template.params
+                query=template.statement, params=template.params
             )
             return int(result) if result is not None else 0
 
@@ -1063,10 +1078,12 @@ class QuerySet(Generic[T]):
             aggregate_statement, func_name=func_name, select_columns=select_columns
         )
         template = self.build_select_template(
-            ("aggregate", func_name, tuple(columns)), wrap=wrap
+            variant=("aggregate", func_name, tuple(columns)), wrap=wrap
         )
         async with self.model_config.database.get_query_executor() as executor:
-            result = await executor.fetch_one(template.statement, template.params)
+            result = await executor.fetch_one(
+                query=template.statement, params=template.params
+            )
         return dict(result) if len(result) > 1 else result[columns[0]]  # type: ignore
 
     async def max(self, columns: Union[str, list[str]]) -> Any:  # noqa: A003

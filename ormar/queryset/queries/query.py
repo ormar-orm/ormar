@@ -197,7 +197,7 @@ class Query:
         limit_qry = limit_qry.select_from(self.select_from)  # type: ignore
         limit_qry = FilterQuery(
             filter_clauses=self.filter_clauses, binder=self.binder
-        ).apply(limit_qry)
+        ).apply(expr=limit_qry)
         limit_qry = FilterQuery(
             filter_clauses=self.exclude_clauses, exclude=True, binder=self.binder
         ).apply(limit_qry)
@@ -205,11 +205,11 @@ class Query:
         for order_by in maxes.values():
             limit_qry = limit_qry.order_by(order_by)
         limit_qry = LimitQuery(limit_count=self.limit_count, binder=self.binder).apply(
-            limit_qry
+            expr=limit_qry
         )
         limit_qry = OffsetQuery(
             query_offset=self.query_offset, binder=self.binder
-        ).apply(limit_qry)
+        ).apply(expr=limit_qry)
         limit_qry = limit_qry.alias("limit_query")  # type: ignore
         on_clause = sqlalchemy.text(
             f"limit_query.{pk_alias}={self.table.name}.{pk_alias}"
@@ -236,17 +236,17 @@ class Query:
         """
         expr = FilterQuery(
             filter_clauses=self.filter_clauses, binder=self.binder
-        ).apply(expr)
+        ).apply(expr=expr)
         expr = FilterQuery(
             filter_clauses=self.exclude_clauses, exclude=True, binder=self.binder
-        ).apply(expr)
+        ).apply(expr=expr)
         if not self._pagination_query_required():
             expr = LimitQuery(limit_count=self.limit_count, binder=self.binder).apply(
-                expr
+                expr=expr
             )
             expr = OffsetQuery(
                 query_offset=self.query_offset, binder=self.binder
-            ).apply(expr)
+            ).apply(expr=expr)
         expr = OrderQuery(sorted_orders=self.sorted_orders).apply(expr)
         return expr
 
