@@ -59,7 +59,7 @@ class Transaction:
                 await self._connection.exec_driver_sql("BEGIN")
             # Natively executed statements bypass SQLAlchemy, whose asyncpg
             # adapter only starts the transaction on its own first statement.
-            await self._database.start_driver_transaction(self._connection)
+            await self._database.start_driver_transaction(connection=self._connection)
         else:
             # Nested transaction - use savepoint
             self._connection = self._database.get_transaction_connection()

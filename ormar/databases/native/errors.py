@@ -48,19 +48,21 @@ async def raise_translated(
     """
     raw = await sa_connection.get_raw_connection()
     dbapi_connection = raw.dbapi_connection
-    orig = backend.adapter.translate_error(error, dbapi_connection)
+    orig = backend.adapter.translate_error(
+        error=error, dbapi_connection=dbapi_connection
+    )
     invalidated = backend.dialect.is_disconnect(
-        orig,  # type: ignore[arg-type]
-        dbapi_connection,
-        None,
+        e=orig,  # type: ignore[arg-type]
+        connection=dbapi_connection,
+        cursor=None,
     )
     if invalidated:
         await sa_connection.invalidate()  # pragma: no cover
     raise exc.DBAPIError.instance(
-        sql,
-        list(args),
-        orig,  # type: ignore[arg-type]
-        backend.dialect.loaded_dbapi.Error,
+        statement=sql,
+        params=list(args),
+        orig=orig,  # type: ignore[arg-type]
+        dbapi_base_err=backend.dialect.loaded_dbapi.Error,
         hide_parameters=sa_connection.sync_engine.hide_parameters,
         connection_invalidated=invalidated,
         dialect=backend.dialect,
