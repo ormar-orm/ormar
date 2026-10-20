@@ -511,10 +511,31 @@ def binds_directly(compiled: SQLCompiler, row: Mapping[str, Any]) -> bool:
     Return whether values given by bind name can go to the driver as they
     are, skipping SQLAlchemy's ``construct_params`` and ``expand``.
 
-    Those two steps cost more than the query itself for small statements, and
-    for most of ormar's cached templates they change nothing: the compiled SQL
-    is final and the arguments are the row's values in placeholder order. It
-    is not safe when SQLAlchemy still has to change the SQL or the values:
+    Binding attaches the values to the placeholders of the compiled SQL. The
+    SQL and the values travel to the driver separately, which keeps values
+    out of the SQL text and lets the database reuse one prepared statement::
+
+        sql = "SELECT users.id FROM users WHERE users.id = $1"
+        args = [7]
+        await driver.fetch(sql, *args)
+
+    SQLAlchemy's binding (``construct_params`` plus ``expand``) does five
+    things:
+
+    1. collects the values by bind name, e.g. ``{"id_1": 7}``
+    2. fills in column defaults run at execution time (``default=``)
+    3. expands ``IN`` lists, rewriting the SQL: ``IN ($1)`` with ``[1, 2, 3]``
+       becomes ``IN ($1, $2, $3)``
+    4. converts each value with its type's bind processor, e.g. a dict for a
+       JSON column becomes a JSON string on SQLite
+    5. orders the values by placeholder position (``positiontup``):
+       ``["name", "id_1"]`` gives ``["a", 1]``
+
+    Those steps cost more than the query itself for small statements. When
+    steps 2 and 3 have nothing to do and no names are escaped, the compiled
+    SQL is already final and binding is only steps 4 and 5, which
+    ``direct_args`` does in one pass with the same result. That is not the
+    case with:
 
     - ``IN`` lists and other post-compile parameters (placeholders added per
       value) and literal-execute parameters (value rendered into the SQL)
