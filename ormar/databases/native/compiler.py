@@ -506,6 +506,11 @@ def pk_param_key(compiled: SQLCompiler) -> Optional[str]:
         users.insert().values(id=3, name="a")  # -> "id"
         users.insert().values(name="a")  # -> None
 
+    ormar's cached INSERT templates bind the primary key under their own
+    parameter name, which is returned instead of the column key::
+
+        users.insert().values(id=bindparam("ormar_id"))  # -> "ormar_id"
+
     :param compiled: compiled insert statement
     :type compiled: SQLCompiler
     :return: bind parameter key of the primary key, or None
