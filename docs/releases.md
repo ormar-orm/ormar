@@ -142,7 +142,9 @@
 * Fix `bulk_create()` losing explicit values (a primary key or a field with a
   `server_default`) when the objects in one call had different sets of values
   set: the insert now runs once per distinct set of keys, so objects with
-  mixed key sets are not inserted in list order.
+  mixed key sets are not inserted in list order (documented in the
+  `bulk_create()` docs; split such objects into separate calls if you need
+  that order).
   [#1859](https://github.com/ormar-orm/ormar/issues/1859)
 
 ## 0.26.0
