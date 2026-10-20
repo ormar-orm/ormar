@@ -192,7 +192,9 @@ class ModelRow(NewBaseModel):
         :return: models built from the rows
         :rtype: list[Model]
         """
-        plan = cls.get_or_build_row_plan("", excludable, plan_cache)
+        plan = cls.get_or_build_row_plan(
+            table_prefix="", excludable=excludable, plan_cache=plan_cache
+        )
         mappings = plan.column_mappings
         relation_names = cls._row_relation_names
         pk_name = plan.pk_field_name
@@ -209,7 +211,9 @@ class ModelRow(NewBaseModel):
             ):
                 instance = fallback(row)
             else:
-                instance = cast("Model", cls.construct_row_instance(plan, item))
+                instance = cast(
+                    "Model", cls.construct_row_instance(plan=plan, item=item)
+                )
                 object.__setattr__(instance, "_orm_saved", True)
             object.__setattr__(instance, "__ormar_excludable__", excludable)
             instances.append(instance)
@@ -240,15 +244,21 @@ class ModelRow(NewBaseModel):
             or not cls._required_row_fields.issubset(item)
             or any(item.get(name) is not None for name in cls._row_relation_names)
         ):
-            return cls._construct_with_excluded(plan.excluded_field_names, **item)
+            return cls._construct_with_excluded(
+                excluded=plan.excluded_field_names, **item
+            )
         if not templates.CROSS_CHECK:
-            return cls._construct_from_row(plan.excluded_field_names, item)
-        built = cls._construct_with_excluded(plan.excluded_field_names, **item)
-        instance = cls._construct_from_row(plan.excluded_field_names, item)
+            return cls._construct_from_row(
+                excluded=plan.excluded_field_names, values=item
+            )
+        built = cls._construct_with_excluded(excluded=plan.excluded_field_names, **item)
+        instance = cls._construct_from_row(
+            excluded=plan.excluded_field_names, values=item
+        )
         if (
             instance.__dict__ != built.__dict__
-            or templates.value_types(instance.__dict__)
-            != templates.value_types(built.__dict__)
+            or templates.value_types(values=instance.__dict__)
+            != templates.value_types(values=built.__dict__)
             or instance.__pydantic_fields_set__ != built.__pydantic_fields_set__
         ):
             raise AssertionError(
@@ -350,7 +360,7 @@ class ModelRow(NewBaseModel):
 
         instance: Optional["Model"] = None
         if item.get(plan.pk_field_name, None) is not None:
-            instance = cast("Model", cls.construct_row_instance(plan, item))
+            instance = cast("Model", cls.construct_row_instance(plan=plan, item=item))
             instance.set_save_status(True)
             if key is not None:
                 registry.instances[key] = instance  # type: ignore[union-attr]

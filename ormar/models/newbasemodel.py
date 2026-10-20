@@ -182,7 +182,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         new_kwargs, through_tmp_dict = self._process_kwargs(kwargs)
 
         if self.extract_related_fields():
-            new_kwargs = self.serialize_nested_models_json_fields(new_kwargs)
+            new_kwargs = self.serialize_nested_models_json_fields(kwargs=new_kwargs)
         self.__pydantic_validator__.validate_python(
             new_kwargs,
             self_instance=self,  # type: ignore
@@ -224,7 +224,9 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
 
         if not _pk_only:
             if instance.extract_related_fields():
-                new_kwargs = instance.serialize_nested_models_json_fields(new_kwargs)
+                new_kwargs = instance.serialize_nested_models_json_fields(
+                    kwargs=new_kwargs
+                )
             instance.__pydantic_validator__.validate_python(
                 new_kwargs,
                 self_instance=instance,  # type: ignore
@@ -251,7 +253,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         new_kwargs.update(through_tmp_dict)
         for field in self.extract_related_fields():
             field.expand_relationship(
-                new_kwargs.get(field.name), self, to_register=True
+                value=new_kwargs.get(field.name), child=self, to_register=True
             )
 
     @classmethod

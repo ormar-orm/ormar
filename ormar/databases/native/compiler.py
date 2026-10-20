@@ -267,10 +267,12 @@ class NativeCompiler:
         :rtype: BoundStatement
         """
         key = stmt._generate_cache_key()  # type: ignore[attr-defined]
-        plan = self._plan(stmt, key)
-        if params is not None and binds_directly(plan.compiled, params):
-            args = direct_args(plan, [params])[0]
-            return BoundStatement(plan, plan.compiled.string, args, dict(params))
+        plan = self._plan(stmt=stmt, key=key)
+        if params is not None and binds_directly(compiled=plan.compiled, row=params):
+            args = direct_args(plan=plan, rows=[params])[0]
+            return BoundStatement(
+                plan=plan, sql=plan.compiled.string, args=args, params=dict(params)
+            )
         bound_params = plan.compiled.construct_params(
             params=params,
             extracted_parameters=key[1] if key is not None else None,
@@ -303,9 +305,13 @@ class NativeCompiler:
         :rtype: BoundBatch
         """
         key = stmt._generate_cache_key()  # type: ignore[attr-defined]
-        plan = self._plan(stmt, key)
-        if rows and binds_directly(plan.compiled, rows[0]):
-            return BoundBatch(plan, plan.compiled.string, direct_args(plan, rows))
+        plan = self._plan(stmt=stmt, key=key)
+        if rows and binds_directly(compiled=plan.compiled, row=rows[0]):
+            return BoundBatch(
+                plan=plan,
+                sql=plan.compiled.string,
+                args_list=direct_args(plan=plan, rows=rows),
+            )
         sql = ""
         args_list = []
         for row in rows:

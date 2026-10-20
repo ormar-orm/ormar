@@ -87,7 +87,7 @@ def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
     :type model_field: relation Field
     """
     related_name = model_field.get_related_name()
-    reset_relation_caches(model_field.to)
+    reset_relation_caches(model=model_field.to)
     related_model_fields = model_field.to.ormar_config.model_fields
     if model_field.is_multi:
         related_model_fields[related_name] = ManyToMany(  # type: ignore

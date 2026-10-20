@@ -75,9 +75,9 @@ def dump_for_save(obj: "Model") -> dict:
     values = dict(obj.__dict__)
     if templates.CROSS_CHECK:
         dumped = obj.model_dump()
-        if values != dumped or templates.value_types(values) != templates.value_types(
-            dumped
-        ):
+        if values != dumped or templates.value_types(
+            values=values
+        ) != templates.value_types(values=dumped):
             raise AssertionError(
                 f"Trusted dump mismatch for {obj.get_name()}: {values} != {dumped}"
             )
@@ -238,7 +238,7 @@ class QuerySet(Generic[T]):
         if plan_cache is None:
             plan_cache = {}
         if not self._select_related and self.model.trusted_row_construction():
-            return await self._process_flat_rows(rows, plan_cache)
+            return await self._process_flat_rows(rows=rows, plan_cache=plan_cache)
         registry = RowRegistry()
         result_rows = []
         for i, row in enumerate(rows):
@@ -277,7 +277,9 @@ class QuerySet(Generic[T]):
         :rtype: list[Model]
         """
         result: list["T"] = []
-        fallback = functools.partial(self._model_from_row, RowRegistry(), plan_cache)
+        fallback = functools.partial(
+            self._model_from_row, registry=RowRegistry(), plan_cache=plan_cache
+        )
         for start in range(0, len(rows), FLAT_ROWS_CHUNK):
             if start:
                 await asyncio.sleep(0)
@@ -286,25 +288,28 @@ class QuerySet(Generic[T]):
                 cast(
                     list["T"],
                     self.model.from_flat_rows(
-                        chunk, self._excludable, plan_cache, fallback
+                        rows=chunk,
+                        excludable=self._excludable,
+                        plan_cache=plan_cache,
+                        fallback=fallback,
                     ),
                 )
             )
         return result
 
     def _model_from_row(
-        self, registry: RowRegistry, plan_cache: dict, row: Any
+        self, row: Any, registry: RowRegistry, plan_cache: dict
     ) -> "Model":
         """
         Build the model of one row through ``from_row``, sharing the query's
         identity map (rows of the main model always hold its pk).
 
+        :param row: database row
+        :type row: Any
         :param registry: identity map of the query
         :type registry: RowRegistry
         :param plan_cache: row-extraction plan cache
         :type plan_cache: dict
-        :param row: database row
-        :type row: Any
         :return: model of the row
         :rtype: Model
         """
@@ -1754,8 +1759,8 @@ class QuerySet(Generic[T]):
         ready_objects = []
         trusted = self.model.flat_row_model()
         for i, obj in enumerate(objects):
-            values = dump_for_save(obj) if trusted else obj.model_dump()
-            ready_objects.append(obj.prepare_model_to_save(values))
+            values = dump_for_save(obj=obj) if trusted else obj.model_dump()
+            ready_objects.append(obj.prepare_model_to_save(new_kwargs=values))
             if i % 100 == 99:  # pragma: no cover
                 await asyncio.sleep(0)
 
