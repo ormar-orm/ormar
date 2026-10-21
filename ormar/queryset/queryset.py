@@ -336,7 +336,23 @@ class QuerySet(Generic[T]):
         """
         Return the read statement for this queryset from the model's template
         cache (building and caching it on the first call of a shape) together
-        with the values to bind for this call.
+        with the values to bind for this call::
+
+            Author.objects.filter(name="a").build_select_template()
+            # -> StatementTemplate(statement=SELECT ... WHERE name = :ormar_p0,
+            #                      params={"ormar_p0": "a"})
+
+        Every read that runs a select (``all``, ``get``, ``first``,
+        ``iterate``, ``values``, ``exists``, ``count`` and the aggregates)
+        goes through here instead of ``build_select_expression``. A statement
+        that is not a plain select passes ``wrap`` to build the executed
+        statement around the select and ``variant`` to keep its shape apart
+        from the plain select's, e.g. ``count()`` passes
+        ``variant=("count", distinct)`` and ``wrap=count_statement``.
+
+        On a cache hit nothing is built: only the shape and the values are
+        collected from the queryset. With ``templates.CROSS_CHECK`` on, a hit
+        also builds the statement without templates and compares the two.
 
         :param variant: how the select is used (plain, count, aggregate, ...)
         :type variant: tuple
@@ -395,7 +411,14 @@ class QuerySet(Generic[T]):
         wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]],
     ) -> Any:
         """
-        Build the read statement with named value slots.
+        Build the read statement of a new shape with named value slots, the
+        statement that is then cached.
+
+        The select is built by ``build_select_expression`` as usual, but with a
+        ``SlotBinder`` that turns every filter value, the limit and the offset
+        into a named bind parameter. ``wrap`` then builds the executed statement
+        around it, and the values of this first call are cleared from the
+        result (see ``release_values``).
 
         :param actions: filter actions in canonical order
         :type actions: list
@@ -421,7 +444,19 @@ class QuerySet(Generic[T]):
     def build_write_template(self, kind: str, values: dict) -> StatementTemplate:
         """
         Return the filtered update (``kind="update"``) or delete of this
-        queryset from the model's template cache, with the values to bind.
+        queryset from the model's template cache, with the values to bind::
+
+            Author.objects.filter(score__lt=5).build_write_template(
+                kind="update", values={"name": "x"}
+            )
+            # -> UPDATE authors SET name=:ormar_v0 WHERE authors.score < :ormar_p0
+            #    {"ormar_p0": 5, "ormar_v0": "x"}
+
+        The shape is the kind, the filter and exclude clauses (see
+        ``templates.clauses_shape``) and the updated column names. Updates and
+        deletes take no joins, ordering or limit, so nothing else changes their
+        SQL. Filter values are named by ``SlotBinder`` like in reads, updated
+        values like in single-row writes (``ormar_v{i}``).
 
         :param kind: ``"update"`` or ``"delete"``
         :type kind: str
@@ -473,7 +508,9 @@ class QuerySet(Generic[T]):
     ) -> Any:
         """
         Build the filtered update or delete, with named slots when a binder is
-        given, otherwise with the literal values (as without templates).
+        given, otherwise with the literal values (as without templates). The
+        literal form is only built by the cross check, to compare with the
+        cached statement.
 
         :param kind: ``"update"`` or ``"delete"``
         :type kind: str
@@ -508,7 +545,12 @@ class QuerySet(Generic[T]):
         """
         Return how the effective limit shapes the SQL: whether a LIMIT is
         applied at all, and whether it is non-zero (only a non-zero limit with
-        ``select_related`` builds the pagination subquery).
+        ``select_related`` builds the pagination subquery). The limit value
+        itself is bound, so ``limit(5)`` and ``limit(10)`` share a statement::
+
+            limit(None) -> (False, False)
+            limit(0)    -> (True, False)
+            limit(10)   -> (True, True)
 
         :param limit: limit passed to ``build_select_expression``
         :type limit: Optional[int]
@@ -528,7 +570,20 @@ class QuerySet(Generic[T]):
         """
         Return the shape of the statement ``build_select_expression`` would build
         with the given arguments: everything that changes its SQL text and none
-        of the bound values.
+        of the bound values. Two querysets with the same key must build the
+        same SQL, or one would run the other's statement, so each part covers
+        one input of the build:
+
+        * ``variant`` - plain select, exists, count or aggregate
+        * filter and exclude clauses - see ``clauses_shape``
+        * ``select_related`` - the joins
+        * selected fields - see ``excludable_shape``
+        * ordering - see ``order_shape``
+        * limit and offset presence - see ``effective_limit_shape``
+        * ``limit_raw_sql`` - limit on raw rows instead of main models
+
+        Any new queryset option that changes the built SQL has to be added
+        here; the cross check of the test suite fails when one is missing.
 
         :param variant: how the select is used (plain, count, aggregate, ...)
         :type variant: tuple

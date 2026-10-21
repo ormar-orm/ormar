@@ -1,6 +1,46 @@
 """
-Read statement templates: per-call values become named bind parameters so a
-statement built once per query shape can be reused with new values.
+Statement templates: a statement built once per query shape and reused with
+new values on every later call.
+
+Most of the cost of a simple read is building the statement: ormar walks the
+filters, joins, selected fields and ordering, and SQLAlchemy assembles the
+expression tree. Two calls that differ only in their values build the same
+tree, so ``QuerySet`` builds it once with named bind parameters ("slots") in
+place of the values and keeps it in a cache of the model::
+
+    await Author.objects.filter(name="a").limit(5).all()
+    # built and cached: SELECT ... WHERE authors.name = :ormar_p0 LIMIT :ormar_limit
+    # bound this call:  {"ormar_p0": "a", "ormar_limit": 5}
+
+    await Author.objects.filter(name="b").limit(10).all()
+    # same shape, cached statement reused: {"ormar_p0": "b", "ormar_limit": 10}
+
+The cache key (the "shape", see ``QuerySet.template_key``) holds everything
+that changes the SQL text and none of the bound values: filtered columns,
+operators, and/or/not nesting, ``select_related``, selected fields, ordering
+and whether a limit or offset is present. Values SQLAlchemy writes into the
+SQL text instead of binding (``None`` as ``IS NULL``, booleans, ``isnull``)
+are part of the shape as well.
+
+Writes are cached the same way. ``Model.save()``, ``update()``, ``delete()``,
+``load()`` and ``upsert()`` run one statement per model and set of written
+columns, binding the values as ``ormar_v{i}`` (in sorted column order) and the
+primary key as ``ormar_pk``::
+
+    await Author(name="a", score=1).save()
+    # INSERT INTO authors (name, score) VALUES (:ormar_v0, :ormar_v1)
+    # {"ormar_v0": "a", "ormar_v1": 1}
+
+``QuerySet.update()`` and ``delete()`` bind both filter and value slots, and
+``bulk_create`` and ``bulk_update`` reuse one statement per set of columns for
+all their rows.
+
+Running the same statement object every time also lets the native compiler
+reuse its plan for it instead of compiling the statement again.
+
+With ``ORMAR_TEMPLATE_CROSS_CHECK=1`` (set by the test suite) every cache hit
+also builds the statement the old way and fails if the two would run
+different SQL, values or bind types.
 """
 
 import os
@@ -37,10 +77,14 @@ if TYPE_CHECKING:  # pragma: no cover
     from ormar.queryset.actions.order_action import OrderAction
     from ormar.queryset.clause import FilterGroup
 
+# fixed slot names of LIMIT and OFFSET; filter values are named ``ormar_p{n}``
 LIMIT_SLOT = "ormar_limit"
 OFFSET_SLOT = "ormar_offset"
+# slot name of the primary key in single-row writes and ``load()``
 PK_SLOT = "ormar_pk"
+# numbered placeholders in rendered SQL: ``$1`` (asyncpg) or ``:1`` (numeric)
 NUMBERED = re.compile(r"[$:](\d+)")
+# statement shapes kept per model before the least recently used is dropped
 TEMPLATE_CACHE_SIZE = 512
 # SQLAlchemy operators of ormar's filter operator methods, used to type bound
 # values exactly like a plain ``column <op> value`` comparison would.
@@ -54,19 +98,33 @@ COMPARISON_OPERATORS = {
     "__lt__": operators.lt,
     "__le__": operators.le,
 }
-# Test-suite safety net: every template hit is also built fresh and compared.
+# Test-suite safety net: every cache hit is also built without templates and
+# compared with the cached statement (see ``assert_same_statement``).
 CROSS_CHECK = os.environ.get("ORMAR_TEMPLATE_CROSS_CHECK") == "1"
 
 
 class StatementTemplate(NamedTuple):
-    """A cached statement and the values to bind for one call."""
+    """
+    A statement from the template cache and the values to run it with for one
+    call::
+
+        template = queryset.filter(name="a").limit(5).build_select_template()
+        template.params  # -> {"ormar_p0": "a", "ormar_limit": 5}
+        await executor.fetch_all(template.statement, template.params)
+    """
 
     statement: Executable
     params: Dict[str, Any]
 
 
 class TemplateCache:
-    """Least-recently-used cache of the statements of one model, by shape."""
+    """
+    Least-recently-used cache of one model's statements, keyed by shape.
+
+    The size is bounded so an application that builds queries from many
+    different filter combinations cannot grow memory without limit: once
+    ``max_size`` shapes are cached, adding one drops the shape used longest ago.
+    """
 
     def __init__(self, max_size: int = TEMPLATE_CACHE_SIZE) -> None:
         """
@@ -78,7 +136,12 @@ class TemplateCache:
 
     def get(self, key: Any) -> Any:
         """
-        Return the statement cached for a shape, or None.
+        Return the statement cached for a shape, or None, and mark it as the
+        most recently used.
+
+        Another thread using the same model may evict the entry between reading
+        it and marking it, so that case is ignored: the statement is still
+        valid for this call.
 
         :param key: statement shape
         :type key: Any
@@ -95,7 +158,8 @@ class TemplateCache:
 
     def put(self, key: Any, statement: Any) -> None:
         """
-        Cache the statement of a shape, evicting the least recently used one.
+        Cache the statement of a shape. When the cache is full, the shape used
+        longest ago is dropped.
 
         :param key: statement shape
         :type key: Any
@@ -111,6 +175,8 @@ class TemplateCache:
         self.entries.clear()
 
 
+# one cache per model class; weak keys let model classes created at runtime
+# (e.g. inside tests) be garbage collected together with their statements
 TEMPLATE_CACHES: "weakref.WeakKeyDictionary[type, TemplateCache]" = (
     weakref.WeakKeyDictionary()
 )
@@ -118,7 +184,9 @@ TEMPLATE_CACHES: "weakref.WeakKeyDictionary[type, TemplateCache]" = (
 
 def template_cache_for(model_cls: Type[Any]) -> TemplateCache:
     """
-    Return the statement template cache of a model class.
+    Return the statement template cache of a model class, creating it on the
+    model's first read. ``setdefault`` keeps a single cache when two threads
+    create it at the same time.
 
     :param model_cls: model class
     :type model_cls: Type[Any]
@@ -136,7 +204,16 @@ def template_params(
 ) -> Dict[str, Any]:
     """
     Collect the values a template binds for one call, keyed like the slots
-    ``SlotBinder`` names.
+    ``SlotBinder`` names::
+
+        Author.objects.filter(name="a", score__gt=5).limit(10)
+        # -> {"ormar_p0": "a", "ormar_p1": 5, "ormar_limit": 10}
+
+    Actions whose value is written into the SQL text (see
+    ``FilterAction.binds_slot``) get no entry, but still use up their index,
+    so the names of the other slots do not depend on those values. The offset
+    is only bound when non-zero, matching ``OffsetQuery``, which leaves out
+    ``OFFSET 0``.
 
     :param actions: filter actions in canonical order
     :type actions: List[FilterAction]
@@ -164,6 +241,18 @@ def rendered_statement(
     """
     Render a statement to positional SQL, values and bind types, so statements
     with differently named parameters can be compared.
+
+    A template names its parameters ``ormar_p0``, ``ormar_limit`` and so on,
+    while a statement built without templates gets SQLAlchemy's anonymous
+    names, so their named SQL never matches. Rendered with positional
+    placeholders, the two match whenever they would run the same query::
+
+        cached: "... WHERE authors.name = :ormar_p0", {"ormar_p0": "a"}
+        fresh:  "... WHERE authors.name = :name_1", {"name_1": "a"}
+        # both -> ("... WHERE authors.name = ?", ["a"], ["String"])
+
+    Dialects with named placeholders (aiopg) are rendered with the SQLite
+    dialect instead, which is positional.
 
     :param statement: statement to render
     :type statement: Executable
@@ -203,6 +292,10 @@ def assert_same_statement(
     Fail if a cached template would run different SQL, values or bind types
     than the statement built without templates for the same call.
 
+    Only runs when ``CROSS_CHECK`` is on. It catches a shape that misses
+    something that changes the SQL: two querysets that build different SQL
+    but share a cache key would reuse the wrong statement.
+
     :param cached: statement taken from the template cache
     :type cached: Executable
     :param fresh: statement built without named slots for this call
@@ -226,7 +319,14 @@ def iter_actions(
 ) -> Iterator["FilterAction"]:
     """
     Yield the filter actions of a clause list in the order their SQL is built:
-    a group's nested groups first, then its own actions.
+    a group's nested groups first, then its own actions (the order
+    ``FilterGroup.get_text_clause`` emits them in)::
+
+        filter(ormar.or_(ormar.and_(score=1, id=2), name="a"))
+        # -> score=1, id=2, name="a"
+
+    The order is the same for every queryset of one shape, so an action's
+    index here can name its slot.
 
     :param clauses: filter actions and filter groups
     :type clauses: List[Union[FilterAction, FilterGroup]]
@@ -246,7 +346,14 @@ def canonical_actions(
 ) -> List["FilterAction"]:
     """
     Return every filter action of a queryset in canonical order: filter clauses
-    first, then exclude clauses, each in build order.
+    first, then exclude clauses, each in build order::
+
+        Author.objects.exclude(score=0).filter(name="a")
+        # -> name="a" (ormar_p0), score=0 (ormar_p1)
+
+    ``SlotBinder`` (naming the slots while building) and ``template_params``
+    (collecting values on every call) both use this list, so a value always
+    ends up in the slot built for it.
 
     :param filter_clauses: queryset filter clauses
     :type filter_clauses: List[Any]
@@ -263,10 +370,22 @@ def canonical_actions(
 
 class SlotBinder:
     """
-    Turns per-call values of a read statement into named bind parameters: a
-    filter action's value is named ``ormar_p{n}`` after its position among the
-    canonical actions (so a filter applied twice binds one parameter), limit
-    and offset get fixed names.
+    Turns per-call values of a read statement into named bind parameters while
+    the statement is built. A filter action's value is named ``ormar_p{n}``
+    after its position among the canonical actions, limit and offset get fixed
+    names::
+
+        binder = SlotBinder(actions=[name_action, score_action])
+        binder.bind(action=score_action, value=5)  # -> :ormar_p1
+        binder.limit(value=10)  # -> :ormar_limit
+
+    Slots are looked up by action object, not by order of use, because one
+    action can be emitted twice: with ``select_related`` and a limit, the
+    filters go into the pagination subquery and the outer query, and both
+    copies bind the same ``ormar_p{n}``, so one value fills both.
+
+    Passed down through ``Query``, ``FilterQuery``, ``LimitQuery`` and
+    ``OffsetQuery``; without a binder they bind the plain values as before.
     """
 
     def __init__(self, actions: List["FilterAction"]) -> None:
@@ -281,6 +400,12 @@ class SlotBinder:
     def bind(self, action: "FilterAction", value: Any) -> BindParameter:
         """
         Return the named bind parameter for a filter action's value.
+
+        The parameter is built the way SQLAlchemy builds the bind of
+        ``column <op> value``: it is compared to the column's type, so the value
+        gets the column's bind processing (dates, JSON, enums and so on), and
+        an ``in`` filter is expanding, so it renders one placeholder per item of
+        the list it is given on each call.
 
         :param action: filter action the value belongs to
         :type action: FilterAction
@@ -300,7 +425,8 @@ class SlotBinder:
 
     def limit(self, value: int) -> BindParameter:
         """
-        Return the named bind parameter for a limit.
+        Return the named bind parameter for a limit, typed as an integer like
+        the one SQLAlchemy creates for ``select.limit(10)``.
 
         :param value: limit value
         :type value: int
@@ -313,7 +439,8 @@ class SlotBinder:
 
     def offset(self, value: int) -> BindParameter:
         """
-        Return the named bind parameter for an offset.
+        Return the named bind parameter for an offset, typed as an integer like
+        the one SQLAlchemy creates for ``select.offset(10)``.
 
         :param value: offset value
         :type value: int
@@ -327,9 +454,17 @@ class SlotBinder:
 
 def value_kind(action: "FilterAction") -> Any:
     """
-    Return the part of a filter value that changes the SQL text: ``IS NULL`` /
-    ``IS NOT NULL`` for ``isnull``, ``IS NULL`` for a ``None`` value, an
-    expanding ``IN`` list, or a plain bound value.
+    Return the part of a filter value that changes the SQL text::
+
+        filter(name__isnull=True)  # -> ("isnull", True)   IS NULL
+        filter(name=None)  # -> ("literal", None)  IS NULL
+        filter(active=True)  # -> ("literal", True)  literal true
+        filter(id__in=[1, 2])  # -> "in"               IN (expanding)
+        filter(name="a")  # -> ("value", str)     = :ormar_p0
+
+    Values written into the SQL text are part of the shape as they are. For a
+    bound value only its type is kept, so values of different types never
+    share a statement.
 
     :param action: filter action
     :type action: FilterAction
@@ -348,7 +483,10 @@ def value_kind(action: "FilterAction") -> Any:
 
 def action_shape(action: "FilterAction") -> Tuple[Any, ...]:
     """
-    Return everything about a filter action that changes the SQL text.
+    Return everything about a filter action that changes the SQL text: the
+    field path, the table alias of the joined relation, the operator, the
+    kind of value (see ``value_kind``) and whether LIKE needs an ``ESCAPE``
+    clause for ``%`` or ``_`` in the value.
 
     :param action: filter action
     :type action: FilterAction
@@ -367,7 +505,11 @@ def action_shape(action: "FilterAction") -> Tuple[Any, ...]:
 def clauses_shape(clauses: Iterable[Any]) -> Tuple[Any, ...]:
     """
     Return the shape of a list of filter actions and filter groups, keeping
-    the and/or/not nesting.
+    the and/or/not nesting, since ``or_(a, b)`` and ``and_(a, b)`` build
+    different SQL from the same actions::
+
+        filter(ormar.or_(name="a", score=1))
+        # -> (("group", FilterType.OR, False, (), (<name shape>, <score shape>)),)
 
     :param clauses: filter actions and filter groups
     :type clauses: Iterable[Any]
@@ -390,7 +532,10 @@ def clauses_shape(clauses: Iterable[Any]) -> Tuple[Any, ...]:
 
 def excludable_shape(excludable: "ExcludableItems") -> Tuple[Any, ...]:
     """
-    Return the fields included and excluded per model and relation.
+    Return the fields included and excluded per model and relation, which
+    decide the selected columns (``fields()``, ``exclude_fields()``,
+    ``values()``). Field sets are sorted so the same selection always gives
+    the same shape.
 
     :param excludable: queryset's fields to include and exclude
     :type excludable: ExcludableItems
@@ -411,7 +556,10 @@ def excludable_shape(excludable: "ExcludableItems") -> Tuple[Any, ...]:
 
 def order_shape(order_bys: Iterable["OrderAction"]) -> Tuple[Any, ...]:
     """
-    Return the shape of the requested orderings.
+    Return the shape of the requested orderings: field path, direction, table
+    alias and nulls placement of each, in order::
+
+        order_by("-name")  # -> (("-name", "desc", "", None),)
 
     :param order_bys: order actions of the query
     :type order_bys: Iterable[OrderAction]
@@ -426,7 +574,12 @@ def order_shape(order_bys: Iterable["OrderAction"]) -> Tuple[Any, ...]:
 
 def exists_statement(select: sqlalchemy.sql.Select) -> Executable:
     """
-    Wrap a read select into ``SELECT EXISTS (...)``.
+    Wrap a read select into ``SELECT EXISTS (...)``, the statement run by
+    ``QuerySet.exists()``.
+
+    This and the other ``*_statement`` helpers are the ``wrap`` callables of
+    ``QuerySet.build_select_template``: they run on the select once, when a
+    shape is first built, and the wrapped statement is what gets cached.
 
     :param select: read select of the queryset
     :type select: sqlalchemy.sql.Select
@@ -440,7 +593,13 @@ def count_statement(
     select: sqlalchemy.sql.Select, distinct: bool, pk_column_name: str
 ) -> Executable:
     """
-    Wrap a read select into a row count, optionally of distinct primary keys.
+    Wrap a read select into a row count, the statement run by
+    ``QuerySet.count()``. With ``distinct`` the rows are grouped by primary key
+    first, so a model joined to several related rows is counted once::
+
+        SELECT count(*) FROM (
+            SELECT count(*) FROM (<select>) AS subquery_for_count GROUP BY <pk>
+        ) AS subquery_for_group
 
     :param select: read select of the queryset
     :type select: sqlalchemy.sql.Select
@@ -465,7 +624,11 @@ def aggregate_statement(
     select: sqlalchemy.sql.Select, func_name: str, select_columns: List[Any]
 ) -> Executable:
     """
-    Wrap a read select into aggregate function columns.
+    Wrap a read select into aggregate function columns, the statement run by
+    ``QuerySet.max()``, ``min()``, ``sum()`` and ``avg()``::
+
+        SELECT max(subquery_for_max.score) AS score
+        FROM (<select>) AS subquery_for_max
 
     :param select: read select of the queryset
     :type select: sqlalchemy.sql.Select
@@ -480,6 +643,7 @@ def aggregate_statement(
     return sqlalchemy.select(*select_columns).select_from(subquery)
 
 
+# primary key column per model class, looked up on the first write
 PK_COLUMNS: "weakref.WeakKeyDictionary[type, sqlalchemy.Column]" = (
     weakref.WeakKeyDictionary()
 )
@@ -493,6 +657,18 @@ def cached_statement(
 ) -> Executable:
     """
     Return the statement cached for a write shape, building it on a miss.
+
+    A write's shape is small (the kind of statement and the written column
+    names), so callers pass the key directly. The statement is only built on
+    a miss, from ``builder(**builder_kwargs)``::
+
+        cached_statement(
+            model_cls=Author,
+            key=("insert", ("name", "score")),
+            builder=build_insert,
+            table=Author.ormar_config.table,
+            names=("name", "score"),
+        )
 
     :param model_cls: model the statement writes
     :type model_cls: Type[Any]
@@ -521,7 +697,8 @@ def cross_check_write(
 ) -> None:
     """
     With ``CROSS_CHECK``, compare a write template with the statement built
-    with literal values, as without templates.
+    with literal values, as without templates. Catches a write shape that
+    misses something, e.g. two column sets sharing one cached insert.
 
     :param model_cls: written model
     :type model_cls: Type[Any]
@@ -544,7 +721,9 @@ def cross_check_write(
 
 def primary_key_column(model_cls: Type[Any]) -> sqlalchemy.Column:
     """
-    Return the primary key column of a model's table, resolved once per model.
+    Return the primary key column of a model's table, resolved once per model,
+    so a write does not look up the column alias of the primary key field
+    every time.
 
     :param model_cls: model class
     :type model_cls: Type[Any]
@@ -560,7 +739,9 @@ def primary_key_column(model_cls: Type[Any]) -> sqlalchemy.Column:
 
 def primary_key_bind(column: sqlalchemy.Column) -> BindParameter:
     """
-    Return the named bind parameter of a primary key filter.
+    Return the named bind parameter of a primary key filter
+    (``WHERE authors.id = :ormar_pk``), typed like the column so the key gets
+    the column's bind processing (e.g. UUID).
 
     :param column: primary key column
     :type column: sqlalchemy.Column
@@ -573,7 +754,10 @@ def primary_key_bind(column: sqlalchemy.Column) -> BindParameter:
 def value_binds(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Dict[Any, Any]:
     """
     Return named bind parameters for the written columns, ``ormar_v{i}`` in
-    the given column order.
+    the given column order, typed like their columns::
+
+        value_binds(table=authors, names=("name", "score"))
+        # -> {authors.c.name: :ormar_v0, authors.c.score: :ormar_v1}
 
     :param table: written table
     :type table: sqlalchemy.Table
@@ -592,7 +776,11 @@ def value_binds(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Dict[Any, An
 
 def value_params(names: Tuple[str, ...], values: Mapping[str, Any]) -> Dict[str, Any]:
     """
-    Return the written values keyed by their bind parameter names.
+    Return the written values keyed by their bind parameter names, matching
+    ``value_binds`` for the same ``names``::
+
+        value_params(names=("name", "score"), values={"score": 1, "name": "a"})
+        # -> {"ormar_v0": "a", "ormar_v1": 1}
 
     :param names: written column names, sorted
     :type names: Tuple[str, ...]
@@ -609,6 +797,8 @@ def literal_values(
 ) -> Dict[Any, Any]:
     """
     Return the written values keyed by column, in the template's column order.
+    Only the cross check uses it, to build the statement with literal values
+    as without templates.
 
     :param table: written table
     :type table: sqlalchemy.Table
@@ -624,7 +814,12 @@ def literal_values(
 
 def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:
     """
-    Build an insert of the given columns with named value binds.
+    Build an insert of the given columns with named value binds::
+
+        INSERT INTO authors (name, score) VALUES (:ormar_v0, :ormar_v1)
+
+    The names are sorted by the caller, so the same columns given in any
+    order share one statement.
 
     :param table: written table
     :type table: sqlalchemy.Table
@@ -640,7 +835,10 @@ def build_update(
     table: sqlalchemy.Table, names: Tuple[str, ...], pk_column: sqlalchemy.Column
 ) -> Executable:
     """
-    Build an update of the given columns of one row, by primary key.
+    Build an update of the given columns of one row, by primary key::
+
+        UPDATE authors SET name=:ormar_v0, score=:ormar_v1
+        WHERE authors.id = :ormar_pk
 
     :param table: written table
     :type table: sqlalchemy.Table
@@ -660,7 +858,9 @@ def build_update(
 
 def build_delete(table: sqlalchemy.Table, pk_column: sqlalchemy.Column) -> Executable:
     """
-    Build a delete of one row, by primary key.
+    Build a delete of one row, by primary key::
+
+        DELETE FROM authors WHERE authors.id = :ormar_pk
 
     :param table: written table
     :type table: sqlalchemy.Table
@@ -676,7 +876,10 @@ def build_pk_select(
     table: sqlalchemy.Table, pk_column: sqlalchemy.Column
 ) -> Executable:
     """
-    Build a select of one row, by primary key.
+    Build a select of all columns of one row, by primary key::
+
+        SELECT authors.id, authors.name, ... FROM authors
+        WHERE authors.id = :ormar_pk
 
     :param table: queried table
     :type table: sqlalchemy.Table
@@ -693,7 +896,11 @@ def build_bulk_update(
 ) -> Executable:
     """
     Build the per-row update used by ``bulk_update``: values and the primary
-    key come from ``new_<column>`` parameters of each row.
+    key come from ``new_<column>`` parameters of each row, and the driver's
+    ``executemany`` runs it once per row::
+
+        UPDATE authors SET name=:new_name WHERE authors.id = :new_id
+        # rows: [{"new_id": 1, "new_name": "a"}, {"new_id": 2, "new_name": "b"}]
 
     :param table: updated table
     :type table: sqlalchemy.Table
@@ -713,7 +920,10 @@ def build_bulk_update(
 
 def insert_statement(model_cls: Type[Any], names: Tuple[str, ...]) -> Executable:
     """
-    Return the insert of a model for the given sorted column names.
+    Return the insert of a model for the given sorted column names, from the
+    model's template cache. ``save()`` binds one row to it and
+    ``bulk_create`` runs it with ``executemany`` for every row with the same
+    columns.
 
     :param model_cls: inserted model
     :type model_cls: Type[Any]
@@ -736,7 +946,15 @@ def insert_template(
     model_cls: Type[Any], values: Mapping[str, Any]
 ) -> StatementTemplate:
     """
-    Return the insert of a model for the given column values.
+    Return the insert of a model for the given column values, used by
+    ``save()`` and one-row ``bulk_create``::
+
+        insert_template(model_cls=Author, values={"name": "a", "score": 1})
+        # -> INSERT INTO authors (name, score) VALUES (:ormar_v0, :ormar_v1)
+        #    {"ormar_v0": "a", "ormar_v1": 1}
+
+    Rows that leave out the primary key or a column with a server default
+    write a different set of columns, so each set gets its own statement.
 
     :param model_cls: inserted model
     :type model_cls: Type[Any]
@@ -763,7 +981,12 @@ def update_template(
     model_cls: Type[Any], values: Mapping[str, Any], pk: Any
 ) -> StatementTemplate:
     """
-    Return the update of one row of a model for the given column values.
+    Return the update of one row of a model for the given column values, used
+    by ``Model.update()``::
+
+        update_template(model_cls=Author, values={"name": "b"}, pk=1)
+        # -> UPDATE authors SET name=:ormar_v0 WHERE authors.id = :ormar_pk
+        #    {"ormar_v0": "b", "ormar_pk": 1}
 
     :param model_cls: updated model
     :type model_cls: Type[Any]
@@ -800,7 +1023,10 @@ def update_template(
 
 def delete_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
     """
-    Return the delete of one row of a model.
+    Return the delete of one row of a model, used by ``Model.delete()``::
+
+        delete_template(model_cls=Author, pk=1)
+        # -> DELETE FROM authors WHERE authors.id = :ormar_pk, {"ormar_pk": 1}
 
     :param model_cls: model
     :type model_cls: Type[Any]
@@ -831,7 +1057,11 @@ def delete_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
 
 def pk_select_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
     """
-    Return the select of one row of a model by primary key.
+    Return the select of one row of a model by primary key, used by
+    ``Model.load()`` and the existence check of ``upsert(force_save=True)``::
+
+        pk_select_template(model_cls=Author, pk=1)
+        # -> SELECT ... FROM authors WHERE authors.id = :ormar_pk, {"ormar_pk": 1}
 
     :param model_cls: model
     :type model_cls: Type[Any]
@@ -862,9 +1092,13 @@ def pk_select_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
 
 def release_values(statement: Executable) -> None:
     """
-    Drop the values of a template's named slots (SQLAlchemy may have cloned the
-    bind parameters while building), so a cached statement does not keep the
-    first call's values alive; every call binds its own values.
+    Drop the values of a template's named slots, so a cached statement does
+    not keep the first call's values (possibly large lists or documents) alive
+    for as long as it stays cached. Every call binds its own values anyway.
+
+    SQLAlchemy may have cloned the bind parameters while wrapping the select
+    (for example into a subquery), so the whole statement is walked instead of
+    clearing only the parameters ``SlotBinder`` created.
 
     :param statement: built template statement
     :type statement: Executable

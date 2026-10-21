@@ -128,7 +128,10 @@ class FilterAction(QueryAction):
     def bound_value(self) -> Any:
         """
         Return the value bound to the query: an ormar Model is replaced by its
-        primary key.
+        primary key, so ``filter(author=author)`` binds ``author.pk``.
+
+        ``filter_value`` itself is left untouched, so the action can be read
+        again on every call to collect the value for a cached template.
 
         :return: value to bind
         :rtype: Any
@@ -141,6 +144,13 @@ class FilterAction(QueryAction):
         """
         Return whether the value is bound as a parameter: SQLAlchemy renders
         ``None`` (``IS NULL``), booleans and ``isnull`` checks into the SQL text.
+
+        Only values that are bound can get a named slot in a statement
+        template. The others stay in the SQL text and become part of the
+        template's shape instead (see ``templates.value_kind``)::
+
+            filter(name="a")  # True  -> name = :ormar_p0
+            filter(name=None)  # False -> name IS NULL
 
         :return: True when the value is sent as a bound parameter
         :rtype: bool
@@ -158,7 +168,8 @@ class FilterAction(QueryAction):
         Substitutes values of the models if value is a ormar Model with its pk value.
         Compiles the clause.
 
-        :param binder: names the bound value for statement templates, if given
+        :param binder: names the bound value for statement templates
+            (``= :ormar_p0`` instead of an anonymous parameter), if given
         :type binder: Optional[SlotBinder]
         :return: complied and escaped clause
         :rtype: sqlalchemy.sql.elements.TextClause

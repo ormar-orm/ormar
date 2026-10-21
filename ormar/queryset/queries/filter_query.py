@@ -12,6 +12,10 @@ if TYPE_CHECKING:  # pragma: no cover
 class FilterQuery:
     """
     Modifies the select query with given list of where/filter clauses.
+
+    With a ``binder`` (see ``templates.SlotBinder``) the filter values become
+    named bind parameters, so the built select can be cached as a statement
+    template and run again with other values.
     """
 
     def __init__(

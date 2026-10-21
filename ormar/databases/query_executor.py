@@ -67,7 +67,8 @@ class QueryExecutor:
         Execute a query and fetch all rows.
 
         :param query: SQLAlchemy query expression
-        :param params: values for named bind parameters of the query
+        :param params: values for named bind parameters of the query, by name;
+            a cached query template passes its slot values here
         :return: List of rows, accessible by result label
         """
         bound = self._bind(query=query, params=params)
@@ -85,7 +86,8 @@ class QueryExecutor:
         Execute a query and fetch one row.
 
         :param query: SQLAlchemy query expression
-        :param params: values for named bind parameters of the query
+        :param params: values for named bind parameters of the query, by name;
+            a cached query template passes its slot values here
         :return: Single row or None
         """
         bound = self._bind(query=query, params=params)
@@ -109,7 +111,8 @@ class QueryExecutor:
 
         :param query: SQLAlchemy query expression
         :param column: Column index to fetch (default 0)
-        :param params: values for named bind parameters of the query
+        :param params: values for named bind parameters of the query, by name;
+            a cached query template passes its slot values here
         :return: Scalar value or None
         """
         bound = self._bind(query=query, params=params)
@@ -151,8 +154,9 @@ class QueryExecutor:
         # Do NOT fall back to rowcount here: rowcount is not a pk, and
         # returning it would silently corrupt `Model.pk` in `save()`.
         if result.context and result.context.isinsert:
-            # a primary key bound by name (statement templates) is returned as
-            # bound; SQLAlchemy only looks it up under the column key
+            # a primary key bound by name (insert templates bind it as
+            # ``ormar_v{i}``) is returned as bound: SQLAlchemy only looks the
+            # inserted key up under the column key, so it would miss it
             compiled = cast(SQLCompiler, result.context.compiled)
             key = pk_param_key(compiled=compiled) if params else None
             if key is not None and params and params.get(key) is not None:
@@ -199,7 +203,8 @@ class QueryExecutor:
         Execute a query and iterate over results.
 
         :param query: SQLAlchemy query expression
-        :param params: values for named bind parameters of the query
+        :param params: values for named bind parameters of the query, by name;
+            a cached query template passes its slot values here
         :return: Async iterator of rows, accessible by result label
         """
         bound = self._bind(query=query, params=params)
@@ -245,7 +250,8 @@ class QueryExecutor:
         Bind the query for native execution.
 
         :param query: SQLAlchemy query expression
-        :param params: values for named bind parameters of the query
+        :param params: values for named bind parameters of the query, by name;
+            a cached query template passes its slot values here
         :return: bound statement, or None when it must run through SQLAlchemy
         """
         if self._native is None or not is_plannable(stmt=query):
