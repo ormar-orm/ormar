@@ -9,6 +9,9 @@ if TYPE_CHECKING:  # pragma: no cover
 class LimitQuery:
     """
     Modifies the select query with limit clause.
+
+    With a ``binder`` (see ``templates.SlotBinder``) the limit is bound as
+    ``:ormar_limit``, so one cached statement serves every limit value.
     """
 
     def __init__(

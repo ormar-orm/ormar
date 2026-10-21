@@ -60,7 +60,8 @@ class QueryExecutor:
         Execute a query and fetch all rows.
 
         :param query: SQLAlchemy query expression
-        :param params: values for named bind parameters of the query
+        :param params: values for named bind parameters of the query, by name;
+            a cached query template passes its slot values here
         :return: List of rows, accessible by result label
         """
         bound = self._bind(query=query, params=params)
@@ -78,7 +79,8 @@ class QueryExecutor:
         Execute a query and fetch one row.
 
         :param query: SQLAlchemy query expression
-        :param params: values for named bind parameters of the query
+        :param params: values for named bind parameters of the query, by name;
+            a cached query template passes its slot values here
         :return: Single row or None
         """
         bound = self._bind(query=query, params=params)
@@ -102,7 +104,8 @@ class QueryExecutor:
 
         :param query: SQLAlchemy query expression
         :param column: Column index to fetch (default 0)
-        :param params: values for named bind parameters of the query
+        :param params: values for named bind parameters of the query, by name;
+            a cached query template passes its slot values here
         :return: Scalar value or None
         """
         bound = self._bind(query=query, params=params)
@@ -181,7 +184,8 @@ class QueryExecutor:
         Execute a query and iterate over results.
 
         :param query: SQLAlchemy query expression
-        :param params: values for named bind parameters of the query
+        :param params: values for named bind parameters of the query, by name;
+            a cached query template passes its slot values here
         :return: Async iterator of rows, accessible by result label
         """
         bound = self._bind(query=query, params=params)
@@ -227,7 +231,8 @@ class QueryExecutor:
         Bind the query for native execution.
 
         :param query: SQLAlchemy query expression
-        :param params: values for named bind parameters of the query
+        :param params: values for named bind parameters of the query, by name;
+            a cached query template passes its slot values here
         :return: bound statement, or None when it must run through SQLAlchemy
         """
         if self._native is None or not is_plannable(stmt=query):
