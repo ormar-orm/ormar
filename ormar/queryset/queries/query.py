@@ -20,6 +20,16 @@ if TYPE_CHECKING:  # pragma no cover
 
 
 class Query:
+    """
+    Builds the select of a queryset: joins of ``select_related``, selected
+    columns, filters, ordering, limit and offset (with a pagination subquery
+    when a limit meets ``select_related``).
+
+    With a ``binder`` (see ``templates.SlotBinder``) every filter value, the
+    limit and the offset are bound as named parameters, so the select can be
+    cached as a statement template.
+    """
+
     def __init__(  # noqa CFQ002
         self,
         model_cls: type["Model"],

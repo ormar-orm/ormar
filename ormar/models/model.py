@@ -41,6 +41,23 @@ class Model(ModelRow):
         is_select: bool = False,
         params: Optional[dict] = None,
     ) -> Any:
+        """
+        Run a statement of this model: fetch one row of a select, otherwise
+        execute the write and return its result (inserted primary key or
+        number of changed rows).
+
+        Single-row writes and ``load()`` pass a cached statement template
+        (see ``ormar.queryset.templates``) and its values as ``params``.
+
+        :param expr: statement to run
+        :type expr: Executable
+        :param is_select: fetch one row instead of executing a write
+        :type is_select: bool
+        :param params: values for named bind parameters of the statement
+        :type params: Optional[dict]
+        :return: fetched row, inserted primary key or row count
+        :rtype: Any
+        """
         async with self.ormar_config.database.get_query_executor() as executor:
             row = (
                 await executor.fetch_one(query=expr, params=params)

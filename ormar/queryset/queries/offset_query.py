@@ -9,6 +9,9 @@ if TYPE_CHECKING:  # pragma: no cover
 class OffsetQuery:
     """
     Modifies the select query with offset if set
+
+    With a ``binder`` (see ``templates.SlotBinder``) the offset is bound as
+    ``:ormar_offset``, so one cached statement serves every non-zero offset.
     """
 
     def __init__(
