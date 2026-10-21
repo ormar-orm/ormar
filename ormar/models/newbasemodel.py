@@ -48,6 +48,8 @@ from ormar.relations.relation import Relation
 from ormar.relations.relation_manager import RelationsManager
 from ormar.warnings import OrmarDeprecatedSince020
 
+# pydantic model config keys that make validation change a value the column
+# type already converted, so rows of such models must go through ``__init__``
 VALUE_CHANGING_CONFIG = (
     "use_enum_values",
     "str_strip_whitespace",
@@ -260,12 +262,35 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
     def trusted_row_construction(cls) -> bool:
         """
         Return whether rows of this model can be turned into instances without
-        running ``__init__``: only when validation could not change a value the
-        column type already converted - no through fields, no custom ``__init__``,
-        validators, private attributes or post-init hook, no extra fields, no
-        fields with an overwritten pydantic type, encryption or base64
-        representation and no value-changing model config (enum values, string
-        transformations, number coercion, strict mode). Computed once per class.
+        running ``__init__``.
+
+        A database row is already converted by the column types (an Integer
+        column returns ``int``, a DateTime one ``datetime``), so pydantic's
+        validation would hand back the same values. Skipping it is only safe
+        when nothing on the model could change a value or has side effects,
+        so the model must have none of:
+
+        - through fields or a custom ``__init__``
+        - validators of any kind, private attributes or ``model_post_init``
+        - extra fields (``extra="allow"``)
+        - fields whose pydantic type differs from the column type, encrypted
+          fields or fields represented as base64 strings
+        - value-changing model config (``VALUE_CHANGING_CONFIG``: enum values,
+          string transformations, number coercion, strict mode)
+
+        Computed once per class, together with the per-class lookups the
+        trusted path uses (required fields, relation names and field order).
+        Defining a related model later resets it (see
+        ``reset_relation_caches``)::
+
+            class Author(ormar.Model):
+                ormar_config = base_ormar_config.copy(tablename="authors")
+
+                id: int = ormar.Integer(primary_key=True)
+                name: str = ormar.String(max_length=100)
+
+
+            Author.trusted_row_construction()  # -> True
 
         :return: True when database rows can be trusted as field values
         :rtype: bool
@@ -316,6 +341,9 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         overridden ``model_dump``), so its rows and its ``model_dump()`` hold
         plain column values only.
 
+        For such models ``bulk_create`` copies each instance's ``__dict__``
+        instead of calling ``model_dump()`` (see ``dump_for_save``).
+
         :return: True for trusted models without relations
         :rtype: bool
         """
@@ -336,9 +364,14 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         Build an instance straight from database row values, which the column
         types already converted, skipping ``__init__`` and validation. Only for
         models with ``trusted_row_construction()`` and rows holding every
-        required field and no relation value; fields missing from the row or
-        excluded are None, like
-        after ``_construct_with_excluded``.
+        required field and no relation value.
+
+        The instance gets the state ``__init__`` would leave behind: internal
+        ormar attributes, the values as pydantic's ``__dict__`` and the row's
+        fields as ``model_fields_set``. Fields missing from the row or
+        excluded are None, like after ``_construct_with_excluded``. When the
+        row holds every field in field order, the row dict itself becomes the
+        ``__dict__`` without a copy.
 
         :param excluded: field names excluded from the query
         :type excluded: AbstractSet[str]

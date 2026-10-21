@@ -317,7 +317,13 @@ def assert_same_statement(
 def value_types(values: dict[str, Any]) -> dict[str, type]:
     """
     Return the type of each value, so values that compare equal across types
-    (``1 == 1.0 == True``, str enums and strings) are told apart.
+    (``1 == 1.0 == True``, str enums and strings) are told apart::
+
+        {"a": 1} == {"a": True}  # -> True
+        value_types(values={"a": 1}) == value_types(values={"a": True})  # -> False
+
+    The cross checks of trusted row construction and ``dump_for_save`` compare
+    both the values and their types.
 
     :param values: field values
     :type values: dict[str, Any]

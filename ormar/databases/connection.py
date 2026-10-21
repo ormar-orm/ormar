@@ -219,6 +219,11 @@ class DatabaseConnection:
         Whether ``execute_many`` outside a transaction is atomic on its own
         (native asyncpg), so a single batch needs no explicit transaction.
 
+        ``bulk_create`` uses it to skip ``BEGIN``/``COMMIT`` around a lone
+        ``executemany``: on asyncpg a failing row already leaves no rows
+        inserted. Other drivers give no such guarantee, so a batch there
+        still runs in a transaction.
+
         :return: True when a lone batch needs no transaction
         :rtype: bool
         """

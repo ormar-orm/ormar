@@ -56,15 +56,23 @@ from ormar.queryset.utils import (
 )
 from ormar.queryset.values_columns import values_column_map
 
+# rows built between yields to the event loop when materializing flat rows
 FLAT_ROWS_CHUNK = 500
 
 
 def dump_for_save(obj: "Model") -> dict:
     """
-    Return the field values of a model with ``flat_row_model()``: without
-    relations or converted fields its ``model_dump()`` equals a copy
-    of its ``__dict__``. With the template cross-check enabled (test suite)
-    the copy is compared with ``model_dump()``.
+    Return the field values of a model with ``flat_row_model()`` for
+    ``bulk_create``.
+
+    Without relations, converted fields or custom serializers, pydantic's
+    ``model_dump()`` returns the same values as a copy of the ``__dict__``,
+    at a fraction of the cost::
+
+        dump_for_save(obj=Author(id=1, name="a"))  # -> {"id": 1, "name": "a"}
+
+    With ``templates.CROSS_CHECK`` on (test suite) the copy is compared with
+    ``model_dump()``, including the types of the values.
 
     :param obj: model to save
     :type obj: Model
@@ -266,8 +274,11 @@ class QuerySet(Generic[T]):
     async def _process_flat_rows(self, rows: list, plan_cache: dict) -> list["T"]:
         """
         Build models of rows without joined relations of models with
-        ``trusted_row_construction()``, in chunks of
-        ``FLAT_ROWS_CHUNK`` rows yielding to the event loop in between.
+        ``trusted_row_construction()`` (see ``ModelRow.from_flat_rows``).
+
+        The rows are built in chunks of ``FLAT_ROWS_CHUNK`` with a yield to the
+        event loop in between, so a large result does not block other tasks
+        for the whole time it takes to build.
 
         :param rows: list of database rows from query result
         :type rows: list
@@ -302,7 +313,9 @@ class QuerySet(Generic[T]):
     ) -> "Model":
         """
         Build the model of one row through ``from_row``, sharing the query's
-        identity map (rows of the main model always hold its pk).
+        identity map (rows of the main model always hold its pk). The fallback
+        of ``from_flat_rows`` for rows holding a related value, which need the
+        regular path to register the relation.
 
         :param row: database row
         :type row: Any

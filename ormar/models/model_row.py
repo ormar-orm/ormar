@@ -175,11 +175,21 @@ class ModelRow(NewBaseModel):
     ) -> list["Model"]:
         """
         Build models of a query without joined relations of a model with
-        ``trusted_row_construction()``: such rows map one to one to models, so
-        the per-row plan lookup, identity map, nested models and merging of
-        ``from_row`` are skipped. Rows holding a related value (a foreign key
-        that needs registering) are built by ``fallback``; repeated pks (views
-        or tables without a unique pk) keep the first row, like merging does.
+        ``trusted_row_construction()``.
+
+        Without joins every row is one model, so what ``from_row`` does per row
+        is not needed here: looking up the extraction plan, the identity map,
+        building nested models and merging rows of the same model. One plan
+        is looked up for all the rows and each row becomes a model directly::
+
+            await Author.objects.all()
+            # rows [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+            # -> [Author(id=1, name="a"), Author(id=2, name="b")]
+
+        Rows holding a related value (a foreign key that needs registering on
+        both sides) are built by ``fallback`` instead. Repeated primary keys
+        (views or tables without a unique pk) keep the first row, like merging
+        does.
 
         :param rows: database rows of the main model only
         :type rows: Sequence[Any]
@@ -224,12 +234,17 @@ class ModelRow(NewBaseModel):
         cls, plan: RowExtractionPlan, item: dict[str, Any]
     ) -> "ModelRow":
         """
-        Build the model instance of one row: directly from the row values for
-        models with ``trusted_row_construction()`` when the row holds every
-        required field and no related model (relations need registering),
-        otherwise through ``_construct_with_excluded`` (which also raises for
-        excluded required fields). With the template cross-check enabled
-        (test suite), a trusted build is compared with the regular one.
+        Build the model instance of one row.
+
+        For models with ``trusted_row_construction()`` the instance is built
+        directly from the row values (``_construct_from_row``), as long as the
+        row holds every required field and no related model. Otherwise it goes
+        through ``_construct_with_excluded``, which validates the values,
+        registers relations and raises for excluded required fields.
+
+        With ``templates.CROSS_CHECK`` on (test suite) a trusted build is also
+        built the regular way, and both must hold the same values of the same
+        types and the same set fields.
 
         :param plan: extraction plan of the row position
         :type plan: RowExtractionPlan
