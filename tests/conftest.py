@@ -1,6 +1,6 @@
 """Test-suite wide settings."""
 
-from ormar.queryset import templates
+from ormar.queryset.templates import cross_check
 
 # Every query template hit is also built without templates and compared.
-templates.CROSS_CHECK = True
+cross_check.ENABLED = True
