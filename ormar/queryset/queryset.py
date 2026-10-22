@@ -24,7 +24,7 @@ from ormar.exceptions import (
     QueryDefinitionError,
 )
 from ormar.models.row_registry import RowRegistry
-from ormar.queryset import FieldAccessor, FilterQuery, SelectAction, templates
+from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
 from ormar.queryset.actions.order_action import OrderAction
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
@@ -36,13 +36,14 @@ from ormar.queryset.templates import (
     build_bulk_update,
     cached_statement,
     canonical_actions,
-    clauses_shape,
+    clauses_cache_key,
     count_statement,
-    excludable_shape,
+    cross_check,
+    excludable_cache_key,
     exists_statement,
     insert_statement,
     insert_template,
-    order_shape,
+    order_cache_key,
     release_values,
     template_cache_for,
     template_params,
@@ -71,7 +72,7 @@ def dump_for_save(obj: "Model") -> dict:
 
         dump_for_save(obj=Author(id=1, name="a"))  # -> {"id": 1, "name": "a"}
 
-    With ``templates.CROSS_CHECK`` on (test suite) the copy is compared with
+    With ``cross_check.ENABLED`` on (test suite) the copy is compared with
     ``model_dump()``, including the types of the values.
 
     :param obj: model to save
@@ -81,11 +82,11 @@ def dump_for_save(obj: "Model") -> dict:
     :rtype: dict
     """
     values = dict(obj.__dict__)
-    if templates.CROSS_CHECK:
+    if cross_check.ENABLED:
         dumped = obj.model_dump()
-        if values != dumped or templates.value_types(
+        if values != dumped or cross_check.value_types(
             values=values
-        ) != templates.value_types(values=dumped):
+        ) != cross_check.value_types(values=dumped):
             raise AssertionError(
                 f"Trusted dump mismatch for {obj.get_name()}: {values} != {dumped}"
             )
@@ -438,7 +439,7 @@ class QuerySet(Generic[T]):
     ) -> StatementTemplate:
         """
         Return the read statement for this queryset from the model's template
-        cache (building and caching it on the first call of a shape) together
+        cache (building and caching it on the first call of a cache key) together
         with the values to bind for this call::
 
             Author.objects.filter(name="a").build_select_template()
@@ -449,12 +450,12 @@ class QuerySet(Generic[T]):
         ``iterate``, ``values``, ``exists``, ``count`` and the aggregates)
         goes through here instead of ``build_select_expression``. A statement
         that is not a plain select passes ``wrap`` to build the executed
-        statement around the select and ``variant`` to keep its shape apart
+        statement around the select and ``variant`` to keep its cache key apart
         from the plain select's, e.g. ``count()`` passes
         ``variant=("count", distinct)`` and ``wrap=count_statement``.
 
-        On a cache hit nothing is built: only the shape and the values are
-        collected from the queryset. With ``templates.CROSS_CHECK`` on, a hit
+        On a cache hit nothing is built: only the cache key and the values are
+        collected from the queryset. With ``cross_check.ENABLED`` on, a hit
         also builds the statement without templates and compares the two.
 
         :param variant: how the select is used (plain, count, aggregate, ...)
@@ -478,7 +479,7 @@ class QuerySet(Generic[T]):
             limit=limit if limit is not None else self.limit_count,
             offset=offset or self.query_offset,
         )
-        key = self.template_key(
+        key = self.select_cache_key(
             variant=variant, limit=limit, offset=offset, order_bys=order_bys
         )
         cache = template_cache_for(model_cls=self.model)
@@ -492,12 +493,12 @@ class QuerySet(Generic[T]):
                 wrap=wrap,
             )
             cache.put(key=key, statement=statement)
-        elif templates.CROSS_CHECK:
+        elif cross_check.ENABLED:
             fresh = self.build_select_expression(
                 limit=limit, offset=offset, order_bys=order_bys
             )
             fresh = wrap(fresh) if wrap is not None else fresh
-            templates.assert_same_statement(
+            cross_check.assert_same_statement(
                 cached=statement,
                 fresh=fresh,
                 params=params,
@@ -514,7 +515,7 @@ class QuerySet(Generic[T]):
         wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]],
     ) -> Any:
         """
-        Build the read statement of a new shape with named value slots, the
+        Build the read statement of a new cache key with named value slots, the
         statement that is then cached.
 
         The select is built by ``build_select_expression`` as usual, but with a
@@ -555,8 +556,8 @@ class QuerySet(Generic[T]):
             # -> UPDATE authors SET name=:ormar_v0 WHERE authors.score < :ormar_p0
             #    {"ormar_p0": 5, "ormar_v0": "x"}
 
-        The shape is the kind, the filter and exclude clauses (see
-        ``templates.clauses_shape``) and the updated column names. Updates and
+        The cache key is the kind, the filter and exclude clauses (see
+        ``templates.clauses_cache_key``) and the updated column names. Updates and
         deletes take no joins, ordering or limit, so nothing else changes their
         SQL. Filter values are named by ``SlotBinder`` like in reads, updated
         values like in single-row writes (``ormar_v{i}``).
@@ -578,8 +579,8 @@ class QuerySet(Generic[T]):
         }
         key = (
             kind,
-            clauses_shape(clauses=self.filter_clauses),
-            clauses_shape(clauses=self.exclude_clauses),
+            clauses_cache_key(clauses=self.filter_clauses),
+            clauses_cache_key(clauses=self.exclude_clauses),
             names,
         )
         cache = template_cache_for(model_cls=self.model)
@@ -590,11 +591,11 @@ class QuerySet(Generic[T]):
             )
             release_values(statement=statement)
             cache.put(key=key, statement=statement)
-        elif templates.CROSS_CHECK:
+        elif cross_check.ENABLED:
             fresh = self.build_write_statement(
                 kind=kind, names=names, binder=None, values=values
             )
-            templates.assert_same_statement(
+            cross_check.assert_same_statement(
                 cached=statement,
                 fresh=fresh,
                 params=params,
@@ -644,9 +645,9 @@ class QuerySet(Generic[T]):
             filter_clauses=self.exclude_clauses, exclude=True, binder=binder
         ).apply(expr=expr)
 
-    def effective_limit_shape(self, limit: Optional[int]) -> tuple:
+    def limit_cache_key(self, limit: Optional[int]) -> tuple:
         """
-        Return how the effective limit shapes the SQL: whether a LIMIT is
+        Return how the effective limit changes the SQL: whether a LIMIT is
         applied at all, and whether it is non-zero (only a non-zero limit with
         ``select_related`` builds the pagination subquery). The limit value
         itself is bound, so ``limit(5)`` and ``limit(10)`` share a statement::
@@ -663,7 +664,7 @@ class QuerySet(Generic[T]):
         effective = limit if limit is not None else self.limit_count
         return effective is not None, bool(effective)
 
-    def template_key(
+    def select_cache_key(
         self,
         variant: tuple,
         limit: Optional[int],
@@ -671,18 +672,18 @@ class QuerySet(Generic[T]):
         order_bys: Optional[list],
     ) -> tuple:
         """
-        Return the shape of the statement ``build_select_expression`` would build
+        Return the cache key of the statement ``build_select_expression`` would build
         with the given arguments: everything that changes its SQL text and none
         of the bound values. Two querysets with the same key must build the
         same SQL, or one would run the other's statement, so each part covers
         one input of the build:
 
         * ``variant`` - plain select, exists, count or aggregate
-        * filter and exclude clauses - see ``clauses_shape``
+        * filter and exclude clauses - see ``clauses_cache_key``
         * ``select_related`` - the joins
-        * selected fields - see ``excludable_shape``
-        * ordering - see ``order_shape``
-        * limit and offset presence - see ``effective_limit_shape``
+        * selected fields - see ``excludable_cache_key``
+        * ordering - see ``order_cache_key``
+        * limit and offset presence - see ``limit_cache_key``
         * ``limit_raw_sql`` - limit on raw rows instead of main models
 
         Any new queryset option that changes the built SQL has to be added
@@ -696,17 +697,17 @@ class QuerySet(Generic[T]):
         :type offset: Optional[int]
         :param order_bys: order actions passed to ``build_select_expression``
         :type order_bys: Optional[list]
-        :return: hashable statement shape
+        :return: hashable cache key of the statement
         :rtype: tuple
         """
         return (
             variant,
-            clauses_shape(clauses=self.filter_clauses),
-            clauses_shape(clauses=self.exclude_clauses),
+            clauses_cache_key(clauses=self.filter_clauses),
+            clauses_cache_key(clauses=self.exclude_clauses),
             tuple(self._select_related),
-            excludable_shape(excludable=self._excludable),
-            order_shape(order_bys=order_bys or self.order_bys),
-            self.effective_limit_shape(limit=limit),
+            excludable_cache_key(excludable=self._excludable),
+            order_cache_key(order_bys=order_bys or self.order_bys),
+            self.limit_cache_key(limit=limit),
             bool(offset or self.query_offset),
             self.limit_sql_raw,
         )

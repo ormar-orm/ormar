@@ -12,7 +12,8 @@ import pytest_asyncio
 
 import ormar
 from ormar.models.excludable import ExcludableItems
-from ormar.queryset import queryset, templates
+from ormar.queryset import queryset
+from ormar.queryset.templates import cross_check
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -209,7 +210,7 @@ def test_trusted_build_equals_init_build():
 
 @pytest.mark.asyncio
 async def test_loaded_rows_skip_init_for_eligible_models(connected, monkeypatch):
-    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    monkeypatch.setattr(cross_check, "ENABLED", False)
     async with base_ormar_config.database.transaction(force_rollback=True):
         await Plain.objects.create(name="a", amount=decimal.Decimal("1"))
         counter = ConstructCounter(Plain._construct_with_excluded)
@@ -252,7 +253,7 @@ class WrongConstruct:
 
 @pytest.mark.asyncio
 async def test_cross_check_detects_trusted_mismatch(connected, monkeypatch):
-    monkeypatch.setattr(templates, "CROSS_CHECK", True)
+    monkeypatch.setattr(cross_check, "ENABLED", True)
     async with base_ormar_config.database.transaction(force_rollback=True):
         await Plain.objects.create(name="a", amount=decimal.Decimal("1"))
         monkeypatch.setattr(
@@ -269,7 +270,7 @@ def test_reverse_relation_resets_eligibility():
 
 @pytest.mark.asyncio
 async def test_excluding_required_field_still_raises(connected, monkeypatch):
-    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    monkeypatch.setattr(cross_check, "ENABLED", False)
     async with base_ormar_config.database.transaction(force_rollback=True):
         await Plain.objects.create(name="a", amount=decimal.Decimal("1"))
         with pytest.raises(pydantic.ValidationError):
@@ -288,7 +289,7 @@ class RetypedConstruct:
 
 @pytest.mark.asyncio
 async def test_cross_check_detects_equal_values_of_other_type(connected, monkeypatch):
-    monkeypatch.setattr(templates, "CROSS_CHECK", True)
+    monkeypatch.setattr(cross_check, "ENABLED", True)
     async with base_ormar_config.database.transaction(force_rollback=True):
         await Plain.objects.create(name="a", amount=decimal.Decimal("1"))
         monkeypatch.setattr(
@@ -323,7 +324,7 @@ async def test_flat_queries_skip_from_row_and_yield_between_chunks(
 
 @pytest.mark.asyncio
 async def test_rows_without_related_values_skip_init(connected, monkeypatch):
-    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    monkeypatch.setattr(cross_check, "ENABLED", False)
     async with base_ormar_config.database.transaction(force_rollback=True):
         owner = await Owner.objects.create()
         await Pet.objects.create(owner=None)

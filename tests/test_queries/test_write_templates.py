@@ -11,9 +11,9 @@ import sqlalchemy as sa
 import ormar
 from ormar.databases.native import compiler
 from ormar.models import NewBaseModel
-from ormar.queryset import templates
 from ormar.queryset.templates import (
     build_pk_select,
+    cross_check,
     delete_template,
     insert_statement,
     insert_template,
@@ -136,7 +136,7 @@ async def test_delete_and_pk_select_templates(connected):
 
 @pytest.mark.asyncio
 async def test_model_writes_build_no_statements_on_hit(connected, monkeypatch):
-    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    monkeypatch.setattr(cross_check, "ENABLED", False)
     async with base_ormar_config.database.transaction(force_rollback=True):
         warm = await Item(name="warm").save()
         warm.note = "n"
@@ -180,7 +180,7 @@ async def test_save_with_explicit_pk_keeps_it(connected):
 
 @pytest.mark.asyncio
 async def test_write_cross_check_detects_mismatch(connected, monkeypatch):
-    monkeypatch.setattr(templates, "CROSS_CHECK", True)
+    monkeypatch.setattr(cross_check, "ENABLED", True)
     template_cache_for(Item).clear()
     table = Item.ormar_config.table
     wrong = build_pk_select(table, table.c.id)
@@ -199,7 +199,7 @@ async def test_pk_column_property(connected):
 
 @pytest.mark.asyncio
 async def test_queryset_writes_use_templates(connected, monkeypatch):
-    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    monkeypatch.setattr(cross_check, "ENABLED", False)
     async with base_ormar_config.database.transaction(force_rollback=True):
         await Item.objects.bulk_create([Item(name=f"q{i}") for i in range(4)])
         await Item.objects.filter(name="q0").update(note="warm")
@@ -222,7 +222,7 @@ async def test_queryset_writes_use_templates(connected, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_bulk_ops_use_templates(connected, monkeypatch):
-    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    monkeypatch.setattr(cross_check, "ENABLED", False)
     async with base_ormar_config.database.transaction(force_rollback=True):
         await Item.objects.bulk_create([Item(name="w1"), Item(name="w2")])
         warm = await Item.objects.all()
@@ -321,7 +321,7 @@ async def test_direct_batch_binding_matches_expanded_binding(connected, monkeypa
 
 @pytest.mark.asyncio
 async def test_bulk_create_of_trusted_models_skips_model_dump(connected, monkeypatch):
-    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    monkeypatch.setattr(cross_check, "ENABLED", False)
     counter = mock.create_autospec(
         NewBaseModel.model_dump, side_effect=NewBaseModel.model_dump
     )
@@ -339,7 +339,7 @@ class WrongDump:
 
 @pytest.mark.asyncio
 async def test_trusted_dump_cross_check_detects_mismatch(connected, monkeypatch):
-    monkeypatch.setattr(templates, "CROSS_CHECK", True)
+    monkeypatch.setattr(cross_check, "ENABLED", True)
     monkeypatch.setattr(NewBaseModel, "model_dump", WrongDump())
     with pytest.raises(AssertionError, match="Trusted dump mismatch"):
         await Item.objects.bulk_create([Item(name="w")])

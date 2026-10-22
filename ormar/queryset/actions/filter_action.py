@@ -147,7 +147,7 @@ class FilterAction(QueryAction):
 
         Only values that are bound can get a named slot in a statement
         template. The others stay in the SQL text and become part of the
-        template's shape instead (see ``templates.value_kind``)::
+        template's cache key instead (see ``templates.value_cache_key``)::
 
             filter(name="a")  # True  -> name = :ormar_p0
             filter(name=None)  # False -> name IS NULL

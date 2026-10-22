@@ -20,7 +20,7 @@ from ormar.models import NewBaseModel  # noqa: I202
 from ormar.models.excludable import ExcludableItems
 from ormar.models.helpers.models import group_related_list
 from ormar.models.row_registry import RegistryKey, RowRegistry, selects_multi_relation
-from ormar.queryset import templates
+from ormar.queryset.templates import cross_check
 from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -242,7 +242,7 @@ class ModelRow(NewBaseModel):
         through ``_construct_with_excluded``, which validates the values,
         registers relations and raises for excluded required fields.
 
-        With ``templates.CROSS_CHECK`` on (test suite) a trusted build is also
+        With ``cross_check.ENABLED`` on (test suite) a trusted build is also
         built the regular way, and both must hold the same values of the same
         types and the same set fields.
 
@@ -262,7 +262,7 @@ class ModelRow(NewBaseModel):
             return cls._construct_with_excluded(
                 excluded=plan.excluded_field_names, **item
             )
-        if not templates.CROSS_CHECK:
+        if not cross_check.ENABLED:
             return cls._construct_from_row(
                 excluded=plan.excluded_field_names, values=item
             )
@@ -272,8 +272,8 @@ class ModelRow(NewBaseModel):
         )
         if (
             instance.__dict__ != built.__dict__
-            or templates.value_types(values=instance.__dict__)
-            != templates.value_types(values=built.__dict__)
+            or cross_check.value_types(values=instance.__dict__)
+            != cross_check.value_types(values=built.__dict__)
             or instance.__pydantic_fields_set__ != built.__pydantic_fields_set__
         ):
             raise AssertionError(
