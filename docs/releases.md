@@ -51,6 +51,13 @@
 
 ### ⚡ Performance
 
+* Read queries (`get()`, `first()`, `all()`, `iterate()`, `values()`,
+  `count()`, `exists()` and aggregates) now cache the built SQLAlchemy
+  statement per query shape and only bind the new values on later calls,
+  instead of rebuilding the statement and its cache key every time. A
+  `get()` by primary key spends ~40% less CPU (about 7.8k instead of 4.8k
+  `get()` calls per second with 10 concurrent workers on PostgreSQL); in the
+  orm-benchmarks suite `get()` is 1.4–2× and small filters 1.2–1.3× faster.
 * With `asyncpg`, `asyncmy` and `aiosqlite`, queries now run directly on the
   driver connection instead of through SQLAlchemy's async execution layer.
   SQLAlchemy still builds and compiles statements, converts values with its

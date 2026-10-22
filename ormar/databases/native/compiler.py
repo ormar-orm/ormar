@@ -235,7 +235,9 @@ class NativeCompiler:
         self.max_plans = max_plans
         self._plans: "OrderedDict[Any, StatementPlan]" = OrderedDict()
 
-    def bind(self, stmt: Executable) -> BoundStatement:
+    def bind(
+        self, stmt: Executable, params: Optional[Mapping[str, Any]] = None
+    ) -> BoundStatement:
         """
         Compile the statement, or reuse the plan of its shape, and bind its values
         into SQL and positional driver arguments.
@@ -246,21 +248,31 @@ class NativeCompiler:
             bind(select(users.c.id).where(users.c.id == 7))
             # -> sql "... WHERE users.id = $1::INTEGER", args [7]
 
+        ``params`` supplies values by bind name instead. ormar's cached query
+        templates use it: one statement built once with named slots, and only
+        the values passed on each call::
+
+            stmt = select(users.c.id).where(users.c.id == bindparam("ormar_p0"))
+            bind(stmt, {"ormar_p0": 7})  # -> args [7]
+
         :param stmt: statement to execute
         :type stmt: Executable
+        :param params: values for named bind parameters, by name
+        :type params: Optional[Mapping[str, Any]]
         :return: plan, SQL string and positional driver arguments
         :rtype: BoundStatement
         """
         key = stmt._generate_cache_key()  # type: ignore[attr-defined]
         plan = self._plan(stmt=stmt, key=key)
-        params = plan.compiled.construct_params(
+        bound_params = plan.compiled.construct_params(
+            params=params,
             extracted_parameters=key[1] if key is not None else None,
             escape_names=True,
             _no_postcompile=True,
         )
-        apply_prefetch_defaults(plan.compiled, params)
-        sql, args = expand(plan.compiled, params)
-        return BoundStatement(plan, sql, args, params)
+        apply_prefetch_defaults(compiled=plan.compiled, params=bound_params)
+        sql, args = expand(compiled=plan.compiled, params=bound_params)
+        return BoundStatement(plan=plan, sql=sql, args=args, params=bound_params)
 
     def bind_many(
         self, stmt: Executable, rows: Sequence[Mapping[str, Any]]
