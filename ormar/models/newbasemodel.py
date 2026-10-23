@@ -693,7 +693,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             self,
             "_orm",
             RelationsManager(
-                related_fields=self.extract_related_fields(),
+                field_map=self.extract_related_field_map(),
                 owner=self,  # type: ignore[arg-type]
             ),
         )

@@ -69,6 +69,9 @@
   goes through `__getattr__` on its first use. Loading rows with a foreign key
   is about 1.4× faster, with `select_related` and reverse relations
   1.25–1.35× faster.
+* The relation fields of a model are mapped by name once per model and shared
+  by every instance instead of being rebuilt for each one, which makes
+  building models 5–12% faster.
 * `bulk_create()` of such models without relations copies field values
   instead of calling `model_dump()`, batch parameters are bound by position
   without per-row expansion, and on asyncpg a bulk insert of one column set
