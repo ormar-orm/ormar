@@ -72,6 +72,7 @@ def reset_relation_caches(model: type["Model"]) -> None:
     """
     model._related_names = None
     model._related_fields = None
+    model._related_field_map = None
     model._trusted_rows = None
 
 

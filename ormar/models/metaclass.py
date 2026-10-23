@@ -72,6 +72,7 @@ def add_cached_properties(new_model: type["Model"]) -> None:
     new_model._related_names = None
     new_model._through_names = None
     new_model._related_fields = None
+    new_model._related_field_map = None
     new_model._json_fields = set()
     new_model._loaded_json_fields = set()
     new_model._bytes_fields = set()
