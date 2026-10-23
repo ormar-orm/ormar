@@ -246,6 +246,14 @@ database = DatabaseConnection(DATABASE_URL, pool_size=20, max_overflow=10)
     to run concurrently in one process, keeping the total across all processes below
     your database's connection limit (`max_connections` in PostgreSQL).
 
+Connections are opened lazily, on first use. To open them up front, so the first
+concurrent requests after startup don't wait for new connections, pass
+`min_connections` (at most `pool_size` are opened):
+
+```python
+database = DatabaseConnection(DATABASE_URL, pool_size=20, min_connections=20)
+```
+
 #### Native execution
 
 With `asyncpg`, `asyncmy` and `aiosqlite`, ormar runs its queries directly on the

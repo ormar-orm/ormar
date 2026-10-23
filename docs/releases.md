@@ -32,6 +32,11 @@
 
 ### ✨ Features
 
+* `DatabaseConnection(..., min_connections=N)` opens up to `N` pooled
+  connections (at most `pool_size`) on `connect()`, so the first concurrent
+  queries after startup don't pay for opening connections (about 30 ms each on
+  a local PostgreSQL). Defaults to 0, which keeps the lazy pool.
+
 * `asyncmy` is now the recommended MySQL driver (`mysql+asyncmy://...`) and
   `pip install ormar[mysql]` installs it alongside `aiomysql` and `pymysql`.
   On MySQL it is ~1.2× faster overall and up to 2.5× faster when fetching
