@@ -241,3 +241,13 @@ def test_bind_overrides_named_params(dialect_cls):
     overridden = compiler.bind(stmt, {"ormar_p0": 5})
     assert (default.args, overridden.args) == ([1], [5])
     assert default.plan is overridden.plan
+
+
+@pytest.mark.parametrize("dialect_cls", DIALECTS)
+def test_named_pk_bind_is_detected(dialect_cls):
+    stmt = items.insert().values(
+        {items.c.id: sa.bindparam("ormar_v0"), items.c.name: sa.bindparam("ormar_v1")}
+    )
+    bound = NativeCompiler(dialect_cls()).bind(stmt, {"ormar_v0": 7, "ormar_v1": "x"})
+    assert bound.plan.pk_param_key == "ormar_v0"
+    assert bound.params["ormar_v0"] == 7

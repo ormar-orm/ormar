@@ -16,16 +16,23 @@ from typing import (
     Sequence,
     TypeVar,
     Union,
+    cast,
 )
 
 from sqlalchemy import text, util
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.sql import Executable
+from sqlalchemy.sql.compiler import SQLCompiler
 
 from ormar.databases.native.adapters.base import ITERATE_BATCH_SIZE
 from ormar.databases.native.backend import NativeBackend
-from ormar.databases.native.compiler import BoundBatch, BoundStatement, is_plannable
+from ormar.databases.native.compiler import (
+    BoundBatch,
+    BoundStatement,
+    is_plannable,
+    pk_param_key,
+)
 from ormar.databases.native.errors import raise_translated
 
 Payload = TypeVar("Payload", BoundStatement, BoundBatch)
@@ -117,24 +124,29 @@ class QueryExecutor:
         )
         return result.scalar()
 
-    async def execute(self, query: Executable) -> Any:
+    async def execute(
+        self, query: Executable, params: Optional[Mapping[str, Any]] = None
+    ) -> Any:
         """
         Execute a query (INSERT, UPDATE, DELETE).
 
         :param query: SQLAlchemy query expression
+        :param params: values for named bind parameters of the query
         :return: For INSERT, the inserted primary key or ``None`` if the backend
             cannot return one (e.g. Oracle MySQL inserting into a
             non-AUTO_INCREMENT pk with a server default — no RETURNING support).
             For UPDATE/DELETE, the row count.
         """
-        bound = self._bind(query)
+        bound = self._bind(query=query, params=params)
         if bound is not None:
             assert self._native is not None
             return await self._run(
                 method=self._native.adapter.execute, payload=bound, args=bound.args
             )
 
-        result: CursorResult[Any] = await self._connection.execute(query)
+        result: CursorResult[Any] = await self._connection.execute(
+            statement=query, parameters=params
+        )
 
         # For INSERT queries, try to get the inserted primary key via the
         # dialect's best-available mechanism (RETURNING on PostgreSQL / SQLite
@@ -142,6 +154,13 @@ class QueryExecutor:
         # Do NOT fall back to rowcount here: rowcount is not a pk, and
         # returning it would silently corrupt `Model.pk` in `save()`.
         if result.context and result.context.isinsert:
+            # a primary key bound by name (insert templates bind it as
+            # ``ormar_v{i}``) is returned as bound: SQLAlchemy only looks the
+            # inserted key up under the column key, so it would miss it
+            compiled = cast(SQLCompiler, result.context.compiled)
+            key = pk_param_key(compiled=compiled) if params else None
+            if key is not None and params and params.get(key) is not None:
+                return params[key]
             if result.inserted_primary_key:
                 pk_value = result.inserted_primary_key[0]
                 if pk_value is not None:

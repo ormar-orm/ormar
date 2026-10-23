@@ -8,15 +8,15 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
 
 import ormar
-from ormar.queryset import templates
 from ormar.queryset.queries.query import Query
 from ormar.queryset.templates import (
     SlotBinder,
     TemplateCache,
     canonical_actions,
-    rendered_statement,
     template_cache_for,
 )
+from tests import cross_check
+from tests.cross_check import rendered_statement
 from tests.lifespan import init_tests
 from tests.settings import DATABASE_URL, create_config
 
@@ -109,7 +109,7 @@ async def test_no_binder_keeps_anonymous_parameters(connected):
 
 
 def key(queryset, variant=(), limit=None, offset=None, order_bys=None):
-    return queryset.template_key(variant, limit, offset, order_bys)
+    return queryset.select_cache_key(variant, limit, offset, order_bys)
 
 
 @pytest.mark.asyncio
@@ -202,7 +202,7 @@ def test_cache_is_bounded():
 @pytest.mark.asyncio
 async def test_hit_without_cross_check_skips_building(connected, monkeypatch):
     template_cache_for(Book).clear()
-    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    monkeypatch.setattr(cross_check, "ENABLED", False)
     Book.objects.filter(title="warm").build_select_template()
     counter = BuildCounter(Query.build_select_expression)
     monkeypatch.setattr(Query, "build_select_expression", counter)
@@ -215,9 +215,9 @@ async def test_hit_without_cross_check_skips_building(connected, monkeypatch):
 @pytest.mark.asyncio
 async def test_cross_check_detects_mismatch(connected, monkeypatch):
     template_cache_for(Book).clear()
-    monkeypatch.setattr(templates, "CROSS_CHECK", True)
+    monkeypatch.setattr(cross_check, "ENABLED", True)
     monkeypatch.setattr(
-        Book.objects.__class__, "template_key", lambda *args, **kwargs: ("same",)
+        Book.objects.__class__, "select_cache_key", lambda *args, **kwargs: ("same",)
     )
     Book.objects.filter(title="a").build_select_template()
     with pytest.raises(AssertionError, match="template"):
@@ -227,7 +227,7 @@ async def test_cross_check_detects_mismatch(connected, monkeypatch):
 @pytest.mark.asyncio
 async def test_cross_check_passes_for_matching_hit(connected, monkeypatch):
     template_cache_for(Book).clear()
-    monkeypatch.setattr(templates, "CROSS_CHECK", True)
+    monkeypatch.setattr(cross_check, "ENABLED", True)
     queryset = Book.objects.select_related("author").filter(title="a").limit(2)
     first = queryset.build_select_template()
     second = Book.objects.select_related("author").filter(title="b").limit(3)
@@ -250,7 +250,7 @@ async def run_reads(title):
 
 @pytest.mark.asyncio
 async def test_read_paths_use_templates(connected, monkeypatch):
-    monkeypatch.setattr(templates, "CROSS_CHECK", False)
+    monkeypatch.setattr(cross_check, "ENABLED", False)
     async with base_ormar_config.database.transaction(force_rollback=True):
         await Book.objects.create(title="warm", year=1)
         await run_reads("warm")

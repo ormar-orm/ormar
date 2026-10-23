@@ -15,7 +15,6 @@ from typing import (
 )
 
 import sqlalchemy
-from sqlalchemy import bindparam
 
 import ormar  # noqa I100
 from ormar import MultipleMatches, NoMatch
@@ -25,24 +24,30 @@ from ormar.exceptions import (
     QueryDefinitionError,
 )
 from ormar.models.row_registry import RowRegistry
-from ormar.queryset import FieldAccessor, FilterQuery, SelectAction, templates
+from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
 from ormar.queryset.actions.order_action import OrderAction
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
 from ormar.queryset.templates import (
-    SelectTemplate,
     SlotBinder,
+    StatementTemplate,
     aggregate_statement,
+    build_bulk_update,
+    cached_statement,
     canonical_actions,
-    clauses_shape,
+    clauses_cache_key,
     count_statement,
-    excludable_shape,
+    excludable_cache_key,
     exists_statement,
-    order_shape,
+    insert_statement,
+    insert_template,
+    order_cache_key,
     release_values,
     template_cache_for,
     template_params,
+    value_binds,
+    value_params,
 )
 from ormar.queryset.utils import (
     extract_access_chains,
@@ -327,27 +332,26 @@ class QuerySet(Generic[T]):
         offset: Optional[int] = None,
         order_bys: Optional[list] = None,
         wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]] = None,
-    ) -> SelectTemplate:
+    ) -> StatementTemplate:
         """
         Return the read statement for this queryset from the model's template
-        cache (building and caching it on the first call of a shape) together
+        cache (building and caching it on the first call of a cache key) together
         with the values to bind for this call::
 
             Author.objects.filter(name="a").build_select_template()
-            # -> SelectTemplate(statement=SELECT ... WHERE name = :ormar_p0,
-            #                   params={"ormar_p0": "a"})
+            # -> StatementTemplate(statement=SELECT ... WHERE name = :ormar_p0,
+            #                      params={"ormar_p0": "a"})
 
         Every read that runs a select (``all``, ``get``, ``first``,
         ``iterate``, ``values``, ``exists``, ``count`` and the aggregates)
         goes through here instead of ``build_select_expression``. A statement
         that is not a plain select passes ``wrap`` to build the executed
-        statement around the select and ``variant`` to keep its shape apart
+        statement around the select and ``variant`` to keep its cache key apart
         from the plain select's, e.g. ``count()`` passes
         ``variant=("count", distinct)`` and ``wrap=count_statement``.
 
-        On a cache hit nothing is built: only the shape and the values are
-        collected from the queryset. With ``templates.CROSS_CHECK`` on, a hit
-        also builds the statement without templates and compares the two.
+        On a cache hit nothing is built: only the cache key and the values are
+        collected from the queryset.
 
         :param variant: how the select is used (plain, count, aggregate, ...)
         :type variant: tuple
@@ -360,7 +364,7 @@ class QuerySet(Generic[T]):
         :param wrap: turns the built select into the executed statement
         :type wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]]
         :return: statement and values to bind
-        :rtype: SelectTemplate
+        :rtype: StatementTemplate
         """
         actions = canonical_actions(
             filter_clauses=self.filter_clauses, exclude_clauses=self.exclude_clauses
@@ -370,7 +374,7 @@ class QuerySet(Generic[T]):
             limit=limit if limit is not None else self.limit_count,
             offset=offset or self.query_offset,
         )
-        key = self.template_key(
+        key = self.select_cache_key(
             variant=variant, limit=limit, offset=offset, order_bys=order_bys
         )
         cache = template_cache_for(model_cls=self.model)
@@ -384,18 +388,7 @@ class QuerySet(Generic[T]):
                 wrap=wrap,
             )
             cache.put(key=key, statement=statement)
-        elif templates.CROSS_CHECK:
-            fresh = self.build_select_expression(
-                limit=limit, offset=offset, order_bys=order_bys
-            )
-            fresh = wrap(fresh) if wrap is not None else fresh
-            templates.assert_same_statement(
-                cached=statement,
-                fresh=fresh,
-                params=params,
-                dialect=self.model_config.database.dialect,
-            )
-        return SelectTemplate(statement, params)
+        return StatementTemplate(statement=statement, params=params)
 
     def build_template_statement(
         self,
@@ -406,7 +399,7 @@ class QuerySet(Generic[T]):
         wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]],
     ) -> Any:
         """
-        Build the read statement of a new shape with named value slots, the
+        Build the read statement of a new cache key with named value slots, the
         statement that is then cached.
 
         The select is built by ``build_select_expression`` as usual, but with a
@@ -436,9 +429,84 @@ class QuerySet(Generic[T]):
         release_values(statement=statement)
         return statement
 
-    def effective_limit_shape(self, limit: Optional[int]) -> tuple:
+    def build_write_template(self, kind: str, values: dict) -> StatementTemplate:
         """
-        Return how the effective limit shapes the SQL: whether a LIMIT is
+        Return the filtered update (``kind="update"``) or delete of this
+        queryset from the model's template cache, with the values to bind::
+
+            Author.objects.filter(score__lt=5).build_write_template(
+                kind="update", values={"name": "x"}
+            )
+            # -> UPDATE authors SET name=:ormar_v0 WHERE authors.score < :ormar_p0
+            #    {"ormar_p0": 5, "ormar_v0": "x"}
+
+        The cache key is the kind, the filter and exclude clauses (see
+        ``templates.clauses_cache_key``) and the updated column names. Updates and
+        deletes take no joins, ordering or limit, so nothing else changes their
+        SQL. Filter values are named by ``SlotBinder`` like in reads, updated
+        values like in single-row writes (``ormar_v{i}``).
+
+        :param kind: ``"update"`` or ``"delete"``
+        :type kind: str
+        :param values: updated values by column name (empty for delete)
+        :type values: dict
+        :return: statement and values to bind
+        :rtype: StatementTemplate
+        """
+        actions = canonical_actions(
+            filter_clauses=self.filter_clauses, exclude_clauses=self.exclude_clauses
+        )
+        names = tuple(sorted(values))
+        params = {
+            **template_params(actions=actions, limit=None, offset=None),
+            **value_params(names=names, values=values),
+        }
+        key = (
+            kind,
+            clauses_cache_key(clauses=self.filter_clauses),
+            clauses_cache_key(clauses=self.exclude_clauses),
+            names,
+        )
+        cache = template_cache_for(model_cls=self.model)
+        statement = cache.get(key)
+        if statement is None:
+            statement = self.build_write_statement(
+                kind=kind, names=names, binder=SlotBinder(actions=actions)
+            )
+            release_values(statement=statement)
+            cache.put(key=key, statement=statement)
+        return StatementTemplate(statement=statement, params=params)
+
+    def build_write_statement(self, kind: str, names: tuple, binder: SlotBinder) -> Any:
+        """
+        Build the filtered update or delete with named slots for the updated
+        values and the filter values.
+
+        :param kind: ``"update"`` or ``"delete"``
+        :type kind: str
+        :param names: updated column names, sorted
+        :type names: tuple
+        :param binder: names filter values for templates
+        :type binder: SlotBinder
+        :return: statement to execute
+        :rtype: Any
+        """
+        table = self.table
+        expr: Any
+        if kind == "update":
+            expr = table.update().values(value_binds(table=table, names=names))
+        else:
+            expr = table.delete()
+        expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
+            expr=expr
+        )
+        return FilterQuery(
+            filter_clauses=self.exclude_clauses, exclude=True, binder=binder
+        ).apply(expr=expr)
+
+    def limit_cache_key(self, limit: Optional[int]) -> tuple:
+        """
+        Return how the effective limit changes the SQL: whether a LIMIT is
         applied at all, and whether it is non-zero (only a non-zero limit with
         ``select_related`` builds the pagination subquery). The limit value
         itself is bound, so ``limit(5)`` and ``limit(10)`` share a statement::
@@ -455,7 +523,7 @@ class QuerySet(Generic[T]):
         effective = limit if limit is not None else self.limit_count
         return effective is not None, bool(effective)
 
-    def template_key(
+    def select_cache_key(
         self,
         variant: tuple,
         limit: Optional[int],
@@ -463,18 +531,18 @@ class QuerySet(Generic[T]):
         order_bys: Optional[list],
     ) -> tuple:
         """
-        Return the shape of the statement ``build_select_expression`` would build
+        Return the cache key of the statement ``build_select_expression`` would build
         with the given arguments: everything that changes its SQL text and none
         of the bound values. Two querysets with the same key must build the
         same SQL, or one would run the other's statement, so each part covers
         one input of the build:
 
         * ``variant`` - plain select, exists, count or aggregate
-        * filter and exclude clauses - see ``clauses_shape``
+        * filter and exclude clauses - see ``clauses_cache_key``
         * ``select_related`` - the joins
-        * selected fields - see ``excludable_shape``
-        * ordering - see ``order_shape``
-        * limit and offset presence - see ``effective_limit_shape``
+        * selected fields - see ``excludable_cache_key``
+        * ordering - see ``order_cache_key``
+        * limit and offset presence - see ``limit_cache_key``
         * ``limit_raw_sql`` - limit on raw rows instead of main models
 
         Any new queryset option that changes the built SQL has to be added
@@ -488,17 +556,17 @@ class QuerySet(Generic[T]):
         :type offset: Optional[int]
         :param order_bys: order actions passed to ``build_select_expression``
         :type order_bys: Optional[list]
-        :return: hashable statement shape
+        :return: hashable cache key of the statement
         :rtype: tuple
         """
         return (
             variant,
-            clauses_shape(clauses=self.filter_clauses),
-            clauses_shape(clauses=self.exclude_clauses),
+            clauses_cache_key(clauses=self.filter_clauses),
+            clauses_cache_key(clauses=self.exclude_clauses),
             tuple(self._select_related),
-            excludable_shape(excludable=self._excludable),
-            order_shape(order_bys=order_bys or self.order_bys),
-            self.effective_limit_shape(limit=limit),
+            excludable_cache_key(excludable=self._excludable),
+            order_cache_key(order_bys=order_bys or self.order_bys),
+            self.limit_cache_key(limit=limit),
             bool(offset or self.query_offset),
             self.limit_sql_raw,
         )
@@ -1139,15 +1207,15 @@ class QuerySet(Generic[T]):
         updates = self.model.populate_onupdate_value(updates)
         updates = self.model.validate_enums(updates)
         updates = self.model.translate_columns_to_aliases(updates)
+        unconsumed = [name for name in updates if name not in self.table.c]
+        if unconsumed:
+            raise sqlalchemy.exc.CompileError(
+                f"Unconsumed column names: {', '.join(unconsumed)}"
+            )
 
-        expr = FilterQuery(filter_clauses=self.filter_clauses).apply(
-            self.table.update().values(**updates)  # type: ignore
-        )
-        expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
-            expr
-        )
+        template = self.build_write_template(kind="update", values=updates)
         async with self.model_config.database.get_query_executor() as executor:
-            return await executor.execute(expr)
+            return await executor.execute(template.statement, template.params)
 
     async def delete(self, *args: Any, each: bool = False, **kwargs: Any) -> int:
         """
@@ -1171,14 +1239,9 @@ class QuerySet(Generic[T]):
                 "If you want to delete all rows use delete(each=True)"
             )
         self._verify_no_related_filters("delete")
-        expr = FilterQuery(filter_clauses=self.filter_clauses).apply(
-            self.table.delete()  # type: ignore
-        )
-        expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
-            expr
-        )
+        template = self.build_write_template(kind="delete", values={})
         async with self.model_config.database.get_query_executor() as executor:
-            return await executor.execute(expr)
+            return await executor.execute(template.statement, template.params)
 
     def paginate(self, page: int, page_size: int = 20) -> "QuerySet[T]":
         """
@@ -1628,16 +1691,25 @@ class QuerySet(Generic[T]):
                 await asyncio.sleep(0)
 
         # rows with different key sets (explicit vs omitted pk or server_default)
-        # cannot share one VALUES clause, so insert each key set separately;
-        # only a split insert needs a transaction to stay atomic
+        # need different inserts, so each key set runs its own insert template;
+        # anything beyond a single one-row insert runs in one transaction
         rows_by_keys: dict[frozenset[str], list[dict]] = {}
         for row in ready_objects:
             rows_by_keys.setdefault(frozenset(row), []).append(row)
+        several_statements = len(rows_by_keys) > 1 or len(ready_objects) > 1
         async with self.model_config.database.get_query_executor(
-            transactional=len(rows_by_keys) > 1
+            transactional=several_statements
         ) as executor:
             for rows in rows_by_keys.values():
-                await executor.execute(self.table.insert().values(rows))
+                if len(rows) == 1:
+                    template = insert_template(model_cls=self.model, values=rows[0])
+                    await executor.execute(template.statement, template.params)
+                    continue
+                names = tuple(sorted(rows[0]))
+                await executor.execute_many(
+                    insert_statement(model_cls=self.model, names=names),
+                    [value_params(names=names, values=row) for row in rows],
+                )
 
         for obj in objects:
             obj.set_save_status(True)
@@ -1713,15 +1785,16 @@ class QuerySet(Generic[T]):
         ]
         pk_column_name = self.model.get_column_alias(pk_name)
         table_columns = [c.name for c in self.model_config.table.c]
-        expr = self.table.update().where(
-            pk_column == bindparam("new_" + pk_column_name)
+        updated = tuple(
+            k for k in columns if k != pk_column_name and k in table_columns
         )
-        expr = expr.values(
-            **{
-                k: bindparam("new_" + k)
-                for k in columns
-                if k != pk_column_name and k in table_columns
-            }
+        expr = cached_statement(
+            model_cls=self.model,
+            key=("bulk_update", updated),
+            builder=build_bulk_update,
+            table=self.table,
+            pk_column=pk_column,
+            columns=updated,
         )
         # Multi-row execute_many: run in an explicit transaction so all rows
         # share a single COMMIT instead of one per row under AUTOCOMMIT.

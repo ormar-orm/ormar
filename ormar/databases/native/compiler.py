@@ -35,6 +35,7 @@ from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.sql import Executable
 from sqlalchemy.sql.compiler import SQLCompiler
 from sqlalchemy.sql.ddl import ExecutableDDLElement
+from sqlalchemy.sql.elements import BindParameter
 
 ResultProcessor = Optional[Callable[[Any], Any]]
 
@@ -508,6 +509,11 @@ def pk_param_key(compiled: SQLCompiler) -> Optional[str]:
         users.insert().values(id=3, name="a")  # -> "id"
         users.insert().values(name="a")  # -> None
 
+    ormar's cached INSERT templates bind the primary key under their own
+    parameter name, which is returned instead of the column key::
+
+        users.insert().values(id=bindparam("ormar_id"))  # -> "ormar_id"
+
     :param compiled: compiled insert statement
     :type compiled: SQLCompiler
     :return: bind parameter key of the primary key, or None
@@ -517,6 +523,12 @@ def pk_param_key(compiled: SQLCompiler) -> Optional[str]:
     primary_key = list(table.primary_key.columns)
     if len(primary_key) != 1:  # pragma: no cover
         return None
+    values = getattr(compiled.statement, "_values", None) or {}
+    for column, value in values.items():
+        column_key = column if isinstance(column, str) else column.key
+        named_bind = isinstance(value, BindParameter) and not value.unique
+        if column_key == primary_key[0].key and named_bind:
+            return str(value.key)
     key = compiled._within_exec_param_key_getter(primary_key[0])
     return key if key in compiled.binds else None
 
