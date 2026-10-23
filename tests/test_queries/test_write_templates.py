@@ -9,13 +9,13 @@ import sqlalchemy as sa
 import ormar
 from ormar.queryset.templates import (
     build_pk_select,
-    cross_check,
     delete_template,
     insert_template,
     pk_select_template,
     template_cache_for,
     update_template,
 )
+from tests import cross_check
 from tests.lifespan import init_tests
 from tests.settings import create_config
 

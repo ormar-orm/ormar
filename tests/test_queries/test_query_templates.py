@@ -13,10 +13,10 @@ from ormar.queryset.templates import (
     SlotBinder,
     TemplateCache,
     canonical_actions,
-    cross_check,
     template_cache_for,
 )
-from ormar.queryset.templates.cross_check import rendered_statement
+from tests import cross_check
+from tests.cross_check import rendered_statement
 from tests.lifespan import init_tests
 from tests.settings import DATABASE_URL, create_config
 

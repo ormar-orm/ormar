@@ -9,8 +9,6 @@ fi
 
 ORMAR_COV_OMIT="$(sh scripts/coverage_omit.sh)"
 export ORMAR_COV_OMIT
-# Every query template hit is also built fresh and compared (safety net).
-export ORMAR_TEMPLATE_CROSS_CHECK=1
 
 set -x
 

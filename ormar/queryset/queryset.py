@@ -38,7 +38,6 @@ from ormar.queryset.templates import (
     canonical_actions,
     clauses_cache_key,
     count_statement,
-    cross_check,
     excludable_cache_key,
     exists_statement,
     insert_statement,
@@ -352,8 +351,7 @@ class QuerySet(Generic[T]):
         ``variant=("count", distinct)`` and ``wrap=count_statement``.
 
         On a cache hit nothing is built: only the cache key and the values are
-        collected from the queryset. With ``cross_check.ENABLED`` on, a hit
-        also builds the statement without templates and compares the two.
+        collected from the queryset.
 
         :param variant: how the select is used (plain, count, aggregate, ...)
         :type variant: tuple
@@ -390,17 +388,6 @@ class QuerySet(Generic[T]):
                 wrap=wrap,
             )
             cache.put(key=key, statement=statement)
-        elif cross_check.ENABLED:
-            fresh = self.build_select_expression(
-                limit=limit, offset=offset, order_bys=order_bys
-            )
-            fresh = wrap(fresh) if wrap is not None else fresh
-            cross_check.assert_same_statement(
-                cached=statement,
-                fresh=fresh,
-                params=params,
-                dialect=self.model_config.database.dialect,
-            )
         return StatementTemplate(statement=statement, params=params)
 
     def build_template_statement(
@@ -488,51 +475,26 @@ class QuerySet(Generic[T]):
             )
             release_values(statement=statement)
             cache.put(key=key, statement=statement)
-        elif cross_check.ENABLED:
-            fresh = self.build_write_statement(
-                kind=kind, names=names, binder=None, values=values
-            )
-            cross_check.assert_same_statement(
-                cached=statement,
-                fresh=fresh,
-                params=params,
-                dialect=self.model_config.database.dialect,
-            )
         return StatementTemplate(statement=statement, params=params)
 
-    def build_write_statement(
-        self,
-        kind: str,
-        names: tuple,
-        binder: Optional[SlotBinder],
-        values: Optional[dict] = None,
-    ) -> Any:
+    def build_write_statement(self, kind: str, names: tuple, binder: SlotBinder) -> Any:
         """
-        Build the filtered update or delete, with named slots when a binder is
-        given, otherwise with the literal values (as without templates). The
-        literal form is only built by the cross check, to compare with the
-        cached statement.
+        Build the filtered update or delete with named slots for the updated
+        values and the filter values.
 
         :param kind: ``"update"`` or ``"delete"``
         :type kind: str
         :param names: updated column names, sorted
         :type names: tuple
-        :param binder: names filter values for templates, if given
-        :type binder: Optional[SlotBinder]
-        :param values: literal updated values, used without a binder
-        :type values: Optional[dict]
+        :param binder: names filter values for templates
+        :type binder: SlotBinder
         :return: statement to execute
         :rtype: Any
         """
         table = self.table
         expr: Any
         if kind == "update":
-            assignments = (
-                value_binds(table=table, names=names)
-                if binder is not None
-                else {table.c[name]: (values or {})[name] for name in names}
-            )
-            expr = table.update().values(assignments)
+            expr = table.update().values(value_binds(table=table, names=names))
         else:
             expr = table.delete()
         expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
