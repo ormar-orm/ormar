@@ -246,6 +246,39 @@ database = DatabaseConnection(DATABASE_URL, pool_size=20, max_overflow=10)
     to run concurrently in one process, keeping the total across all processes below
     your database's connection limit (`max_connections` in PostgreSQL).
 
+Connections are opened lazily, on first use. To open them up front, so the first
+concurrent requests after startup don't wait for new connections, pass
+`min_connections` (at most `pool_size` are opened):
+
+```python
+database = DatabaseConnection(DATABASE_URL, pool_size=20, min_connections=20)
+```
+
+#### Native execution
+
+With `asyncpg`, `asyncmy` and `aiosqlite`, ormar runs its queries directly on the
+driver connection instead of through SQLAlchemy's execution layer, which removes a
+noticeable amount of per-query overhead. SQLAlchemy still builds and compiles every
+statement, converts values with its column types, manages the connection pool and
+transactions, and Alembic is unaffected. Results and raised exceptions
+(`sqlalchemy.exc.IntegrityError` and friends) are the same as on the SQLAlchemy path.
+Other drivers (`aiopg`, `aiomysql`) always use SQLAlchemy's execution layer.
+
+Because natively executed statements bypass SQLAlchemy's engine, engine events such as
+`before_cursor_execute` and SQL logging with `echo=True` do not see them. To go back
+to SQLAlchemy's execution layer, e.g. while debugging, pass `native_execution=False`:
+
+```python
+database = DatabaseConnection(DATABASE_URL, native_execution=False)
+```
+
+!!!note
+    With `asyncpg` behind PgBouncer in transaction-pooling mode, use
+    `native_execution=False` together with SQLAlchemy's documented PgBouncer settings
+    (`prepared_statement_name_func` and a zero `prepared_statement_cache_size`).
+    Native execution uses asyncpg's own named prepared statements, which such poolers do
+    not support.
+
 #### Sqlalchemy
 
 Second dependency is sqlalchemy `MetaData` instance.
