@@ -13,7 +13,7 @@ import pytest_asyncio
 import ormar
 from ormar.models.excludable import ExcludableItems
 from ormar.queryset import queryset
-from ormar.queryset.templates import cross_check
+from tests import cross_check
 from tests.lifespan import init_tests
 from tests.settings import create_config
 

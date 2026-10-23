@@ -20,7 +20,6 @@ from ormar.models import NewBaseModel  # noqa: I202
 from ormar.models.excludable import ExcludableItems
 from ormar.models.helpers.models import group_related_list
 from ormar.models.row_registry import RegistryKey, RowRegistry, selects_multi_relation
-from ormar.queryset.templates import cross_check
 from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -242,45 +241,36 @@ class ModelRow(NewBaseModel):
         through ``_construct_with_excluded``, which validates the values,
         registers relations and raises for excluded required fields.
 
-        With ``cross_check.ENABLED`` on (test suite) a trusted build is also
-        built the regular way, and both must hold the same values of the same
-        types and the same set fields.
-
         :param plan: extraction plan of the row position
         :type plan: RowExtractionPlan
         :param item: field values of the row
         :type item: dict[str, Any]
-        :raises AssertionError: when trusted and regular builds differ
         :return: model instance
         :rtype: ModelRow
         """
-        if (
-            not cls.trusted_row_construction()
-            or not cls._required_row_fields.issubset(item)
-            or any(item.get(name) is not None for name in cls._row_relation_names)
-        ):
-            return cls._construct_with_excluded(
-                excluded=plan.excluded_field_names, **item
-            )
-        if not cross_check.ENABLED:
+        if cls.constructs_from_row(item=item):
             return cls._construct_from_row(
                 excluded=plan.excluded_field_names, values=item
             )
-        built = cls._construct_with_excluded(excluded=plan.excluded_field_names, **item)
-        instance = cls._construct_from_row(
-            excluded=plan.excluded_field_names, values=item
+        return cls._construct_with_excluded(excluded=plan.excluded_field_names, **item)
+
+    @classmethod
+    def constructs_from_row(cls, item: dict[str, Any]) -> bool:
+        """
+        Return whether the instance of a row is built directly from the row
+        values: the model allows ``trusted_row_construction()``, the row holds
+        every required field and no related model.
+
+        :param item: field values of the row
+        :type item: dict[str, Any]
+        :return: whether ``_construct_from_row`` builds the instance
+        :rtype: bool
+        """
+        return (
+            cls.trusted_row_construction()
+            and cls._required_row_fields.issubset(item)
+            and not any(item.get(name) is not None for name in cls._row_relation_names)
         )
-        if (
-            instance.__dict__ != built.__dict__
-            or cross_check.value_types(values=instance.__dict__)
-            != cross_check.value_types(values=built.__dict__)
-            or instance.__pydantic_fields_set__ != built.__pydantic_fields_set__
-        ):
-            raise AssertionError(
-                f"Trusted row construction mismatch for {cls.__name__}: "
-                f"{instance.__dict__} != {built.__dict__}"
-            )
-        return instance
 
     @classmethod
     def _materialize_row(  # noqa: CFQ002

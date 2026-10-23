@@ -13,7 +13,6 @@ from ormar.databases.native import compiler
 from ormar.models import NewBaseModel
 from ormar.queryset.templates import (
     build_pk_select,
-    cross_check,
     delete_template,
     insert_statement,
     insert_template,
@@ -21,6 +20,7 @@ from ormar.queryset.templates import (
     template_cache_for,
     update_template,
 )
+from tests import cross_check
 from tests.lifespan import init_tests
 from tests.settings import create_config
 

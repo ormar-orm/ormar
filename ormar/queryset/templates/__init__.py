@@ -38,10 +38,6 @@ all their rows.
 Running the same statement object every time also lets the native compiler
 reuse its plan for it instead of compiling the statement again.
 
-With ``ORMAR_TEMPLATE_CROSS_CHECK=1`` (set by the test suite) every cache hit
-also builds the statement the old way and fails if the two would run
-different SQL, values or bind types.
-
 The package is split by role:
 
 - ``cache`` - the per-model template cache
@@ -49,10 +45,8 @@ The package is split by role:
 - ``slots`` - named bind parameters and the values collected per call
 - ``reads`` - statements wrapped around a select, clean-up of templates
 - ``writes`` - single-row write templates and bulk statements
-- ``cross_check`` - the test-suite comparison with statements built the old way
 """
 
-from ormar.queryset.templates import cross_check
 from ormar.queryset.templates.cache import (
     StatementTemplate,
     TemplateCache,
@@ -116,7 +110,6 @@ __all__ = [
     "canonical_actions",
     "clauses_cache_key",
     "count_statement",
-    "cross_check",
     "delete_template",
     "excludable_cache_key",
     "exists_statement",

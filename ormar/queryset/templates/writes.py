@@ -12,7 +12,6 @@ Each runs one cached statement per model and set of written columns::
 import weakref
 from typing import (
     Any,
-    Dict,
     Mapping,
     Tuple,
     Type,
@@ -21,7 +20,6 @@ from typing import (
 import sqlalchemy
 from sqlalchemy.sql import Executable
 
-from ormar.queryset.templates import cross_check
 from ormar.queryset.templates.cache import StatementTemplate, cached_statement
 from ormar.queryset.templates.slots import (
     PK_SLOT,
@@ -52,26 +50,6 @@ def primary_key_column(model_cls: Type[Any]) -> sqlalchemy.Column:
         alias = model_cls.get_column_alias(field_name=model_cls.ormar_config.pkname)
         column = PK_COLUMNS.setdefault(model_cls, model_cls.ormar_config.table.c[alias])
     return column
-
-
-def literal_values(
-    table: sqlalchemy.Table, names: Tuple[str, ...], values: Mapping[str, Any]
-) -> Dict[Any, Any]:
-    """
-    Return the written values keyed by column, in the template's column order.
-    Only the cross check uses it, to build the statement with literal values
-    as without templates.
-
-    :param table: written table
-    :type table: sqlalchemy.Table
-    :param names: written column names, sorted
-    :type names: Tuple[str, ...]
-    :param values: written values by column name
-    :type values: Mapping[str, Any]
-    :return: value per column
-    :rtype: Dict[Any, Any]
-    """
-    return {table.c[name]: values[name] for name in names}
 
 
 def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:
@@ -228,14 +206,6 @@ def insert_template(
     names = tuple(sorted(values))
     statement = insert_statement(model_cls=model_cls, names=names)
     params = value_params(names=names, values=values)
-    table = model_cls.ormar_config.table
-    if cross_check.ENABLED:
-        literal = table.insert().values(
-            literal_values(table=table, names=names, values=values)
-        )
-        cross_check.cross_check_write(
-            model_cls=model_cls, statement=statement, literal=literal, params=params
-        )
     return StatementTemplate(statement=statement, params=params)
 
 
@@ -271,15 +241,6 @@ def update_template(
         pk_column=pk_column,
     )
     params = {**value_params(names=names, values=values), PK_SLOT: pk}
-    if cross_check.ENABLED:
-        literal = (
-            table.update()
-            .values(literal_values(table=table, names=names, values=values))
-            .where(pk_column == pk)
-        )
-        cross_check.cross_check_write(
-            model_cls=model_cls, statement=statement, literal=literal, params=params
-        )
     return StatementTemplate(statement=statement, params=params)
 
 
@@ -307,13 +268,6 @@ def delete_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
         pk_column=pk_column,
     )
     params = {PK_SLOT: pk}
-    if cross_check.ENABLED:
-        cross_check.cross_check_write(
-            model_cls=model_cls,
-            statement=statement,
-            literal=table.delete().where(pk_column == pk),
-            params=params,
-        )
     return StatementTemplate(statement=statement, params=params)
 
 
@@ -342,11 +296,4 @@ def pk_select_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
         pk_column=pk_column,
     )
     params = {PK_SLOT: pk}
-    if cross_check.ENABLED:
-        cross_check.cross_check_write(
-            model_cls=model_cls,
-            statement=statement,
-            literal=table.select().where(pk_column == pk),
-            params=params,
-        )
     return StatementTemplate(statement=statement, params=params)
