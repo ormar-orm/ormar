@@ -129,6 +129,14 @@ A valid list of `Model` objects needs to be passed.
 --8<-- "../docs_src/queries/docs004.py"
 ```
 
+!!!note
+    Objects are inserted with one `INSERT` per distinct set of provided fields.
+    If some objects set a value that others leave out (e.g. an explicit primary key
+    or a field with `server_default`), they are inserted in separate statements
+    inside one transaction, so generated primary keys may not follow the order
+    of the passed list. If you need that order, split such objects into separate
+    `bulk_create()` calls.
+
 ## Model methods
 
 Each model instance have a set of methods to `save`, `update` or `load` itself.

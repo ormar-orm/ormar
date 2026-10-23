@@ -1735,6 +1735,10 @@ class QuerySet(Generic[T]):
 
         A valid list of `Model` objects needs to be passed.
 
+        Objects that provide different sets of fields (e.g. an explicit pk or a
+        server_default value) are inserted in separate statements, so generated
+        primary keys may not follow the order of the passed list.
+
         Bulk operations do not send signals.
 
         :param objects: list of ormar models already initialized and ready to save.

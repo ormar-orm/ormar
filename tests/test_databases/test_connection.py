@@ -229,6 +229,37 @@ async def test_bulk_update_is_atomic_under_autocommit():
 
 
 @pytest.mark.asyncio
+async def test_min_connections_are_opened_on_connect():
+    database = DatabaseConnection(ASYNC_DATABASE_URL, min_connections=3, pool_size=5)
+    await database.connect()
+    try:
+        assert database.engine.pool.checkedin() == 3
+        assert database.engine.pool.checkedout() == 0
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_min_connections_are_capped_at_pool_size():
+    database = DatabaseConnection(ASYNC_DATABASE_URL, min_connections=8, pool_size=2)
+    await database.connect()
+    try:
+        assert database.engine.pool.checkedin() == 2
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_pool_is_lazy_without_min_connections():
+    database = DatabaseConnection(ASYNC_DATABASE_URL)
+    await database.connect()
+    try:
+        assert database.engine.pool.checkedin() == 0
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_executor_reconnects_invalidated_connection():
     database = base_ormar_config.database
     async with database:
