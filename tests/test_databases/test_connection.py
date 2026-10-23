@@ -3,6 +3,7 @@ from sqlalchemy import event, text
 
 import ormar
 from ormar.databases.connection import DatabaseConnection
+from ormar.databases.query_executor import QueryExecutor
 from tests.lifespan import init_tests
 from tests.settings import (
     ASYNC_DATABASE_URL,
@@ -225,3 +226,14 @@ async def test_bulk_update_is_atomic_under_autocommit():
 
         reloaded = await Team.objects.filter(id__in=ids).all()
         assert {t.name for t in reloaded} == {"bulk-X", "bulk-Y", "bulk-Z"}
+
+
+@pytest.mark.asyncio
+async def test_executor_reconnects_invalidated_connection():
+    database = base_ormar_config.database
+    async with database:
+        async with database.engine.connect() as connection:
+            await connection.invalidate()
+            executor = QueryExecutor(connection, database.native_backend)
+            rows = await executor.fetch_all(Team.ormar_config.table.select())
+            assert isinstance(rows, list)

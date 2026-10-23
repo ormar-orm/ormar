@@ -56,6 +56,29 @@ from ormar.queryset.utils import (
 )
 from ormar.queryset.values_columns import values_column_map
 
+# rows built between yields to the event loop when materializing flat rows
+FLAT_ROWS_CHUNK = 500
+
+
+def dump_for_save(obj: "Model") -> dict:
+    """
+    Return the field values of a model with ``flat_row_model()`` for
+    ``bulk_create``.
+
+    Without relations, converted fields or custom serializers, pydantic's
+    ``model_dump()`` returns the same values as a copy of the ``__dict__``,
+    at a fraction of the cost::
+
+        dump_for_save(obj=Author(id=1, name="a"))  # -> {"id": 1, "name": "a"}
+
+    :param obj: model to save
+    :type obj: Model
+    :return: field values
+    :rtype: dict
+    """
+    return dict(obj.__dict__)
+
+
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
     from ormar.models import T
@@ -209,6 +232,8 @@ class QuerySet(Generic[T]):
         """
         if plan_cache is None:
             plan_cache = {}
+        if not self._select_related and self.model.trusted_row_construction():
+            return await self._process_flat_rows(rows=rows, plan_cache=plan_cache)
         registry = RowRegistry()
         result_rows = []
         for i, row in enumerate(rows):
@@ -232,6 +257,71 @@ class QuerySet(Generic[T]):
                 excludable=self._excludable,
             )
         return cast(list["T"], result_rows)
+
+    async def _process_flat_rows(self, rows: list, plan_cache: dict) -> list["T"]:
+        """
+        Build models of rows without joined relations of models with
+        ``trusted_row_construction()`` (see ``ModelRow.from_flat_rows``).
+
+        The rows are built in chunks of ``FLAT_ROWS_CHUNK`` with a yield to the
+        event loop in between, so a large result does not block other tasks
+        for the whole time it takes to build.
+
+        :param rows: list of database rows from query result
+        :type rows: list
+        :param plan_cache: row-extraction plan cache
+        :type plan_cache: dict
+        :return: list of models
+        :rtype: list[Model]
+        """
+        result: list["T"] = []
+        fallback = functools.partial(
+            self._model_from_row, registry=RowRegistry(), plan_cache=plan_cache
+        )
+        for start in range(0, len(rows), FLAT_ROWS_CHUNK):
+            if start:
+                await asyncio.sleep(0)
+            chunk = rows[start : start + FLAT_ROWS_CHUNK]
+            result.extend(
+                cast(
+                    list["T"],
+                    self.model.from_flat_rows(
+                        rows=chunk,
+                        excludable=self._excludable,
+                        plan_cache=plan_cache,
+                        fallback=fallback,
+                    ),
+                )
+            )
+        return result
+
+    def _model_from_row(
+        self, row: Any, registry: RowRegistry, plan_cache: dict
+    ) -> "Model":
+        """
+        Build the model of one row through ``from_row``, sharing the query's
+        identity map (rows of the main model always hold its pk). The fallback
+        of ``from_flat_rows`` for rows holding a related value, which need the
+        regular path to register the relation.
+
+        :param row: database row
+        :type row: Any
+        :param registry: identity map of the query
+        :type registry: RowRegistry
+        :param plan_cache: row-extraction plan cache
+        :type plan_cache: dict
+        :return: model of the row
+        :rtype: Model
+        """
+        return self.model.from_row(  # type: ignore[return-value]
+            row=row,
+            select_related=self._select_related,
+            excludable=self._excludable,
+            source_model=self.model,
+            proxy_source_model=self.proxy_source_model,
+            plan_cache=plan_cache,
+            registry=registry,
+        )
 
     def _resolve_filter_groups(
         self, groups: Any
@@ -1685,19 +1775,25 @@ class QuerySet(Generic[T]):
             raise ModelListEmptyError("Bulk create objects are empty!")
 
         ready_objects = []
+        trusted = self.model.flat_row_model()
         for i, obj in enumerate(objects):
-            ready_objects.append(obj.prepare_model_to_save(obj.model_dump()))
+            values = dump_for_save(obj=obj) if trusted else obj.model_dump()
+            ready_objects.append(obj.prepare_model_to_save(new_kwargs=values))
             if i % 100 == 99:  # pragma: no cover
                 await asyncio.sleep(0)
 
         # rows with different key sets (explicit vs omitted pk or server_default)
         # need different inserts, so each key set runs its own insert template;
-        # anything beyond a single one-row insert runs in one transaction
+        # anything beyond a single statement (or a lone batch the driver runs
+        # atomically) runs in one transaction
         rows_by_keys: dict[frozenset[str], list[dict]] = {}
         for row in ready_objects:
             rows_by_keys.setdefault(frozenset(row), []).append(row)
-        several_statements = len(rows_by_keys) > 1 or len(ready_objects) > 1
-        async with self.model_config.database.get_query_executor(
+        database = self.model_config.database
+        several_statements = len(rows_by_keys) > 1 or (
+            len(ready_objects) > 1 and not database.atomic_execute_many
+        )
+        async with database.get_query_executor(
             transactional=several_statements
         ) as executor:
             for rows in rows_by_keys.values():

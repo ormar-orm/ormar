@@ -55,6 +55,9 @@ class DriverAdapter(abc.ABC):
     """
 
     driver_errors: Tuple[Type[BaseException], ...]
+    # True when the driver's executemany is all-or-nothing even outside a
+    # transaction, so a single-batch bulk_create can skip opening one
+    atomic_execute_many = False
 
     def __init__(self, dialect: Dialect) -> None:
         """

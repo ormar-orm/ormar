@@ -1,6 +1,15 @@
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, AbstractSet, Any, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    AbstractSet,
+    Any,
+    Callable,
+    Optional,
+    Sequence,
+    Union,
+    cast,
+)
 
 try:
     from sqlalchemy.engine.result import ResultProxy  # type: ignore
@@ -156,6 +165,114 @@ class ModelRow(NewBaseModel):
         return instance
 
     @classmethod
+    def from_flat_rows(
+        cls,
+        rows: Sequence[Any],
+        excludable: ExcludableItems,
+        plan_cache: Optional[PlanCache],
+        fallback: Callable[[Any], "Model"],
+    ) -> list["Model"]:
+        """
+        Build models of a query without joined relations of a model with
+        ``trusted_row_construction()``.
+
+        Without joins every row is one model, so what ``from_row`` does per row
+        is not needed here: looking up the extraction plan, the identity map,
+        building nested models and merging rows of the same model. One plan
+        is looked up for all the rows and each row becomes a model directly::
+
+            await Author.objects.all()
+            # rows [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+            # -> [Author(id=1, name="a"), Author(id=2, name="b")]
+
+        Rows holding a related value (a foreign key that needs registering on
+        both sides) are built by ``fallback`` instead. Repeated primary keys
+        (views or tables without a unique pk) keep the first row, like merging
+        does.
+
+        :param rows: database rows of the main model only
+        :type rows: Sequence[Any]
+        :param excludable: structure of fields to include and exclude
+        :type excludable: ExcludableItems
+        :param plan_cache: per-queryset plan cache
+        :type plan_cache: Optional[PlanCache]
+        :param fallback: builds the model of a row with related values
+        :type fallback: Callable[[Any], Model]
+        :return: models built from the rows
+        :rtype: list[Model]
+        """
+        plan = cls.get_or_build_row_plan(
+            table_prefix="", excludable=excludable, plan_cache=plan_cache
+        )
+        mappings = plan.column_mappings
+        relation_names = cls._row_relation_names
+        pk_name = plan.pk_field_name
+        seen: set[Any] = set()
+        instances: list["Model"] = []
+        for row in rows:
+            item = {field_name: row[column] for column, field_name in mappings}
+            pk = item[pk_name]
+            if pk in seen:
+                continue
+            seen.add(pk)
+            if relation_names and any(
+                item.get(name) is not None for name in relation_names
+            ):
+                instance = fallback(row)
+            else:
+                instance = cast(
+                    "Model", cls.construct_row_instance(plan=plan, item=item)
+                )
+                object.__setattr__(instance, "_orm_saved", True)
+            object.__setattr__(instance, "__ormar_excludable__", excludable)
+            instances.append(instance)
+        return instances
+
+    @classmethod
+    def construct_row_instance(
+        cls, plan: RowExtractionPlan, item: dict[str, Any]
+    ) -> "ModelRow":
+        """
+        Build the model instance of one row.
+
+        For models with ``trusted_row_construction()`` the instance is built
+        directly from the row values (``_construct_from_row``), as long as the
+        row holds every required field and no related model. Otherwise it goes
+        through ``_construct_with_excluded``, which validates the values,
+        registers relations and raises for excluded required fields.
+
+        :param plan: extraction plan of the row position
+        :type plan: RowExtractionPlan
+        :param item: field values of the row
+        :type item: dict[str, Any]
+        :return: model instance
+        :rtype: ModelRow
+        """
+        if cls.constructs_from_row(item=item):
+            return cls._construct_from_row(
+                excluded=plan.excluded_field_names, values=item
+            )
+        return cls._construct_with_excluded(excluded=plan.excluded_field_names, **item)
+
+    @classmethod
+    def constructs_from_row(cls, item: dict[str, Any]) -> bool:
+        """
+        Return whether the instance of a row is built directly from the row
+        values: the model allows ``trusted_row_construction()``, the row holds
+        every required field and no related model.
+
+        :param item: field values of the row
+        :type item: dict[str, Any]
+        :return: whether ``_construct_from_row`` builds the instance
+        :rtype: bool
+        """
+        return (
+            cls.trusted_row_construction()
+            and cls._required_row_fields.issubset(item)
+            and not any(item.get(name) is not None for name in cls._row_relation_names)
+        )
+
+    @classmethod
     def _materialize_row(  # noqa: CFQ002
         cls,
         row: ResultProxy,
@@ -248,10 +365,7 @@ class ModelRow(NewBaseModel):
 
         instance: Optional["Model"] = None
         if item.get(plan.pk_field_name, None) is not None:
-            instance = cast(
-                "Model",
-                cls._construct_with_excluded(plan.excluded_field_names, **item),
-            )
+            instance = cast("Model", cls.construct_row_instance(plan=plan, item=item))
             instance.set_save_status(True)
             if key is not None:
                 registry.instances[key] = instance  # type: ignore[union-attr]

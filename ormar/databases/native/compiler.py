@@ -256,6 +256,9 @@ class NativeCompiler:
             stmt = select(users.c.id).where(users.c.id == bindparam("ormar_p0"))
             bind(stmt, {"ormar_p0": 7})  # -> args [7]
 
+        When ``binds_directly`` allows it, those values go to the driver
+        without SQLAlchemy's binding steps (see ``direct_args``).
+
         :param stmt: statement to execute
         :type stmt: Executable
         :param params: values for named bind parameters, by name
@@ -265,6 +268,11 @@ class NativeCompiler:
         """
         key = stmt._generate_cache_key()  # type: ignore[attr-defined]
         plan = self._plan(stmt=stmt, key=key)
+        if params is not None and binds_directly(compiled=plan.compiled, row=params):
+            args = direct_args(plan=plan, rows=[params])[0]
+            return BoundStatement(
+                plan=plan, sql=plan.compiled.string, args=args, params=dict(params)
+            )
         bound_params = plan.compiled.construct_params(
             params=params,
             extracted_parameters=key[1] if key is not None else None,
@@ -286,6 +294,9 @@ class NativeCompiler:
             # -> sql "INSERT INTO users (name) VALUES ($1::VARCHAR)",
             #    args_list [["a"], ["b"]]
 
+        Like ``bind``, rows that ``binds_directly`` accepts skip SQLAlchemy's
+        binding steps.
+
         :param stmt: statement with ``bindparam`` placeholders
         :type stmt: Executable
         :param rows: parameter values per row, keyed by bind parameter name
@@ -295,6 +306,12 @@ class NativeCompiler:
         """
         key = stmt._generate_cache_key()  # type: ignore[attr-defined]
         plan = self._plan(stmt=stmt, key=key)
+        if rows and binds_directly(compiled=plan.compiled, row=rows[0]):
+            return BoundBatch(
+                plan=plan,
+                sql=plan.compiled.string,
+                args_list=direct_args(plan=plan, rows=rows),
+            )
         sql = ""
         args_list = []
         for row in rows:
@@ -496,6 +513,98 @@ def expand(
         for name in expanded.positiontup or []
     ]
     return expanded.statement, args
+
+
+def binds_directly(compiled: SQLCompiler, row: Mapping[str, Any]) -> bool:
+    """
+    Return whether values given by bind name can go to the driver as they
+    are, skipping SQLAlchemy's ``construct_params`` and ``expand``.
+
+    Binding attaches the values to the placeholders of the compiled SQL. The
+    SQL and the values travel to the driver separately, which keeps values
+    out of the SQL text and lets the database reuse one prepared statement::
+
+        sql = "SELECT users.id FROM users WHERE users.id = $1"
+        args = [7]
+        await driver.fetch(sql, *args)
+
+    SQLAlchemy's binding (``construct_params`` plus ``expand``) does five
+    things:
+
+    1. collects the values by bind name, e.g. ``{"id_1": 7}``
+    2. fills in column defaults run at execution time (``default=``)
+    3. expands ``IN`` lists, rewriting the SQL: ``IN ($1)`` with ``[1, 2, 3]``
+       becomes ``IN ($1, $2, $3)``
+    4. converts each value with its type's bind processor, e.g. a dict for a
+       JSON column becomes a JSON string on SQLite
+    5. orders the values by placeholder position (``positiontup``):
+       ``["name", "id_1"]`` gives ``["a", 1]``
+
+    Those steps cost more than the query itself for small statements. When
+    steps 2 and 3 have nothing to do and no names are escaped, the compiled
+    SQL is already final and binding is only steps 4 and 5, which
+    ``direct_args`` does in one pass with the same result. That is not the
+    case with:
+
+    - ``IN`` lists and other post-compile parameters (placeholders added per
+      value) and literal-execute parameters (value rendered into the SQL)
+    - column defaults SQLAlchemy fills in at execution time
+    - escaped bind names (the row is keyed by the original name)
+    - a bind the row does not supply::
+
+        stmt = select(users.c.id).where(users.c.id == bindparam("ormar_p0"))
+        binds_directly(compiled, {"ormar_p0": 7})  # -> True
+        stmt = select(users.c.id).where(users.c.id.in_(bindparam("ormar_p0")))
+        binds_directly(compiled, {"ormar_p0": [1, 2]})  # -> False
+
+    :param compiled: compiled statement
+    :type compiled: SQLCompiler
+    :param row: first row of the batch, keyed by bind parameter name
+    :type row: Mapping[str, Any]
+    :return: True when ``direct_args`` produces the driver arguments
+    :rtype: bool
+    """
+    names = compiled.positiontup
+    return (
+        names is not None
+        and not compiled.post_compile_params
+        and not compiled.literal_execute_params
+        and not compiled.insert_prefetch
+        and not compiled.update_prefetch
+        and not compiled.escaped_bind_names
+        and all(name in row for name in names)
+    )
+
+
+def direct_args(
+    plan: StatementPlan, rows: Sequence[Mapping[str, Any]]
+) -> List[List[Any]]:
+    """
+    Build the positional driver arguments of each row straight from its
+    values, for statements ``binds_directly`` accepts. Values are taken in
+    placeholder order and converted by their bind processors, which gives the
+    same arguments as ``construct_params`` plus ``expand``::
+
+        # positiontup ["name", "id_1"], no processors
+        direct_args(plan, [{"id_1": 1, "name": "a"}])  # -> [["a", 1]]
+
+    :param plan: plan of the statement
+    :type plan: StatementPlan
+    :param rows: parameter values per row, keyed by bind parameter name
+    :type rows: Sequence[Mapping[str, Any]]
+    :return: positional arguments per row
+    :rtype: List[List[Any]]
+    """
+    compiled = plan.compiled
+    processors: Dict[str, Any] = dict(compiled._bind_processors)
+    binds = [(name, processors.get(name)) for name in compiled.positiontup or []]
+    return [
+        [
+            processor(row[name]) if processor is not None else row[name]
+            for name, processor in binds
+        ]
+        for row in rows
+    ]
 
 
 def pk_param_key(compiled: SQLCompiler) -> Optional[str]:

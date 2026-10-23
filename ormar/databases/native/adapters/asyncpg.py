@@ -26,7 +26,12 @@ class AsyncpgAdapter(DriverAdapter):
     asyncpg prepares and caches statements by SQL text on its own. It does
     not report result column types on ``fetch``, so ``prepare()`` is called
     once per plan only to read them (see ``resolve_column_types``).
+
+    asyncpg's ``executemany`` runs in an implicit transaction when none is
+    open, so a failing row leaves no rows inserted (``atomic_execute_many``).
     """
+
+    atomic_execute_many = True
 
     def __init__(self, dialect: Dialect) -> None:
         """

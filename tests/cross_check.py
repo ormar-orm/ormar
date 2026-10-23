@@ -1,13 +1,18 @@
 """
-Test-suite safety net for statement templates.
+Test-suite safety net for statement templates and trusted model construction.
 
 ``install()`` (called by ``tests/conftest.py``) wraps the functions that build
-templates. With ``ENABLED`` on, every call also builds the statement the old
-way, without templates, and fails if the two would run different SQL, values
-or bind types. That catches a cache key missing something that changes the
-SQL.
+templates and trusted instances. With ``ENABLED`` on, every call also builds
+the result the old way and fails if the two differ:
 
-Tests that count built statements switch it off with
+- a read or write template must run the same SQL, values and bind types as
+  the statement built without templates, which catches a cache key missing
+  something that changes the SQL
+- an instance built straight from a row (``_construct_from_row``) must equal
+  the one built with validation
+- ``dump_for_save`` must return the same values as ``model_dump()``
+
+Tests that count built statements or constructed instances switch it off with
 ``monkeypatch.setattr(cross_check, "ENABLED", False)``.
 """
 
@@ -20,7 +25,9 @@ from sqlalchemy.dialects.sqlite.base import SQLiteDialect
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.sql import Executable
 
+from ormar.models.model_row import ModelRow, RowExtractionPlan
 from ormar.queryset import FilterQuery
+from ormar.queryset import queryset as queryset_module
 from ormar.queryset.queryset import QuerySet
 from ormar.queryset.templates import (
     StatementTemplate,
@@ -38,10 +45,12 @@ NUMBERED = re.compile(r"[$:](\d+)")
 
 ORIGINAL_SELECT_TEMPLATE = QuerySet.build_select_template
 ORIGINAL_WRITE_TEMPLATE = QuerySet.build_write_template
+ORIGINAL_CONSTRUCT_ROW = ModelRow.__dict__["construct_row_instance"].__func__
 ORIGINAL_INSERT_TEMPLATE = insert_template
 ORIGINAL_UPDATE_TEMPLATE = update_template
 ORIGINAL_DELETE_TEMPLATE = delete_template
 ORIGINAL_PK_SELECT_TEMPLATE = pk_select_template
+ORIGINAL_DUMP_FOR_SAVE = queryset_module.dump_for_save
 
 
 def rendered_statement(
@@ -140,6 +149,22 @@ def assert_same_write(
         params=template.params,
         dialect=model_cls.ormar_config.database.dialect,
     )
+
+
+def value_types(values: Dict[str, Any]) -> Dict[str, type]:
+    """
+    Return the type of each value, so values that compare equal across types
+    (``1 == 1.0 == True``, str enums and strings) are told apart::
+
+        {"a": 1} == {"a": True}  # -> True
+        value_types(values={"a": 1}) == value_types(values={"a": True})  # -> False
+
+    :param values: field values
+    :type values: Dict[str, Any]
+    :return: type per field name
+    :rtype: Dict[str, type]
+    """
+    return {name: type(value) for name, value in values.items()}
 
 
 def literal_values(
@@ -325,6 +350,63 @@ def checked_pk_select_template(model_cls: Any, pk: Any) -> StatementTemplate:
     return template
 
 
+def checked_construct_row_instance(
+    cls: Any, plan: RowExtractionPlan, item: Dict[str, Any]
+) -> Any:
+    """
+    ``ModelRow.construct_row_instance`` where a trusted build must hold the
+    same values of the same types and the same set fields as the instance
+    built with validation.
+
+    :param cls: model class
+    :type cls: Any
+    :param plan: extraction plan of the row position
+    :type plan: RowExtractionPlan
+    :param item: field values of the row
+    :type item: Dict[str, Any]
+    :raises AssertionError: when trusted and regular builds differ
+    :return: model instance
+    :rtype: Any
+    """
+    built = (
+        cls._construct_with_excluded(excluded=plan.excluded_field_names, **item)
+        if ENABLED and cls.constructs_from_row(item=item)
+        else None
+    )
+    instance = ORIGINAL_CONSTRUCT_ROW(cls, plan=plan, item=item)
+    if built is not None and (
+        instance.__dict__ != built.__dict__
+        or value_types(values=instance.__dict__) != value_types(values=built.__dict__)
+        or instance.__pydantic_fields_set__ != built.__pydantic_fields_set__
+    ):
+        raise AssertionError(
+            f"Trusted row construction mismatch for {cls.__name__}: "
+            f"{instance.__dict__} != {built.__dict__}"
+        )
+    return instance
+
+
+def checked_dump_for_save(obj: Any) -> dict:
+    """
+    ``dump_for_save`` compared with ``model_dump()``, including the types of
+    the values.
+
+    :param obj: model to save
+    :type obj: Any
+    :raises AssertionError: when the copy differs from ``model_dump()``
+    :return: field values
+    :rtype: dict
+    """
+    values = ORIGINAL_DUMP_FOR_SAVE(obj=obj)
+    if ENABLED:
+        dumped = obj.model_dump()
+        if values != dumped or value_types(values=values) != value_types(values=dumped):
+            raise AssertionError(
+                f"Trusted dump mismatch for {obj.get_name()}: {values} != {dumped}"
+            )
+    return values
+
+
 def replace_function(original: Callable[..., Any], checked: Callable[..., Any]) -> None:
     """
     Replace a module-level function in every loaded ormar module that holds
@@ -345,15 +427,17 @@ def replace_function(original: Callable[..., Any], checked: Callable[..., Any]) 
 
 def install() -> None:
     """
-    Wrap the template functions with their checked versions for the whole
-    test run.
+    Wrap the template and trusted construction functions with their checked
+    versions for the whole test run.
     """
     QuerySet.build_select_template = checked_select_template  # type: ignore[method-assign,assignment]
     QuerySet.build_write_template = checked_write_template  # type: ignore[method-assign,assignment]
+    ModelRow.construct_row_instance = classmethod(checked_construct_row_instance)  # type: ignore[method-assign,assignment]
     for original, checked in (
         (ORIGINAL_INSERT_TEMPLATE, checked_insert_template),
         (ORIGINAL_UPDATE_TEMPLATE, checked_update_template),
         (ORIGINAL_DELETE_TEMPLATE, checked_delete_template),
         (ORIGINAL_PK_SELECT_TEMPLATE, checked_pk_select_template),
+        (ORIGINAL_DUMP_FOR_SAVE, checked_dump_for_save),
     ):
         replace_function(original=original, checked=checked)

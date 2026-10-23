@@ -89,6 +89,8 @@ class Signal:
         :param kwargs: arguments passed to receivers
         :type kwargs: Any
         """
+        if not self._receivers:
+            return
         receivers = [
             receiver_func(sender=sender, **kwargs)
             for receiver_func in self._receivers.values()

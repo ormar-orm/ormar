@@ -25,9 +25,11 @@ class RelationsManager:
         # Holding only the field reference (not a constructed Relation) is
         # what skips the per-FK Relation/RelationProxy/QuerysetProxy
         # allocation tree on every ``Model.__init__``.
-        self._field_map: dict[str, "ForeignKeyField"] = {
-            field.name: field for field in self._related_fields
-        }
+        self._field_map: dict[str, "ForeignKeyField"] = (
+            {field.name: field for field in self._related_fields}
+            if self._related_fields
+            else {}
+        )
         self._related_names = list(self._field_map)
         self._relations: dict[str, Relation] = dict()
 

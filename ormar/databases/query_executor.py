@@ -266,7 +266,15 @@ class QueryExecutor:
         :return: pooled raw connection
         """
         if self._raw is None:
-            self._raw = await self._connection.get_raw_connection()
+            # an established connection already holds its pooled connection;
+            # only a lazy, not yet connected one needs SQLAlchemy's greenlet
+            sync_connection = self._connection.sync_connection
+            if sync_connection is not None and (
+                sync_connection._dbapi_connection is not None
+            ):
+                self._raw = sync_connection._dbapi_connection
+            else:
+                self._raw = await self._connection.get_raw_connection()
         return self._raw
 
     async def _run(

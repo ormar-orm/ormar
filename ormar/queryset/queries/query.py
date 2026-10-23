@@ -210,7 +210,7 @@ class Query:
         ).apply(expr=limit_qry)
         limit_qry = FilterQuery(
             filter_clauses=self.exclude_clauses, exclude=True, binder=self.binder
-        ).apply(limit_qry)
+        ).apply(expr=limit_qry)
         limit_qry = limit_qry.group_by(qry_text)
         for order_by in maxes.values():
             limit_qry = limit_qry.order_by(order_by)
