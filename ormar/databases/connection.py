@@ -9,8 +9,12 @@ from typing import Any, AsyncIterator, Optional
 
 from sqlalchemy import event
 from sqlalchemy.engine import make_url
+from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
+from ormar.databases.native.adapters import select_adapter
+from ormar.databases.native.backend import NativeBackend
+from ormar.databases.native.compiler import NativeCompiler
 from ormar.databases.query_executor import QueryExecutor
 from ormar.databases.transaction import Transaction
 
@@ -31,11 +35,14 @@ class DatabaseConnection:
     Wrapper around SQLAlchemy AsyncEngine that provides a databases-compatible API.
     """
 
-    def __init__(self, url: str, **options: Any) -> None:
+    def __init__(self, url: str, native_execution: bool = True, **options: Any) -> None:
         """
         Initialize database connection.
 
         :param url: Database URL with an async driver (e.g., postgresql+asyncpg://)
+        :param native_execution: run statements directly on the driver for
+            asyncpg, asyncmy and aiosqlite instead of through SQLAlchemy's
+            execution layer
         :param options: Additional engine options passed to
             ``create_async_engine``; ``pool_size`` defaults to 10 and
             ``max_overflow`` to 10. ``min_connections`` (default 0) opens that
@@ -60,6 +67,8 @@ class DatabaseConnection:
         )
 
         self._global_transaction: Optional[Transaction] = None
+        self._native_execution = native_execution
+        self.native_backend: Optional[NativeBackend] = None
 
     async def connect(self) -> None:
         """Connect to the database by creating the async engine."""
@@ -79,6 +88,10 @@ class DatabaseConnection:
                 self._engine
                 if self._autocommit_by_default
                 else self._engine.execution_options(isolation_level="AUTOCOMMIT")
+            )
+
+            self.native_backend = build_native_backend(
+                dialect=self._engine.dialect, enabled=self._native_execution
             )
 
             # Set up SQLite foreign keys pragma if using SQLite
@@ -130,6 +143,7 @@ class DatabaseConnection:
             await self._engine.dispose()
             self._engine = None
             self._autocommit_engine = None
+            self.native_backend = None
 
     @property
     def is_connected(self) -> bool:
@@ -208,19 +222,52 @@ class DatabaseConnection:
         trans_conn = self.get_transaction_connection()
         if trans_conn is not None:
             # Inside a transaction - reuse the transaction's connection
-            yield QueryExecutor(trans_conn)
+            yield QueryExecutor(connection=trans_conn, native=self.native_backend)
         elif transactional:
             async with self.transaction():
                 conn = self.get_transaction_connection()
                 assert conn is not None
-                yield QueryExecutor(conn)
+                yield QueryExecutor(connection=conn, native=self.native_backend)
         else:
             # Outside transaction: use AUTOCOMMIT view so each statement
             # commits at the driver level with no extra BEGIN/COMMIT
             # round-trip.
             assert self._autocommit_engine is not None
             async with self._autocommit_engine.connect() as conn:
-                yield QueryExecutor(conn)
+                yield QueryExecutor(connection=conn, native=self.native_backend)
+
+    @property
+    def atomic_execute_many(self) -> bool:
+        """
+        Whether ``execute_many`` outside a transaction is atomic on its own
+        (native asyncpg), so a single batch needs no explicit transaction.
+
+        ``bulk_create`` uses it to skip ``BEGIN``/``COMMIT`` around a lone
+        ``executemany``: on asyncpg a failing row already leaves no rows
+        inserted. Other drivers give no such guarantee, so a batch there
+        still runs in a transaction.
+
+        :return: True when a lone batch needs no transaction
+        :rtype: bool
+        """
+        return (
+            self.native_backend is not None
+            and self.native_backend.adapter.atomic_execute_many
+        )
+
+    async def start_driver_transaction(self, connection: AsyncConnection) -> None:
+        """
+        Make sure the driver-level transaction is open on a connection
+        SQLAlchemy began a transaction on, so natively executed statements
+        run inside it.
+
+        :param connection: connection with a begun transaction
+        :type connection: AsyncConnection
+        """
+        if self.native_backend is not None:
+            await self.native_backend.adapter.start_transaction(
+                sa_connection=connection
+            )
 
     def get_transaction_connection(self) -> Optional[AsyncConnection]:
         """Get the current transaction connection if in a transaction."""
@@ -238,3 +285,22 @@ class DatabaseConnection:
     async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
         """Async context manager exit - disconnect from database."""
         await self.disconnect()
+
+
+def build_native_backend(dialect: Dialect, enabled: bool) -> Optional[NativeBackend]:
+    """
+    Build the native backend for the dialect's driver.
+
+    :param dialect: dialect of the connected database
+    :type dialect: Dialect
+    :param enabled: whether native execution is enabled
+    :type enabled: bool
+    :return: native backend, or None when disabled or the driver has no adapter
+    :rtype: Optional[NativeBackend]
+    """
+    adapter = select_adapter(dialect=dialect) if enabled else None
+    if adapter is None:
+        return None
+    return NativeBackend(
+        dialect=dialect, adapter=adapter, compiler=NativeCompiler(dialect=dialect)
+    )

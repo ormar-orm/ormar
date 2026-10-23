@@ -3,6 +3,7 @@ from sqlalchemy import event, text
 
 import ormar
 from ormar.databases.connection import DatabaseConnection
+from ormar.databases.query_executor import QueryExecutor
 from tests.lifespan import init_tests
 from tests.settings import (
     ASYNC_DATABASE_URL,
@@ -167,12 +168,17 @@ async def test_standalone_query_uses_autocommit():
 
     database = base_ormar_config.database
     async with database:
+        # SQLAlchemy events only see statements on the SQLAlchemy path; the
+        # native path's autocommit is covered in test_native_transactions.py.
+        native_backend = database.native_backend
+        database.native_backend = None
         event.listen(database.engine.sync_engine, "before_cursor_execute", capture)
         try:
             await Team.objects.create(name="Standalone")
             await Team.objects.get(name="Standalone")
         finally:
             event.remove(database.engine.sync_engine, "before_cursor_execute", capture)
+            database.native_backend = native_backend
 
         async with database.transaction():
             await Team.objects.create(name="InsideTransaction")
@@ -251,3 +257,14 @@ async def test_pool_is_lazy_without_min_connections():
         assert database.engine.pool.checkedin() == 0
     finally:
         await database.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_executor_reconnects_invalidated_connection():
+    database = base_ormar_config.database
+    async with database:
+        async with database.engine.connect() as connection:
+            await connection.invalidate()
+            executor = QueryExecutor(connection, database.native_backend)
+            rows = await executor.fetch_all(Team.ormar_config.table.select())
+            assert isinstance(rows, list)

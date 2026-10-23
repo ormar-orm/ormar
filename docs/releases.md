@@ -41,8 +41,7 @@
   `pip install ormar[mysql]` installs it alongside `aiomysql` and `pymysql`.
   On MySQL it is ~1.2× faster overall and up to 2.5× faster when fetching
   larger result sets than `aiomysql`, which stays supported, so existing
-  `mysql+aiomysql://` URLs keep working. The test suite now runs against both
-  drivers.
+  `mysql+aiomysql://` URLs keep working.
 * Add `IndexColumns(..., case_insensitive=True)` to build a case-insensitive
   unique index (each named column wrapped in `LOWER()`), so values that differ
   only in case cannot both be stored. `IndexColumns` now also accepts SQLAlchemy
@@ -57,6 +56,56 @@
 
 ### ⚡ Performance
 
+* Rows of models without custom validators, encrypted or base64 fields are
+  turned into models directly from the already converted column values
+  instead of going through `__init__` and validation again (rows holding a
+  related model still go through `__init__`), queries of such models without
+  `select_related` skip the relation-aware row merging, and models without
+  relations skip relation bookkeeping during initialization. Loading many rows
+  is 1.4–2.2× faster in the orm-benchmarks suite (small filters 1.3–1.5×), the
+  most on wide models. For such models values stored in the database are no
+  longer re-validated on load (e.g. a string longer than `max_length` written
+  outside ormar loads as is); models with an overwritten pydantic type,
+  value-changing `model_config` (`use_enum_values`, string transformations,
+  `strict`) or a custom `__init__` keep full validation.
+* `bulk_create()` of such models without relations copies field values
+  instead of calling `model_dump()`, batch parameters are bound by position
+  without per-row expansion, and on asyncpg a bulk insert of one column set
+  runs without an explicit transaction (asyncpg's `executemany` is atomic on
+  its own). Bulk inserts are about 1.6× faster on a warm connection pool.
+* Single statements whose values are all named bind parameters are bound by
+  position too, the driver connection of an established connection is read
+  without a greenlet switch, and signals without receivers return immediately:
+  inserts and updates inside a transaction are about 1.15× faster.
+* Writes (`save()`, `update()`, `delete()`, `load()`, `upsert()`,
+  `QuerySet.update()`/`delete()`, `bulk_create()` and `bulk_update()`) now reuse
+  one statement per write shape and only bind the values, like read queries.
+  `bulk_create()` runs a single-row insert once per row (`executemany`) inside
+  one transaction instead of building one multi-row statement per call, which
+  also removes the driver's bound-parameter limit on large batches. In the
+  orm-benchmarks suite on PostgreSQL, inserts are 1.1–4.8× and updates
+  1.4–2.9× faster, the most on wide models. `bulk_create()` of models with only
+  a primary key now inserts every row (it inserted a single row before).
+  Context-sensitive SQLAlchemy column defaults (`default=callable(context)`)
+  see the bound parameters of these statements under generated names.
+* Read queries (`get()`, `first()`, `all()`, `iterate()`, `values()`,
+  `count()`, `exists()` and aggregates) now cache the built SQLAlchemy
+  statement per query shape and only bind the new values on later calls,
+  instead of rebuilding the statement and its cache key every time. A
+  `get()` by primary key spends ~40% less CPU (about 7.8k instead of 4.8k
+  `get()` calls per second with 10 concurrent workers on PostgreSQL); in the
+  orm-benchmarks suite `get()` is 1.4–2× and small filters 1.2–1.3× faster.
+* With `asyncpg`, `asyncmy` and `aiosqlite`, queries now run directly on the
+  driver connection instead of through SQLAlchemy's async execution layer.
+  SQLAlchemy still builds and compiles statements, converts values with its
+  column types and manages the pool and transactions, so results and raised
+  `sqlalchemy.exc` exceptions are unchanged. On PostgreSQL this makes `get()`
+  ~1.2× faster, `values()`/`values_list()` up to 1.7× faster and the
+  orm-benchmarks suite 1.08–1.18× faster overall. SQLAlchemy engine events and
+  `echo=True` no longer see these statements; pass
+  `DatabaseConnection(url, native_execution=False)` to go back to SQLAlchemy's
+  execution layer. `aiopg` and `aiomysql` are unchanged. SQLAlchemy is now
+  pinned to `<2.1`, as native execution relies on its compiler internals.
 * The default connection pool size of `DatabaseConnection` is raised from 5 to
   10. SQLAlchemy closes overflow connections on checkin, so with more than 5
   concurrent queries every extra one opened a new database connection; with
