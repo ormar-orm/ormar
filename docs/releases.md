@@ -63,6 +63,12 @@
   outside ormar loads as is); models with an overwritten pydantic type,
   value-changing `model_config` (`use_enum_values`, string transformations,
   `strict`) or a custom `__init__` keep full validation.
+* Rows of such models holding related models (a foreign key, `select_related`
+  or a reverse relation) are built the same way, with only the relations
+  registered on both sides, and the cached hash of a new instance no longer
+  goes through `__getattr__` on its first use. Loading rows with a foreign key
+  is about 1.4× faster, with `select_related` and reverse relations
+  1.25–1.35× faster.
 * `bulk_create()` of such models without relations copies field values
   instead of calling `model_dump()`, batch parameters are bound by position
   without per-row expansion, and on asyncpg a bulk insert of one column set

@@ -364,7 +364,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         Build an instance straight from database row values, which the column
         types already converted, skipping ``__init__`` and validation. Only for
         models with ``trusted_row_construction()`` and rows holding every
-        required field and no relation value.
+        required field.
 
         The instance gets the state ``__init__`` would leave behind: internal
         ormar attributes, the values as pydantic's ``__dict__`` and the row's
@@ -373,10 +373,20 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         row holds every field in field order, the row dict itself becomes the
         ``__dict__`` without a copy.
 
+        Relation values (a related model, or the raw pk of a foreign key) are
+        expanded to models and registered on both sides, like ``__init__``
+        does after validation. An empty reverse relation becomes ``[]``::
+
+            book = Book._construct_from_row(
+                excluded=frozenset(), values={"id": 1, "title": "t", "author": 2}
+            )
+            book.author  # -> pk-only Author(id=2), with book in author.books
+
         :param excluded: field names excluded from the query
         :type excluded: AbstractSet[str]
         :param values: field values of the row, used as the instance's
-            ``__dict__`` when it holds every field in field order
+            ``__dict__`` when it holds every field in field order; relation
+            values are replaced with their expanded models
         :type values: dict[str, Any]
         :return: model instance
         :rtype: Self
@@ -385,6 +395,17 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         instance._initialize_internal_attributes()
         object.__setattr__(instance, "__pk_only__", False)
         object.__setattr__(instance, "__ormar_excludable__", None)
+        relation_fields = cls.ormar_config.model_fields
+        related = {
+            name: relation_fields[name].expand_relationship(
+                value=values[name], child=instance, to_register=False
+            )
+            for name in cls._row_relation_names
+            if name in values
+        }
+        if related:
+            values.update(related)
+            cls.serialize_nested_models_json_fields(kwargs=related)
         model_fields = cls.model_fields
         if not excluded and tuple(values) == cls._row_field_order:
             data = values
@@ -397,6 +418,11 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         object.__setattr__(instance, "__pydantic_fields_set__", set(values))
         object.__setattr__(instance, "__pydantic_extra__", None)
         object.__setattr__(instance, "__pydantic_private__", None)
+        for name, model in related.items():
+            if model is not None and not isinstance(model, list):
+                relation_fields[name].expand_relationship(
+                    value=model, child=instance, to_register=True
+                )
         return instance
 
     @classmethod
@@ -661,6 +687,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         # object.__setattr__(self, "_orm_id", uuid.uuid4().hex)
         object.__setattr__(self, "_orm_saved", False)
         object.__setattr__(self, "_pk_column", None)
+        object.__setattr__(self, "__cached_hash__", None)
         object.__setattr__(self, "__setattr_fields__", set())
         object.__setattr__(
             self,

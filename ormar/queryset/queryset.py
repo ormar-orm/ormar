@@ -275,9 +275,7 @@ class QuerySet(Generic[T]):
         :rtype: list[Model]
         """
         result: list["T"] = []
-        fallback = functools.partial(
-            self._model_from_row, registry=RowRegistry(), plan_cache=plan_cache
-        )
+        registry = RowRegistry()
         for start in range(0, len(rows), FLAT_ROWS_CHUNK):
             if start:
                 await asyncio.sleep(0)
@@ -289,39 +287,11 @@ class QuerySet(Generic[T]):
                         rows=chunk,
                         excludable=self._excludable,
                         plan_cache=plan_cache,
-                        fallback=fallback,
+                        registry=registry,
                     ),
                 )
             )
         return result
-
-    def _model_from_row(
-        self, row: Any, registry: RowRegistry, plan_cache: dict
-    ) -> "Model":
-        """
-        Build the model of one row through ``from_row``, sharing the query's
-        identity map (rows of the main model always hold its pk). The fallback
-        of ``from_flat_rows`` for rows holding a related value, which need the
-        regular path to register the relation.
-
-        :param row: database row
-        :type row: Any
-        :param registry: identity map of the query
-        :type registry: RowRegistry
-        :param plan_cache: row-extraction plan cache
-        :type plan_cache: dict
-        :return: model of the row
-        :rtype: Model
-        """
-        return self.model.from_row(  # type: ignore[return-value]
-            row=row,
-            select_related=self._select_related,
-            excludable=self._excludable,
-            source_model=self.model,
-            proxy_source_model=self.proxy_source_model,
-            plan_cache=plan_cache,
-            registry=registry,
-        )
 
     def _resolve_filter_groups(
         self, groups: Any
