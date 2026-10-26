@@ -255,6 +255,19 @@ on first use:
 database = DatabaseConnection(DATABASE_URL, pool_size=20, min_connections=5)
 ```
 
+JSON columns are serialized and deserialized with [orjson][orjson] by default
+(values orjson rejects, like integers over 64 bits or `NaN`, fall back to the
+standard library `json`). Pass your own functions, e.g. to keep integers over
+64 bits exact when reading (orjson reads them as floats):
+
+```python
+import json
+
+database = DatabaseConnection(
+    DATABASE_URL, json_serializer=json.dumps, json_deserializer=json.loads
+)
+```
+
 #### Native execution
 
 With `asyncpg`, `asyncmy` and `aiosqlite`, ormar runs its queries directly on the
@@ -607,3 +620,4 @@ You can check if model is saved with `ModelInstance.saved` property
 [alembic]: https://alembic.sqlalchemy.org/en/latest/tutorial.html
 [save status]:  ../models/index/#model-save-status
 [Internals]:  ../models/internals.md
+[orjson]: https://github.com/ijl/orjson
