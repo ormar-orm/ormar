@@ -66,6 +66,7 @@ class StatementPlan:
         self.result_keys: Tuple[str, ...] = tuple(col[0] for col in result_columns)
         self.result_types: Tuple[Any, ...] = tuple(col[3] for col in result_columns)
         self.result_processors: Optional[List[ResultProcessor]] = None
+        self.processed_columns: Tuple[Tuple[str, Callable[[Any], Any]], ...] = ()
         self.row_class = row_class_for(result_columns=result_columns)
         self.returning = bool(compiled.effective_returning)
         self.is_insert = bool(compiled.isinsert)
@@ -676,6 +677,11 @@ def resolve_result_processors(
         type_._cached_result_processor(dialect=dialect, coltype=coltype)
         for type_, coltype in zip(plan.result_types, coltypes)
     ]
+    plan.processed_columns = tuple(
+        (key, processor)
+        for key, processor in zip(plan.result_keys, plan.result_processors)
+        if processor is not None
+    )
 
 
 def row_to_dict(plan: StatementPlan, values: Sequence[Any]) -> Dict[str, Any]:
@@ -692,10 +698,7 @@ def row_to_dict(plan: StatementPlan, values: Sequence[Any]) -> Dict[str, Any]:
     :return: row keyed by result label
     :rtype: Dict[str, Any]
     """
-    processors = plan.result_processors or [None] * len(plan.result_keys)
-    return plan.row_class(  # type: ignore[no-any-return]
-        {
-            key: processor(value) if processor is not None else value
-            for key, processor, value in zip(plan.result_keys, processors, values)
-        }
-    )
+    row = plan.row_class(zip(plan.result_keys, values))
+    for key, processor in plan.processed_columns:
+        row[key] = processor(row[key])
+    return row  # type: ignore[no-any-return]
