@@ -3,7 +3,8 @@ Maps prefixed columns of a raw query to the relation string keys returned by
 ``values()`` and ``values_list()``.
 """
 
-from typing import TYPE_CHECKING, cast
+from operator import itemgetter
+from typing import TYPE_CHECKING, Any, cast
 
 from ormar.relations.aliases import alias_for
 
@@ -150,3 +151,38 @@ def values_column_map(
         elif column_name in own_columns:
             column_map[column_name] = column_name
     return column_map
+
+
+def extract_values(
+    rows: list[Any], column_map: dict[str, str], as_dict: bool
+) -> list[Any]:
+    """
+    Extracts the mapped columns of each row, in the order of the query columns,
+    as a dictionary keyed by relation string or as a tuple of values.
+
+    Sample: with column_map {"t1a2b3c_name": "posts__user__name"} a row
+    {"id": 1, "t1a2b3c_name": "a"} becomes {"posts__user__name": "a"} or ("a",)
+
+    Rows of a query whose labels are already the returned names, with no
+    column skipped, are copied as a whole.
+
+    :param rows: non-empty list of rows of the query, accessible by column label
+    :type rows: list[Any]
+    :param column_map: dictionary of column label to resolved name
+    :type column_map: dict[str, str]
+    :param as_dict: flag if rows should be returned as dictionaries
+    :type as_dict: bool
+    :return: list of dictionaries or tuples with column values
+    :rtype: list[Any]
+    """
+    labels = list(column_map)
+    names = list(column_map.values())
+    if as_dict and labels == names == list(rows[0].keys()):
+        return [dict(row) for row in rows]
+    if len(labels) > 1:
+        values = list(map(itemgetter(*labels), rows))
+    else:  # itemgetter of a single label returns a bare value, not a tuple
+        values = [tuple(row[label] for label in labels) for row in rows]
+    if not as_dict:
+        return values
+    return [dict(zip(names, row_values)) for row_values in values]
