@@ -1261,7 +1261,8 @@ class QuerySet(Generic[T]):
         )
         updates = {k: v for k, v in kwargs.items() if k in self_fields}
         updates = self.model.populate_onupdate_value(updates)
-        updates = self.model.validate_enums(updates)
+        updates = self.model.validate_update_values(updates)
+        updates = self.model.reconvert_str_to_bytes(updates)
         updates = self.model.translate_columns_to_aliases(updates)
         unconsumed = [name for name in updates if name not in self.table.c]
         if unconsumed:
