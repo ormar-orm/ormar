@@ -166,6 +166,11 @@
 
 ### 🐛 Fixes
 
+* Fix JSON fields of related models turning into strings. Passing a model with
+  a JSON field to a relation (`Pet(owner=owner)`, `create(owner=owner)`) or
+  loading it through a forward `select_related` left its JSON values encoded
+  as strings, also in `model_dump()`; the related model now keeps its decoded
+  values. [#1885](https://github.com/ormar-orm/ormar/issues/1885)
 * Fix `QuerySet.update()` with relation, JSON and bytes values. Foreign keys
   now accept the related model or a dictionary with its pk besides the pk
   itself (self-referencing foreign keys rejected even the pk), JSON fields

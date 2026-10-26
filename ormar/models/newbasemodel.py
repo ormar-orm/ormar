@@ -183,12 +183,18 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
 
         new_kwargs, through_tmp_dict = self._process_kwargs(kwargs)
 
-        if self.extract_related_fields():
-            new_kwargs = self.serialize_nested_models_json_fields(kwargs=new_kwargs)
-        self.__pydantic_validator__.validate_python(
-            new_kwargs,
-            self_instance=self,  # type: ignore
+        decoded = (
+            self.serialize_nested_models_json_fields(kwargs=new_kwargs)
+            if self.extract_related_fields()
+            else []
         )
+        try:
+            self.__pydantic_validator__.validate_python(
+                new_kwargs,
+                self_instance=self,  # type: ignore
+            )
+        finally:
+            self.restore_nested_models_json_fields(decoded=decoded)
         self._register_related_models(new_kwargs, through_tmp_dict)
 
     @classmethod
@@ -225,14 +231,18 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 new_kwargs[field_to_nullify] = None
 
         if not _pk_only:
-            if instance.extract_related_fields():
-                new_kwargs = instance.serialize_nested_models_json_fields(
-                    kwargs=new_kwargs
-                )
-            instance.__pydantic_validator__.validate_python(
-                new_kwargs,
-                self_instance=instance,  # type: ignore
+            decoded = (
+                instance.serialize_nested_models_json_fields(kwargs=new_kwargs)
+                if instance.extract_related_fields()
+                else []
             )
+            try:
+                instance.__pydantic_validator__.validate_python(
+                    new_kwargs,
+                    self_instance=instance,  # type: ignore
+                )
+            finally:
+                instance.restore_nested_models_json_fields(decoded=decoded)
         else:
             fields_set = {instance.ormar_config.pkname}
             object.__setattr__(instance, "__dict__", new_kwargs)
@@ -405,7 +415,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         }
         if related:
             values.update(related)
-            cls.serialize_nested_models_json_fields(kwargs=related)
         field_order = cls._row_field_order
         if not excluded and tuple(values) == field_order:
             data = values

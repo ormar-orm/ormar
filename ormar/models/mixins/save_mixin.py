@@ -184,24 +184,51 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         return model_dict
 
     @classmethod
-    def serialize_nested_models_json_fields(cls, kwargs: dict) -> dict:
+    def serialize_nested_models_json_fields(
+        cls, kwargs: dict
+    ) -> list[tuple["Model", dict[str, Any]]]:
         """
-        Serializes JSON fields in nested model instances to strings.
-        This ensures that when models with JSON fields are nested in other models,
-        the JSON values are properly serialized as strings for Pydantic validation.
+        Serializes JSON fields of related model instances passed in kwargs to
+        strings, as pydantic validation of the model validates them again
+        against their JSON fields, which only accept strings.
 
-        Needed as sqlalchemy auto parses the JSON fields.
+        The related models keep the serialized values only for the validation:
+        the decoded values are returned, so they can be restored with
+        ``restore_nested_models_json_fields`` afterwards.
 
         :param kwargs: dictionary of keyword arguments
-        :type kwargs: Dict
-        :return: modified kwargs with serialized JSON fields in nested models
-        :rtype: Dict
+        :type kwargs: dict
+        :return: related models with their decoded JSON field values
+        :rtype: list[tuple[Model, dict[str, Any]]]
         """
-        for key, value in kwargs.items():
-            # hasattr first, as isinstance on pydantic model metaclass is slow
-            if hasattr(value, "_json_fields") and isinstance(value, ormar.Model):
-                value.dump_all_json_fields_to_str(value.__dict__)
-        return kwargs
+        decoded = []
+        for value in kwargs.values():
+            # getattr first, as isinstance on pydantic model metaclass is slow
+            json_fields = getattr(value, "_json_fields", None)
+            if json_fields and isinstance(value, ormar.Model):
+                values = value.__dict__
+                decoded.append(
+                    (
+                        value,
+                        {name: values[name] for name in json_fields if name in values},
+                    )
+                )
+                value.dump_all_json_fields_to_str(values)
+        return decoded
+
+    @staticmethod
+    def restore_nested_models_json_fields(
+        decoded: list[tuple["Model", dict[str, Any]]],
+    ) -> None:
+        """
+        Restores decoded JSON field values of related models serialized by
+        ``serialize_nested_models_json_fields``.
+
+        :param decoded: related models with their decoded JSON field values
+        :type decoded: list[tuple[Model, dict[str, Any]]]
+        """
+        for model, values in decoded:
+            model.__dict__.update(values)
 
     @classmethod
     def populate_default_values(cls, new_kwargs: dict) -> dict:
