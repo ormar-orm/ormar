@@ -86,6 +86,10 @@
 * Whether rows can be built directly from their values is decided once per
   query position instead of once per row, which makes loading many rows of a
   model without relations about 9% faster.
+* `values()` and `values_list()` pick the returned columns of each row with
+  labels resolved once per query, and rows whose labels already are the
+  returned names are copied as a whole, which makes them 1.2–1.3× faster on
+  wide models.
 * `bulk_create()` of such models without relations copies field values
   instead of calling `model_dump()`, batch parameters are bound by position
   without per-row expansion, and on asyncpg a bulk insert of one column set

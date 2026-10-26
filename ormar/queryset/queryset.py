@@ -54,7 +54,7 @@ from ormar.queryset.utils import (
     get_relationship_alias_model_and_str,
     normalize_slice,
 )
-from ormar.queryset.values_columns import values_column_map
+from ormar.queryset.values_columns import extract_values, values_column_map
 
 # rows built between yields to the event loop when materializing flat rows
 FLAT_ROWS_CHUNK = 500
@@ -1053,18 +1053,14 @@ class QuerySet(Generic[T]):
             exclude_through=exclude_through,
             column_names=list(rows[0].keys()),  # type: ignore
         )
-        result = [
-            {column_map.get(k): v for k, v in dict(x).items() if k in column_map}
-            for x in rows
-        ]
+        result = extract_values(rows=rows, column_map=column_map, as_dict=_as_dict)
         if _as_dict:
             return result
         if _flatten and self._excludable.include_entry_count() != 1:
             raise QueryDefinitionError(
                 "You cannot flatten values_list if more than one field is selected!"
             )
-        tuple_result = [tuple(x.values()) for x in result]
-        return tuple_result if not _flatten else [x[0] for x in tuple_result]
+        return result if not _flatten else [x[0] for x in result]
 
     async def values_list(
         self,
