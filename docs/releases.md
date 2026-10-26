@@ -83,6 +83,9 @@
 * The relation fields of a model are mapped by name once per model and shared
   by every instance instead of being rebuilt for each one, which makes
   building models 5–12% faster.
+* Whether rows can be built directly from their values is decided once per
+  query position instead of once per row, which makes loading many rows of a
+  model without relations about 9% faster.
 * `bulk_create()` of such models without relations copies field values
   instead of calling `model_dump()`, batch parameters are bound by position
   without per-row expansion, and on asyncpg a bulk insert of one column set
