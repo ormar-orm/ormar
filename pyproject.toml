@@ -95,9 +95,16 @@ codecov = "^2.1.13"
 pytest-asyncio = ">=1.1.0,<2.0"
 fastapi = ">=0.125.0"
 
-ruff = ">=0.5.1,<0.17.2"
+ruff = ">=0.5.1,<0.17.3"
 
 setuptools = ">=78.1.1,<85.0.0"
+
+# Transitive (virtualenv); pinned for GHSA-567q-5qvw-pf92, GHSA-9vhv-jxww-xfm5,
+# GHSA-v4x8-3wr5-3wq8. The fix needs Python >=3.11, so 3.10 stays on 4.1.x.
+filelock = [
+    { version = ">=4.2.1,<5", python = ">=3.11" },
+    { version = ">=4.1.0,<4.1.1", python = "<3.11" },
+]
 
 # types
 mypy = ">=1.8,<3.0"
