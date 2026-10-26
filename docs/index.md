@@ -52,23 +52,17 @@ since they actually have to create and connect to a database in most of the test
 
 Yet remember that those are - well - tests and not all solutions are suitable to be used in real life applications.
 
-### Part of the `fastapi` ecosystem
-
-As part of the fastapi ecosystem `ormar` is supported in selected libraries that somehow work with databases.
-
-Ormar remains sql dialect agnostic - so only columns working in all supported backends are implemented.
-
-It's relatively easy to implement columns for specific dialects as an extensions of ormar.
-
-If you maintain or use a different library and would like it to support `ormar` let us know how we can help.
-
 ### Dependencies
 
 Ormar is built with:
 
-  * [`sqlalchemy core`][sqlalchemy-core] for query building.
-  * [SQLAlchemy async][sqlalchemy-async] for database connectivity.
-  * [`pydantic`][pydantic] for data validation.
+* [`sqlalchemy core`][sqlalchemy-core] for query building, column types and connection pooling.
+* [`pydantic`][pydantic] for data validation.
+* [`orjson`][orjson] for fast JSON handling.
+* async database drivers: [`asyncpg`][asyncpg] (PostgreSQL), [`asyncmy`][asyncmy] or
+  [`aiomysql`][aiomysql] (MySQL) and [`aiosqlite`][aiosqlite] (SQLite). With `asyncpg`,
+  `asyncmy` and `aiosqlite` ormar runs queries directly on the driver connection;
+  other drivers go through [`sqlalchemy async`][sqlalchemy-async].
 
 ### License
 
@@ -701,6 +695,11 @@ Signals allow to trigger your function for a given event on a given Model.
 [sqlalchemy-core]: https://docs.sqlalchemy.org/en/latest/core/
 [sqlalchemy-async]: https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html
 [pydantic]: https://pydantic-docs.helpmanual.io/
+[orjson]: https://github.com/ijl/orjson
+[asyncpg]: https://github.com/MagicStack/asyncpg
+[asyncmy]: https://github.com/long2ice/asyncmy
+[aiomysql]: https://github.com/aio-libs/aiomysql
+[aiosqlite]: https://github.com/omnilib/aiosqlite
 [encode/orm]: https://github.com/encode/orm/
 [alembic]: https://alembic.sqlalchemy.org/en/latest/
 [fastapi]: https://fastapi.tiangolo.com/
