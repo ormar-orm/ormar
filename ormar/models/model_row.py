@@ -4,7 +4,6 @@ from typing import (
     TYPE_CHECKING,
     AbstractSet,
     Any,
-    Callable,
     Optional,
     Sequence,
     Union,
@@ -170,7 +169,7 @@ class ModelRow(NewBaseModel):
         rows: Sequence[Any],
         excludable: ExcludableItems,
         plan_cache: Optional[PlanCache],
-        fallback: Callable[[Any], "Model"],
+        registry: RowRegistry,
     ) -> list["Model"]:
         """
         Build models of a query without joined relations of a model with
@@ -185,10 +184,10 @@ class ModelRow(NewBaseModel):
             # rows [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
             # -> [Author(id=1, name="a"), Author(id=2, name="b")]
 
-        Rows holding a related value (a foreign key that needs registering on
-        both sides) are built by ``fallback`` instead. Repeated primary keys
-        (views or tables without a unique pk) keep the first row, like merging
-        does.
+        Foreign key values become pk-only related models, one per related pk
+        shared by every row of the query (kept in ``registry``), registered
+        on both sides. Repeated primary keys (views or tables without a
+        unique pk) keep the first row, like merging does.
 
         :param rows: database rows of the main model only
         :type rows: Sequence[Any]
@@ -196,8 +195,9 @@ class ModelRow(NewBaseModel):
         :type excludable: ExcludableItems
         :param plan_cache: per-queryset plan cache
         :type plan_cache: Optional[PlanCache]
-        :param fallback: builds the model of a row with related values
-        :type fallback: Callable[[Any], Model]
+        :param registry: identity map of the query, sharing pk-only related
+            models between rows
+        :type registry: RowRegistry
         :return: models built from the rows
         :rtype: list[Model]
         """
@@ -205,7 +205,7 @@ class ModelRow(NewBaseModel):
             table_prefix="", excludable=excludable, plan_cache=plan_cache
         )
         mappings = plan.column_mappings
-        relation_names = cls._row_relation_names
+        foreign_keys = plan.foreign_key_names
         pk_name = plan.pk_field_name
         seen: set[Any] = set()
         instances: list["Model"] = []
@@ -215,15 +215,12 @@ class ModelRow(NewBaseModel):
             if pk in seen:
                 continue
             seen.add(pk)
-            if relation_names and any(
-                item.get(name) is not None for name in relation_names
-            ):
-                instance = fallback(row)
-            else:
-                instance = cast(
-                    "Model", cls.construct_row_instance(plan=plan, item=item)
+            if foreign_keys:
+                cls._share_pk_only_models(
+                    plan=plan, item=item, registry=registry, position=(None, "")
                 )
-                object.__setattr__(instance, "_orm_saved", True)
+            instance = cast("Model", cls.construct_row_instance(plan=plan, item=item))
+            object.__setattr__(instance, "_orm_saved", True)
             object.__setattr__(instance, "__ormar_excludable__", excludable)
             instances.append(instance)
         return instances
@@ -237,7 +234,7 @@ class ModelRow(NewBaseModel):
 
         For models with ``trusted_row_construction()`` the instance is built
         directly from the row values (``_construct_from_row``), as long as the
-        row holds every required field and no related model. Otherwise it goes
+        row holds every required field. Otherwise it goes
         through ``_construct_with_excluded``, which validates the values,
         registers relations and raises for excluded required fields.
 
@@ -258,18 +255,16 @@ class ModelRow(NewBaseModel):
     def constructs_from_row(cls, item: dict[str, Any]) -> bool:
         """
         Return whether the instance of a row is built directly from the row
-        values: the model allows ``trusted_row_construction()``, the row holds
-        every required field and no related model.
+        values: the model allows ``trusted_row_construction()`` and the row
+        holds every required field.
 
         :param item: field values of the row
         :type item: dict[str, Any]
         :return: whether ``_construct_from_row`` builds the instance
         :rtype: bool
         """
-        return (
-            cls.trusted_row_construction()
-            and cls._required_row_fields.issubset(item)
-            and not any(item.get(name) is not None for name in cls._row_relation_names)
+        return cls.trusted_row_construction() and cls._required_row_fields.issubset(
+            item
         )
 
     @classmethod

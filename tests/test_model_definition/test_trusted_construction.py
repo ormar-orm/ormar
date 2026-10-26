@@ -323,7 +323,7 @@ async def test_flat_queries_skip_from_row_and_yield_between_chunks(
 
 
 @pytest.mark.asyncio
-async def test_rows_without_related_values_skip_init(connected, monkeypatch):
+async def test_rows_with_related_values_skip_init(connected, monkeypatch):
     monkeypatch.setattr(cross_check, "ENABLED", False)
     async with base_ormar_config.database.transaction(force_rollback=True):
         owner = await Owner.objects.create()
@@ -332,10 +332,35 @@ async def test_rows_without_related_values_skip_init(connected, monkeypatch):
         counter = ConstructCounter(Pet._construct_with_excluded)
         monkeypatch.setattr(Pet, "_construct_with_excluded", counter)
         pets = await Pet.objects.order_by("id").all()
-        assert counter.calls == 1
+        assert counter.calls == 0
         assert pets[0].owner is None
         assert pets[1].owner.pk == owner.pk
         assert pets[1] in (await Owner.objects.select_related("pets").get()).pets
+
+
+@pytest.mark.asyncio
+async def test_flat_rows_share_pk_only_related_models(connected, monkeypatch):
+    monkeypatch.setattr(cross_check, "ENABLED", False)
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        owner = await Owner.objects.create()
+        await Pet.objects.bulk_create([Pet(owner=owner), Pet(owner=owner)])
+        first, second = await Pet.objects.order_by("id").all()
+        assert first.owner is second.owner
+        assert first.owner.pk == owner.pk
+        assert first.owner.pets == [first, second]
+
+
+@pytest.mark.asyncio
+async def test_empty_selected_reverse_relation_is_empty_list(connected, monkeypatch):
+    monkeypatch.setattr(cross_check, "ENABLED", False)
+    async with base_ormar_config.database.transaction(force_rollback=True):
+        await Owner.objects.create()
+        counter = ConstructCounter(Owner._construct_with_excluded)
+        monkeypatch.setattr(Owner, "_construct_with_excluded", counter)
+        owner = await Owner.objects.select_related("pets").get()
+        assert counter.calls == 0
+        assert owner.pets == []
+        assert owner.__dict__["pets"] == []
 
 
 @pytest.mark.asyncio

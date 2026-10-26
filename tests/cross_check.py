@@ -9,7 +9,8 @@ the result the old way and fails if the two differ:
   the statement built without templates, which catches a cache key missing
   something that changes the SQL
 - an instance built straight from a row (``_construct_from_row``) must equal
-  the one built with validation
+  the one built with validation, including the relations registered on both
+  sides
 - ``dump_for_save`` must return the same values as ``model_dump()``
 
 Tests that count built statements or constructed instances switch it off with
@@ -25,6 +26,7 @@ from sqlalchemy.dialects.sqlite.base import SQLiteDialect
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.sql import Executable
 
+import ormar
 from ormar.models.model_row import ModelRow, RowExtractionPlan
 from ormar.queryset import FilterQuery
 from ormar.queryset import queryset as queryset_module
@@ -350,13 +352,86 @@ def checked_pk_select_template(model_cls: Any, pk: Any) -> StatementTemplate:
     return template
 
 
+def detached_copy(model: Any) -> Any:
+    """
+    Return a copy of a related model with the same field values and its own
+    relation manager, so relations registered on the copy do not reach the
+    model.
+
+    :param model: related model
+    :type model: Any
+    :return: detached copy
+    :rtype: Any
+    """
+    copy = object.__new__(type(model))
+    for name in (
+        "__pydantic_fields_set__",
+        "__pydantic_extra__",
+        "__pydantic_private__",
+        "__pk_only__",
+        "__ormar_excludable__",
+    ):
+        object.__setattr__(copy, name, getattr(model, name, None))
+    object.__setattr__(copy, "__dict__", dict(model.__dict__))
+    copy._initialize_internal_attributes()
+    return copy
+
+
+def detached_values(cls: Any, item: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Return a copy of the row values with related models replaced by detached
+    copies, so building a second instance from them registers relations on
+    the copies and leaves the related models of the query untouched.
+
+    :param cls: model class
+    :type cls: Any
+    :param item: field values of the row
+    :type item: Dict[str, Any]
+    :return: values with detached related models
+    :rtype: Dict[str, Any]
+    """
+    values = dict(item)
+    for name in cls._row_relation_names:
+        value = values.get(name)
+        if isinstance(value, ormar.Model):
+            values[name] = detached_copy(model=value)
+    return values
+
+
+def back_references(instance: Any) -> Dict[str, bool]:
+    """
+    Return per relation of an instance whether every related model has the
+    instance registered on its side of the relation.
+
+    :param instance: model instance
+    :type instance: Any
+    :return: whether the relation is registered back, per relation name
+    :rtype: Dict[str, bool]
+    """
+    fields = type(instance).ormar_config.model_fields
+    result = {}
+    for name in type(instance)._row_relation_names:
+        value = instance.__dict__.get(name)
+        if value is None:
+            continue
+        related_name = fields[name].get_related_name()
+        related = value if isinstance(value, list) else [value]
+        result[name] = all(
+            instance in model.__dict__.get(related_name)
+            if isinstance(model.__dict__.get(related_name), list)
+            else model.__dict__.get(related_name) == instance
+            for model in related
+        )
+    return result
+
+
 def checked_construct_row_instance(
     cls: Any, plan: RowExtractionPlan, item: Dict[str, Any]
 ) -> Any:
     """
     ``ModelRow.construct_row_instance`` where a trusted build must hold the
-    same values of the same types and the same set fields as the instance
-    built with validation.
+    same values of the same types, the same set fields and the same
+    registered relations as the instance built with validation.
 
     :param cls: model class
     :type cls: Any
@@ -368,16 +443,17 @@ def checked_construct_row_instance(
     :return: model instance
     :rtype: Any
     """
-    built = (
-        cls._construct_with_excluded(excluded=plan.excluded_field_names, **item)
-        if ENABLED and cls.constructs_from_row(item=item)
-        else None
-    )
+    checked = ENABLED and cls.constructs_from_row(item=item)
+    values = detached_values(cls=cls, item=item) if checked else {}
     instance = ORIGINAL_CONSTRUCT_ROW(cls, plan=plan, item=item)
-    if built is not None and (
+    if not checked:
+        return instance
+    built = cls._construct_with_excluded(excluded=plan.excluded_field_names, **values)
+    if (
         instance.__dict__ != built.__dict__
         or value_types(values=instance.__dict__) != value_types(values=built.__dict__)
         or instance.__pydantic_fields_set__ != built.__pydantic_fields_set__
+        or back_references(instance=instance) != back_references(instance=built)
     ):
         raise AssertionError(
             f"Trusted row construction mismatch for {cls.__name__}: "
