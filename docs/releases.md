@@ -90,6 +90,13 @@
   have a result processor through it, instead of checking every column of
   every row. On asyncpg, where most columns need no processor, building a row
   of a wide model is about 30% faster.
+* JSON columns are serialized and deserialized with orjson by default instead
+  of the standard library `json` (`json_serializer` and `json_deserializer`
+  of `DatabaseConnection` still override it), which makes reading rows with
+  JSON columns about 7–17% faster. Stored JSON text is compact and keeps
+  non-ASCII characters unescaped. Values orjson rejects fall back to `json`;
+  integers over 64 bits stored in JSON are read back as floats, so pass
+  `json_deserializer=json.loads` if you store them.
 * `values()` and `values_list()` pick the returned columns of each row with
   labels resolved once per query, and rows whose labels already are the
   returned names are copied as a whole, which makes them 1.2–1.3× faster on

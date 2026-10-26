@@ -17,6 +17,7 @@ from ormar.databases.native.backend import NativeBackend
 from ormar.databases.native.compiler import NativeCompiler
 from ormar.databases.query_executor import QueryExecutor
 from ormar.databases.transaction import Transaction
+from ormar.fields.parsers import deserialize_json_column, serialize_json_column
 
 _transaction_connection: ContextVar[Optional[AsyncConnection]] = ContextVar(
     "_transaction_connection", default=None
@@ -49,6 +50,8 @@ class DatabaseConnection:
             ``pool_size``) opens that many pooled connections on
             ``connect()`` (at most ``pool_size``), so the first concurrent
             queries do not wait for new connections; 0 keeps the pool lazy.
+            ``json_serializer`` and ``json_deserializer`` of JSON columns
+            default to orjson.
         """
         self._force_rollback = options.pop("force_rollback", False)
         self._url = url
@@ -58,6 +61,8 @@ class DatabaseConnection:
             options["pool_size"] = 10
         if "max_overflow" not in options:
             options["max_overflow"] = 10
+        options.setdefault("json_serializer", serialize_json_column)
+        options.setdefault("json_deserializer", deserialize_json_column)
         self._min_connections = options.pop("min_connections", options["pool_size"])
         self._options = options
         self._engine: Optional[AsyncEngine] = None
