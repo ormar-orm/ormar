@@ -86,6 +86,10 @@
 * Whether rows can be built directly from their values is decided once per
   query position instead of once per row, which makes loading many rows of a
   model without relations about 9% faster.
+* Native execution builds each row in one step and runs only the columns that
+  have a result processor through it, instead of checking every column of
+  every row. On asyncpg, where most columns need no processor, building a row
+  of a wide model is about 30% faster.
 * JSON columns are serialized and deserialized with orjson by default instead
   of the standard library `json` (`json_serializer` and `json_deserializer`
   of `DatabaseConnection` still override it), which makes reading rows with
