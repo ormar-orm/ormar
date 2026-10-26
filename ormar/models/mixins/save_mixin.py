@@ -255,21 +255,66 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         return new_kwargs
 
     @classmethod
-    def validate_enums(cls, new_kwargs: dict) -> dict:
+    def validate_update_values(cls, new_kwargs: dict) -> dict:
         """
-        Receives dictionary of model that is about to be saved and validates the
-        fields with choices set to see if the value is allowed.
+        Receives dictionary of values about to be set by a queryset update,
+        validates them and converts them into column values, the same way
+        initializing a model would:
 
-        :param new_kwargs: dictionary of model that is about to be saved
+        * foreign keys accept the related model, a dictionary with its pk or the
+          pk itself and are replaced with the validated pk value
+        * json fields accept a json string or a value to be dumped and are
+          replaced with the parsed value
+        * other fields are validated with their own validators
+
+        :param new_kwargs: dictionary of values about to be used for the update
         :type new_kwargs: dict
-        :return: dictionary of model that is about to be saved
+        :return: dictionary of column values about to be used for the update
         :rtype: dict
         """
         validators = cls._build_individual_schema_validator()
+        foreign_keys = cls._extract_db_related_names()
         for key, value in new_kwargs.items():
-            if key in validators:
+            if key in foreign_keys:
+                new_kwargs[key] = cls._related_pk_for_update(
+                    field_name=key, value=value
+                )
+            elif key in cls._json_fields:
+                new_kwargs[key] = validators[key].validate_python(encode_json(value))
+            elif key in validators:
                 validators[key].validate_python(value)
         return new_kwargs
+
+    @classmethod
+    def _related_pk_for_update(cls, field_name: str, value: Any) -> Any:
+        """
+        Returns the validated pk value of a related model passed to a queryset
+        update as a model, a dictionary with its pk or the pk itself.
+
+        :param field_name: name of the foreign key field
+        :type field_name: str
+        :param value: related model, dictionary or pk value (None clears it)
+        :type value: Any
+        :raises ModelPersistenceError: if the related model has no pk set
+        :return: pk value of the related model
+        :rtype: Any
+        """
+        target = cls.ormar_config.model_fields[field_name].to
+        pkname = target.ormar_config.pkname
+        if isinstance(value, ormar.Model):
+            value = getattr(value, pkname)
+            if value is None:
+                raise ModelPersistenceError(
+                    f"You cannot update {field_name} with {target.get_name()} "
+                    f"model without pk set!"
+                )
+        elif isinstance(value, dict):
+            value = value.get(pkname)
+        if value is None:
+            return None
+        return target._build_individual_schema_validator()[pkname].validate_python(
+            value
+        )
 
     @classmethod
     def _build_individual_schema_validator(cls) -> Any:

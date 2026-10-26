@@ -29,6 +29,10 @@ If you do not provide this flag or a filter a `QueryDefinitionError` will be rai
 
 Return number of rows updated.
 
+Values are validated and converted like in `create()`: a foreign key accepts the
+related model, a dictionary with its pk or the pk itself (`None` clears it), and a
+JSON field accepts a value to dump or a JSON string.
+
 ```Python hl_lines="46-48"
 --8<-- "../docs_src/queries/docs002.py"
 ```

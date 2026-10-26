@@ -166,6 +166,12 @@
 
 ### 🐛 Fixes
 
+* Fix `QuerySet.update()` with relation, JSON and bytes values. Foreign keys
+  now accept the related model or a dictionary with its pk besides the pk
+  itself (self-referencing foreign keys rejected even the pk), JSON fields
+  accept a value to dump (a dict or list was rejected, and a JSON string was
+  stored encoded twice and read back as a string), and bytes fields accept
+  strings, like `create()` and `save()` do.
 * Fix `get()` after `exclude()` returning the last row instead of raising
   `MultipleMatches` when several rows match. A queryset narrowed only by
   `exclude()` was treated as unfiltered; code relying on `exclude(...).get()`
