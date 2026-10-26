@@ -45,12 +45,12 @@ class DatabaseConnection:
             execution layer
         :param options: Additional engine options passed to
             ``create_async_engine``; ``pool_size`` defaults to 10 and
-            ``max_overflow`` to 10. ``min_connections`` (default 0) opens that
-            many pooled connections on ``connect()`` (at most ``pool_size``),
-            so the first concurrent queries do not wait for new connections.
+            ``max_overflow`` to 10. ``min_connections`` (default
+            ``pool_size``) opens that many pooled connections on
+            ``connect()`` (at most ``pool_size``), so the first concurrent
+            queries do not wait for new connections; 0 keeps the pool lazy.
         """
         self._force_rollback = options.pop("force_rollback", False)
-        self._min_connections = options.pop("min_connections", 0)
         self._url = url
         # Set reasonable pool defaults if not provided; overflow connections are
         # closed on checkin, so pool_size should cover the usual concurrency
@@ -58,6 +58,7 @@ class DatabaseConnection:
             options["pool_size"] = 10
         if "max_overflow" not in options:
             options["max_overflow"] = 10
+        self._min_connections = options.pop("min_connections", options["pool_size"])
         self._options = options
         self._engine: Optional[AsyncEngine] = None
         self._autocommit_engine: Optional[AsyncEngine] = None
