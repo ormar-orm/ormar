@@ -38,7 +38,10 @@
   instead (at most `pool_size`), and `min_connections=0` keeps the lazy pool.
   As a result `connect()` now raises when the database is unreachable, instead
   of the first query; pass `min_connections=0` to keep connecting lazily, e.g.
-  when the application can start before its database.
+  when the application can start before its database. Listeners for
+  SQLAlchemy's `connect` event (pragmas, session settings) added to the engine
+  after `connect()` miss the connections opened up front, so register them on
+  the pool class beforehand or pass `min_connections=0`.
 
 * `asyncmy` is now the recommended MySQL driver (`mysql+asyncmy://...`) and
   `pip install ormar[mysql]` installs it alongside `aiomysql` and `pymysql`.

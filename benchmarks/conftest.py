@@ -9,8 +9,10 @@ import nest_asyncio
 import pytest
 import pytest_asyncio
 from sqlalchemy import event
+from sqlalchemy.engine import make_url
+from sqlalchemy.pool import Pool
 from tests.lifespan import init_tests
-from tests.settings import create_config
+from tests.settings import ASYNC_DATABASE_URL, create_config
 
 import ormar
 
@@ -162,13 +164,16 @@ def disable_sqlite_disk_sync(dbapi_conn: Any, connection_record: Any) -> None:
     cursor.close()
 
 
+# Registered on every pool before connecting, so the connections
+# ``connect()`` opens up front get the pragmas too.
+if make_url(name_or_url=ASYNC_DATABASE_URL).get_backend_name() == "sqlite":
+    event.listen(target=Pool, identifier="connect", fn=disable_sqlite_disk_sync)
+
+
 @pytest_asyncio.fixture(autouse=True, scope="function")
 async def connect_database(create_test_database):
     if not base_ormar_config.database.is_connected:
         await base_ormar_config.database.connect()
-        engine = base_ormar_config.database.engine
-        if engine.dialect.name == "sqlite":
-            event.listen(engine.sync_engine, "connect", disable_sqlite_disk_sync)
 
     yield
 
