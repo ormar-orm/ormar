@@ -86,6 +86,10 @@
 * Whether rows can be built directly from their values is decided once per
   query position instead of once per row, which makes loading many rows of a
   model without relations about 9% faster.
+* Native execution builds each row in one step and runs only the columns that
+  have a result processor through it, instead of checking every column of
+  every row. On asyncpg, where most columns need no processor, building a row
+  of a wide model is about 30% faster.
 * `values()` and `values_list()` pick the returned columns of each row with
   labels resolved once per query, and rows whose labels already are the
   returned names are copied as a whole, which makes them 1.2–1.3× faster on
