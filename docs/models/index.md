@@ -246,12 +246,13 @@ database = DatabaseConnection(DATABASE_URL, pool_size=20, max_overflow=10)
     to run concurrently in one process, keeping the total across all processes below
     your database's connection limit (`max_connections` in PostgreSQL).
 
-Connections are opened lazily, on first use. To open them up front, so the first
-concurrent requests after startup don't wait for new connections, pass
-`min_connections` (at most `pool_size` are opened):
+`connect()` opens the whole pool up front, so the first concurrent requests after
+startup don't wait for new connections. Pass `min_connections` to open fewer (at
+most `pool_size` are opened), or `min_connections=0` to open connections lazily,
+on first use:
 
 ```python
-database = DatabaseConnection(DATABASE_URL, pool_size=20, min_connections=20)
+database = DatabaseConnection(DATABASE_URL, pool_size=20, min_connections=5)
 ```
 
 #### Native execution

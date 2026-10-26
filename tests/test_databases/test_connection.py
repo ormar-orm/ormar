@@ -250,8 +250,18 @@ async def test_min_connections_are_capped_at_pool_size():
 
 
 @pytest.mark.asyncio
-async def test_pool_is_lazy_without_min_connections():
-    database = DatabaseConnection(ASYNC_DATABASE_URL)
+async def test_min_connections_default_to_pool_size():
+    database = DatabaseConnection(ASYNC_DATABASE_URL, pool_size=3)
+    await database.connect()
+    try:
+        assert database.engine.pool.checkedin() == 3
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_pool_is_lazy_with_zero_min_connections():
+    database = DatabaseConnection(ASYNC_DATABASE_URL, min_connections=0)
     await database.connect()
     try:
         assert database.engine.pool.checkedin() == 0

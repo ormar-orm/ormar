@@ -147,7 +147,9 @@ async def test_native_backend_selected_per_driver():
 
 @pytest.mark.asyncio
 async def test_aiomysql_has_no_native_backend():
-    database = DatabaseConnection("mysql+aiomysql://user:pass@localhost/db")
+    database = DatabaseConnection(
+        "mysql+aiomysql://user:pass@localhost/db", min_connections=0
+    )
     async with database:
         assert database.native_backend is None
 
