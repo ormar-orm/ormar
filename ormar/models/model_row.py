@@ -44,6 +44,8 @@ class RowExtractionPlan:
         not among the selected columns
     :ivar foreign_key_names: selected forward foreign key fields, whose raw pk
         value becomes a pk-only related model unless the relation is selected
+    :ivar holds_required_fields: every required field of the model is among
+        the mapped fields, so every row built with this plan holds them
     """
 
     column_mappings: tuple[tuple[str, str], ...]
@@ -51,6 +53,7 @@ class RowExtractionPlan:
     pk_field_name: str
     pk_column: Optional[str] = None
     foreign_key_names: tuple[str, ...] = ()
+    holds_required_fields: bool = False
 
 
 PlanCache = dict[tuple[type, str, int], RowExtractionPlan]
@@ -238,6 +241,10 @@ class ModelRow(NewBaseModel):
         through ``_construct_with_excluded``, which validates the values,
         registers relations and raises for excluded required fields.
 
+        When the plan already holds every required field, the cached trust of
+        the model is enough and the row is not checked again; a model whose
+        trust was reset (``reset_relation_caches``) is checked again first.
+
         :param plan: extraction plan of the row position
         :type plan: RowExtractionPlan
         :param item: field values of the row
@@ -245,7 +252,9 @@ class ModelRow(NewBaseModel):
         :return: model instance
         :rtype: ModelRow
         """
-        if cls.constructs_from_row(item=item):
+        if (
+            plan.holds_required_fields and cls.__dict__.get("_trusted_rows")
+        ) or cls.constructs_from_row(item=item):
             return cls._construct_from_row(
                 excluded=plan.excluded_field_names, values=item
             )
@@ -719,12 +728,16 @@ class ModelRow(NewBaseModel):
             for _, field_name in mappings
             if model_fields[field_name].is_relation
         )
+        cls.trusted_row_construction()  # fills ``_required_row_fields``
         return RowExtractionPlan(
             column_mappings=mappings,
             excluded_field_names=excluded,
             pk_field_name=pk_name,
             pk_column=pk_column,
             foreign_key_names=foreign_key_names,
+            holds_required_fields=cls._required_row_fields.issubset(
+                field_name for _, field_name in mappings
+            ),
         )
 
     @classmethod

@@ -406,13 +406,13 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         if related:
             values.update(related)
             cls.serialize_nested_models_json_fields(kwargs=related)
-        model_fields = cls.model_fields
-        if not excluded and tuple(values) == cls._row_field_order:
+        field_order = cls._row_field_order
+        if not excluded and tuple(values) == field_order:
             data = values
         else:
             data = {
                 name: None if name in excluded else values.get(name)
-                for name in model_fields
+                for name in field_order
             }
         object.__setattr__(instance, "__dict__", data)
         object.__setattr__(instance, "__pydantic_fields_set__", set(values))
