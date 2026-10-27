@@ -10,6 +10,7 @@ seen, and the wrapped statement is what gets cached.
 from typing import (
     Any,
     List,
+    Tuple,
 )
 
 import sqlalchemy
@@ -35,7 +36,7 @@ def exists_statement(select: sqlalchemy.sql.Select) -> Executable:
 
 
 def count_statement(
-    select: sqlalchemy.sql.Select, distinct: bool, pk_column_name: str
+    select: sqlalchemy.sql.Select, distinct: bool, pk_column_names: Tuple[str, ...]
 ) -> Executable:
     """
     Wrap a read select into a row count, the statement run by
@@ -50,15 +51,15 @@ def count_statement(
     :type select: sqlalchemy.sql.Select
     :param distinct: count distinct primary keys only
     :type distinct: bool
-    :param pk_column_name: primary key column alias of the model
-    :type pk_column_name: str
+    :param pk_column_names: primary key column aliases of the model
+    :type pk_column_names: Tuple[str, ...]
     :return: count statement
     :rtype: Executable
     """
     subquery = select.alias(name="subquery_for_count")
     expr = sqlalchemy.func.count().select().select_from(subquery)
     if distinct:
-        grouped = expr.group_by(pk_column_name).alias(  # type: ignore[arg-type]
+        grouped = expr.group_by(*pk_column_names).alias(  # type: ignore[arg-type]
             name="subquery_for_group"
         )
         expr = sqlalchemy.func.count().select().select_from(grouped)

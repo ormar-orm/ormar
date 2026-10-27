@@ -1130,9 +1130,7 @@ class QuerySet(Generic[T]):
         wrap = functools.partial(
             count_statement,
             distinct=distinct,
-            pk_column_name=self.model.get_column_alias(
-                field_name=self.model_config.pkname
-            ),
+            pk_column_names=self.model_config.pk.column_aliases(),
         )
         template = self.build_select_template(variant=("count", distinct), wrap=wrap)
         async with self.model_config.database.get_query_executor() as executor:
@@ -1372,16 +1370,16 @@ class QuerySet(Generic[T]):
         :return: combined list of OrderAction objects
         :rtype: list[OrderAction]
         """
-        pk_default = OrderAction(
-            order_str=self.model.ormar_config.pkname,
-            model_cls=self.model_cls,  # type: ignore
-        )
+        pk_defaults = [
+            OrderAction(order_str=field, model_cls=self.model_cls)  # type: ignore
+            for field in self.model_config.pk.fields
+        ]
         user_orders = self.order_bys
         if reverse:
-            pk_default = pk_default.flipped()
+            pk_defaults = [order.flipped() for order in pk_defaults]
             user_orders = [ob.flipped() for ob in user_orders]
         has_source_order = any(x.is_source_model_order for x in self.order_bys)
-        prefix: list["OrderAction"] = [] if has_source_order else [pk_default]
+        prefix: list["OrderAction"] = [] if has_source_order else pk_defaults
         return prefix + list(user_orders)
 
     async def _fetch_single(self, order_bys: list["OrderAction"]) -> "T":
@@ -1535,9 +1533,10 @@ class QuerySet(Generic[T]):
                 order_bys=(
                     [
                         OrderAction(
-                            order_str=f"-{self.model.ormar_config.pkname}",
+                            order_str=f"-{field}",
                             model_cls=self.model_cls,  # type: ignore
                         )
+                        for field in self.model_config.pk.fields
                     ]
                     if not any([x.is_source_model_order for x in self.order_bys])
                     else []
@@ -1684,7 +1683,7 @@ class QuerySet(Generic[T]):
 
         rows: list = []
         last_primary_key = None
-        pk_alias = self.model.get_column_alias(self.model_config.pkname)
+        read_pk = self.model_config.pk.getter(self.model_config.pk.column_aliases())
         # Single shared cache across all yielded chunks so 1-row chunks
         # (the common iterate case) still amortize the plan build.
         plan_cache: dict = {}
@@ -1695,7 +1694,7 @@ class QuerySet(Generic[T]):
             transactional=True
         ) as executor:
             async for row in executor.iterate(template.statement, template.params):
-                current_primary_key = row[pk_alias]
+                current_primary_key = read_pk(row)
                 if last_primary_key == current_primary_key or last_primary_key is None:
                     last_primary_key = current_primary_key
                     rows.append(row)

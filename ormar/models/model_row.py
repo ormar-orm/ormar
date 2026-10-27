@@ -4,6 +4,8 @@ from typing import (
     TYPE_CHECKING,
     AbstractSet,
     Any,
+    Callable,
+    Mapping,
     Optional,
     Sequence,
     Union,
@@ -32,16 +34,19 @@ class RowExtractionPlan:
     Precomputed per-``(model_cls, table_prefix, excludable)`` view of the work
     that ``from_row`` used to redo for every row: which columns to read from
     the SA row (already prefixed and filtered), which field names to nullify
-    after construction, and the model's pk field name.
+    after construction, and how to read the model's primary key.
 
     :ivar column_mappings: ordered ``(prefixed_db_column, field_name)`` pairs
         the row reader iterates over to populate the model dict
     :ivar excluded_field_names: field names to nullify via
         ``_construct_with_excluded`` after pydantic validation
-    :ivar pk_field_name: cached ``ormar_config.pkname`` so the row reader can
-        test for a populated pk without a per-row attribute lookup
-    :ivar pk_column: prefixed db column holding the pk, ``None`` when the pk is
-        not among the selected columns
+    :ivar pk_columns: prefixed db columns holding the primary key, ``None``
+        when the key is not among the selected columns
+    :ivar read_pk_from_row: reads the key value out of a row (``None`` when the
+        key is not selected), resolved once so the row reader does no per-row
+        name lookups
+    :ivar read_pk_from_item: reads the key value out of the model dict built
+        from a row, ``None`` when the key is not selected
     :ivar foreign_key_names: selected forward foreign key fields, whose raw pk
         value becomes a pk-only related model unless the relation is selected
     :ivar holds_required_fields: every required field of the model is among
@@ -50,8 +55,9 @@ class RowExtractionPlan:
 
     column_mappings: tuple[tuple[str, str], ...]
     excluded_field_names: frozenset[str]
-    pk_field_name: str
-    pk_column: Optional[str] = None
+    pk_columns: Optional[tuple[str, ...]] = None
+    read_pk_from_row: Optional[Callable[[Mapping[str, Any]], Any]] = None
+    read_pk_from_item: Optional[Callable[[Mapping[str, Any]], Any]] = None
     foreign_key_names: tuple[str, ...] = ()
     holds_required_fields: bool = False
 
@@ -209,12 +215,12 @@ class ModelRow(NewBaseModel):
         )
         mappings = plan.column_mappings
         foreign_keys = plan.foreign_key_names
-        pk_name = plan.pk_field_name
+        read_pk = cast(Callable[[Mapping[str, Any]], Any], plan.read_pk_from_item)
         seen: set[Any] = set()
         instances: list["Model"] = []
         for row in rows:
             item = {field_name: row[column] for column, field_name in mappings}
-            pk = item[pk_name]
+            pk = read_pk(item)
             if pk in seen:
                 continue
             seen.add(pk)
@@ -324,8 +330,8 @@ class ModelRow(NewBaseModel):
 
         plan = cls.get_or_build_row_plan(table_prefix, excludable, plan_cache)
         key: Optional[RegistryKey] = None
-        if registry is not None and plan.pk_column is not None:
-            pk = row[plan.pk_column]
+        if registry is not None and plan.read_pk_from_row is not None:
+            pk = plan.read_pk_from_row(row)
             if pk is None:
                 return None, False
             key = (scope, table_prefix, pk)
@@ -368,7 +374,10 @@ class ModelRow(NewBaseModel):
             cls._share_pk_only_models(plan, item, registry, (scope, table_prefix))
 
         instance: Optional["Model"] = None
-        if item.get(plan.pk_field_name, None) is not None:
+        if (
+            plan.read_pk_from_item is not None
+            and plan.read_pk_from_item(item) is not None
+        ):
             instance = cast("Model", cls.construct_row_instance(plan=plan, item=item))
             instance.set_save_status(True)
             if key is not None:
@@ -717,11 +726,15 @@ class ModelRow(NewBaseModel):
         excluded = frozenset(
             cls.get_names_to_exclude(excludable=excludable, alias=table_prefix)
         )
-        pk_name = cls.ormar_config.pkname
-        pk_column = next(
-            (column for column, field_name in mappings if field_name == pk_name),
-            None,
-        )
+        key = cls.ormar_config.pk
+        column_by_field = {field_name: column for column, field_name in mappings}
+        pk_columns: Optional[tuple[str, ...]] = None
+        read_pk_from_row = None
+        read_pk_from_item = None
+        if all(field in column_by_field for field in key.fields):
+            pk_columns = tuple(column_by_field[field] for field in key.fields)
+            read_pk_from_row = key.getter(pk_columns)
+            read_pk_from_item = key.getter(key.fields)
         model_fields = cls.ormar_config.model_fields
         foreign_key_names = tuple(
             field_name
@@ -732,8 +745,9 @@ class ModelRow(NewBaseModel):
         return RowExtractionPlan(
             column_mappings=mappings,
             excluded_field_names=excluded,
-            pk_field_name=pk_name,
-            pk_column=pk_column,
+            pk_columns=pk_columns,
+            read_pk_from_row=read_pk_from_row,
+            read_pk_from_item=read_pk_from_item,
             foreign_key_names=foreign_key_names,
             holds_required_fields=cls._required_row_fields.issubset(
                 field_name for _, field_name in mappings
