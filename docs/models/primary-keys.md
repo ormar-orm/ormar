@@ -77,7 +77,11 @@ await Order.objects.exclude(pk=(1, 7)).all()
 await Order.objects.order_by("pk").all()  # by tenant_id, then number
 ```
 
-On a composite key only `pk=` and `pk__in=` lookups are available. A key value
+`pk` lookups also work inside `ormar.or_()` / `ormar.and_()` groups and through
+relations (`Book.objects.filter(author__pk=1)`). On a composite key `pk=` and
+`pk__in=` compile to a row-value comparison,
+`(tenant_id, number) IN ((1, 7), (2, 3))`, and only those two lookups are available.
+A composite key value with a `None` part raises `QueryDefinitionError`. A key value
 that doesn't match the key (wrong number of parts, unknown field names) raises
 `QueryDefinitionError`. Python-style filters on the key (`Album.pk == 1`) work for
 single column keys only.

@@ -6,10 +6,11 @@ from sqlalchemy import ColumnElement
 
 import ormar  # noqa I100
 from ormar.exceptions import QueryDefinitionError
-from ormar.queryset.actions.filter_action import FilterAction
+from ormar.queryset.actions.filter_action import FilterAction, KeyInFilterAction
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
+    from ormar.models.primary_key import PrimaryKey
     from ormar.queryset.templates import SlotBinder
 
 
@@ -228,77 +229,104 @@ class QueryClause:
         select_related = list(self._select_related)
 
         for key, value in kwargs.items():
-            filter_action = FilterAction(
-                filter_str=key, value=value, model_cls=self.model_cls
-            )
-            select_related = filter_action.update_select_related(
-                select_related=select_related
-            )
-
-            own_filter_clauses.append(filter_action)
+            actions = pk_filter_actions(
+                model_cls=self.model_cls, name=key, value=value
+            ) or [FilterAction(filter_str=key, value=value, model_cls=self.model_cls)]
+            for filter_action in actions:
+                select_related = filter_action.update_select_related(
+                    select_related=select_related
+                )
+                own_filter_clauses.append(filter_action)
 
         if _own_only:
             return own_filter_clauses, select_related
         return filter_clauses + own_filter_clauses, select_related
 
 
-def extract_pk_lookups(
-    model_cls: type["Model"], kwargs: dict[str, Any]
-) -> tuple[list[FilterGroup], dict[str, Any]]:
+def pk_filter_actions(
+    model_cls: type["Model"], name: str, value: Any
+) -> Optional[list[FilterAction]]:
     """
-    Rewrite ``pk`` lookups into lookups on the primary key fields::
+    Turn a filter on ``pk`` (also through relations, ``author__pk=1``) into
+    filters on the primary key fields of the model it points at::
 
         pk=4             -> id=4
         pk__gt=4         -> id__gt=4
-        pk=(1, 7)        -> tenant_id=1, number=7          (composite key)
-        pk__in=[(1, 7)]  -> or_(and_(tenant_id=1, number=7))  (composite key)
+        pk=(1, 7)        -> (tenant_id, number) IN ((1, 7))  (composite key)
+        pk__in=[(1, 7)]  -> (tenant_id, number) IN ((1, 7))  (composite key)
 
     :raises QueryDefinitionError: for operators other than ``in`` on a
-        composite key, or values not matching the key
-    :param model_cls: filtered model
+        composite key, values not matching the key, or ``pk`` after a field
+        that is not a relation
+    :param model_cls: queried model
     :type model_cls: type[Model]
-    :param kwargs: filter keyword arguments
-    :type kwargs: dict[str, Any]
-    :return: filter groups to add and the rewritten keyword arguments
-    :rtype: tuple[list[FilterGroup], dict[str, Any]]
+    :param name: filter keyword
+    :type name: str
+    :param value: filter value
+    :type value: Any
+    :return: filter actions, ``None`` if the keyword is not a ``pk`` lookup
+    :rtype: Optional[list[FilterAction]]
     """
-    key = model_cls.ormar_config.pk
-    groups: list[FilterGroup] = []
-    rewritten: dict[str, Any] = {}
-    for name, value in kwargs.items():
-        lookup, _, operator = name.partition("__")
-        if lookup != "pk":
-            rewritten[name] = value
-        elif not operator or operator == "exact":
-            rewritten.update(key.to_dict(value=value))
-        elif not key.is_composite:
-            rewritten[f"{key.fields[0]}__{operator}"] = value
-        elif operator == "in":
-            groups.append(composite_key_in_group(model_cls=model_cls, values=value))
-        else:
+    parts = name.split("__")
+    if "pk" not in parts:
+        return None
+    position = parts.index("pk")
+    prefix = "".join(f"{part}__" for part in parts[:position])
+    operator = "__".join(parts[position + 1 :])
+    target = model_cls
+    for part in parts[:position]:
+        field = target.ormar_config.model_fields.get(part)
+        if field is None or not field.is_relation:
             raise QueryDefinitionError(
-                f"Only pk=... and pk__in=... lookups are supported on the composite "
-                f"primary key of {model_cls.__name__}, got {name}."
+                f"pk lookup {name} must follow relations, {part} is not a relation "
+                f"of {target.__name__}."
             )
-    return groups, rewritten
+        target = field.to
+    key = target.ormar_config.pk
+    if key.is_composite and operator in ("", "exact"):
+        key_value = tuple(key_parts_of(key=key, value=value).values())
+        return [
+            KeyInFilterAction(prefix=prefix, values=[key_value], model_cls=model_cls)
+        ]
+    if operator in ("", "exact"):
+        return [
+            FilterAction(filter_str=f"{prefix}{field}", value=part, model_cls=model_cls)
+            for field, part in key_parts_of(key=key, value=value).items()
+        ]
+    if not key.is_composite:
+        return [
+            FilterAction(
+                filter_str=f"{prefix}{key.fields[0]}__{operator}",
+                value=value,
+                model_cls=model_cls,
+            )
+        ]
+    if operator != "in":
+        raise QueryDefinitionError(
+            f"Only pk=... and pk__in=... lookups are supported on the composite "
+            f"primary key of {target.__name__}, got {name}."
+        )
+    values = [tuple(key_parts_of(key=key, value=item).values()) for item in value]
+    return [KeyInFilterAction(prefix=prefix, values=values, model_cls=model_cls)]
 
 
-def composite_key_in_group(model_cls: type["Model"], values: Any) -> FilterGroup:
+def key_parts_of(key: "PrimaryKey", value: Any) -> dict[str, Any]:
     """
-    Build the filter matching any of the given composite key values::
+    Split a key value used in a filter, rejecting composite values with a
+    ``None`` part (a key with a missing part identifies no row).
 
-        [(1, 7), (2, 8)] -> (tenant_id=1 AND number=7) OR (tenant_id=2 AND number=8)
-
-    An empty list matches no rows.
-
-    :param model_cls: filtered model
-    :type model_cls: type[Model]
-    :param values: composite key values
-    :type values: Any
-    :return: filter group over the key fields
-    :rtype: FilterGroup
+    :raises QueryDefinitionError: if the value doesn't match the key
+    :param key: primary key filtered on
+    :type key: PrimaryKey
+    :param value: key value
+    :type value: Any
+    :return: key parts by field name
+    :rtype: dict[str, Any]
     """
-    key = model_cls.ormar_config.pk
-    if not values:
-        return and_(**{f"{key.fields[0]}__in": []})
-    return or_(*(and_(**key.to_dict(value=value)) for value in values))
+    parts = key.to_dict(value=value)
+    if key.is_composite and None in parts.values():
+        raise QueryDefinitionError(
+            f"{key.owner.__name__} composite primary key value cannot contain "
+            f"None: {value!r}"
+        )
+    return parts

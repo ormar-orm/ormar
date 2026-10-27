@@ -109,7 +109,10 @@ def build_pk_select(table: sqlalchemy.Table, primary_key: "PrimaryKey") -> Execu
 
 
 def build_bulk_update(
-    table: sqlalchemy.Table, primary_key: "PrimaryKey", columns: Tuple[str, ...]
+    table: sqlalchemy.Table,
+    primary_key: "PrimaryKey",
+    columns: Tuple[str, ...],
+    where_prefix: str = "new_",
 ) -> Executable:
     """
     Build the per-row update used by ``bulk_update``: values and the primary
@@ -125,10 +128,14 @@ def build_bulk_update(
     :type primary_key: PrimaryKey
     :param columns: updated column names
     :type columns: Tuple[str, ...]
+    :param where_prefix: prefix of the key parameters matching each row:
+        ``new_`` for the current key, ``old_`` for the persisted key when a
+        key in the batch was changed (the key columns are then also updated)
+    :type where_prefix: str
     :return: update statement
     :rtype: Executable
     """
-    slots = tuple("new_" + alias for alias in primary_key.column_aliases())
+    slots = tuple(where_prefix + alias for alias in primary_key.column_aliases())
     return (
         table.update()
         .where(primary_key.where_clause(slots=slots, typed=False))

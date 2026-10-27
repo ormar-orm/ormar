@@ -358,12 +358,13 @@ class LoadNode(Node):
         for row in self.rows:
             item = self.relation_field.to.apply_row_plan(row_plan, row, {})
             hashable_item = self._hash_item(item)
-            instance = parsed_rows.setdefault(
-                hashable_item,
-                self.relation_field.to._construct_with_excluded(
+            instance = parsed_rows.get(hashable_item)
+            if instance is None:
+                instance = self.relation_field.to._construct_with_excluded(
                     fields_to_exclude, **item
-                ),
-            )
+                )
+                instance.set_persisted(persisted=instance.pk is not None)
+                parsed_rows[hashable_item] = instance
             self.models.append(instance)
 
     def _hash_item(self, item: Union[dict, list]) -> tuple:

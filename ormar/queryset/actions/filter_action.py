@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+import sqlalchemy
 from sqlalchemy import TextClause
 
 import ormar  # noqa: I100, I202
@@ -203,3 +204,60 @@ class FilterAction(QueryAction):
         if self.has_escaped_character:
             clause.modifiers["escape"] = "\\"
         return clause
+
+
+class KeyInFilterAction(FilterAction):
+    """
+    ``pk__in`` filter on a composite primary key, compiled to one row-value
+    ``IN`` over the key columns::
+
+        filter(pk__in=[(1, 7), (2, 8)])
+        # -> WHERE (orders.tenant_id, orders.number) IN ((1, 7), (2, 8))
+
+    The values are bound as one expanding parameter, so every list length
+    shares one statement.
+    """
+
+    def __init__(
+        self, *, prefix: str, values: list[tuple[Any, ...]], model_cls: type["Model"]
+    ) -> None:
+        """
+        :param prefix: relation path to the filtered model, ``""`` or ending in
+            ``__``
+        :type prefix: str
+        :param values: key values as tuples of parts in key order
+        :type values: list[tuple[Any, ...]]
+        :param model_cls: queried model
+        :type model_cls: type[Model]
+        """
+        target_key = model_cls.ormar_config.pk
+        for part in prefix.split("__")[:-1]:
+            target_key = target_key.owner.ormar_config.model_fields[
+                part
+            ].to.ormar_config.pk
+        super().__init__(
+            filter_str=f"{prefix}{target_key.fields[0]}__in",
+            value=values,
+            model_cls=model_cls,
+        )
+        self.query_str = f"{prefix}pk__in"
+
+    def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
+        """
+        :param binder: names the bound values for statement templates, if given
+        :type binder: Optional[SlotBinder]
+        :return: row-value ``IN`` over the key columns
+        :rtype: TextClause
+        """
+        columns = list(self.target_model.ormar_config.pk.columns())
+        if self.table_prefix:
+            aliased_table = prefixed_table(self.table_prefix, self.column.table)
+            columns = [getattr(aliased_table.c, column.name) for column in columns]
+        value: Any = self.filter_value
+        if binder is not None:
+            value = binder.bind_key_in(
+                action=self,
+                value=value,
+                column_types=[column.type for column in columns],
+            )
+        return cast(TextClause, sqlalchemy.tuple_(*columns).in_(value))

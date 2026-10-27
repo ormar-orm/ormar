@@ -168,3 +168,38 @@ async def test_single_key_pk_lookups_and_order():
         "b",
         "a",
     ]
+
+
+@pytest.mark.asyncio
+async def test_pk_lookups_inside_groups_and_through_relations():
+    await seed()
+    shop = await Shop.objects.create(name="s")
+    await Stock.objects.create(shop_code="A", sku="1", shop=shop)
+    found = await Order.objects.filter(ormar.or_(pk=(1, 7), note="c")).all()
+    assert sorted(o.note for o in found) == ["a", "c"]
+    found = await Order.objects.filter(ormar.and_(pk__in=[(1, 8)])).all()
+    assert [o.note for o in found] == ["b"]
+    assert [s.name for s in await Shop.objects.filter(ormar.or_(pk=shop.id)).all()] == [
+        "s"
+    ]
+    assert [s.sku for s in await Stock.objects.filter(shop__pk=shop.id).all()] == ["1"]
+    shops = await Shop.objects.filter(stock__pk__in=[("A", "1")]).all()
+    assert [s.name for s in shops] == ["s"]
+
+
+@pytest.mark.asyncio
+async def test_large_composite_pk_in_uses_one_row_value_in():
+    await Order.objects.bulk_create([Order(tenant_id=5, number=n) for n in range(1200)])
+    keys = [(5, n) for n in range(1100)]
+    assert await Order.objects.filter(pk__in=keys).count() == 1100
+    assert await Order.objects.filter(pk__in=keys[:3]).count() == 3
+
+
+@pytest.mark.asyncio
+async def test_composite_pk_with_none_part_is_rejected():
+    with pytest.raises(QueryDefinitionError, match="None"):
+        await Order.objects.filter(pk=(1, None)).all()
+    with pytest.raises(QueryDefinitionError, match="None"):
+        await Order.objects.filter(pk__in=[(1, None)]).all()
+    with pytest.raises(QueryDefinitionError, match="not a relation"):
+        await Order.objects.filter(note__pk="x").all()

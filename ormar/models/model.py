@@ -133,11 +133,13 @@ class Model(ModelRow):
         :type self_fields: dict[str, Any]
         """
         model_fields = self.ormar_config.model_fields
+        key = self.ormar_config.pk
+        if key.autoincrement:
+            return
         missing = [
             name
-            for name in self.ormar_config.pk.fields
+            for name in key.fields
             if self_fields.get(name) is None
-            and not model_fields[name].autoincrement
             and model_fields[name].server_default is None
         ]
         if missing:
@@ -505,7 +507,7 @@ class Model(ModelRow):
             queryset = queryset.exclude_fields(exclude)
         if order_by:
             queryset = queryset.order_by(order_by)
-        instance = await queryset.select_related(relations).get(pk=self.pk)
+        instance = await queryset.select_related(relations).get(pk=self.persisted_key)
         self._orm.clear()
         self.update_from_dict(instance.model_dump())
         self.__setattr_fields__.clear()

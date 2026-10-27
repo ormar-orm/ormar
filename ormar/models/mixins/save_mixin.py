@@ -102,7 +102,7 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         for field_name in cls.ormar_config.pk.fields:
             field = cls.ormar_config.model_fields[field_name]
             if new_kwargs.get(field_name, ormar.Undefined) is None and (
-                field.nullable or field.autoincrement
+                field.nullable or cls.ormar_config.pk.autoincrement
             ):
                 del new_kwargs[field_name]
         return new_kwargs
