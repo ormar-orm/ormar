@@ -671,6 +671,11 @@ class QuerysetProxy(Generic[T]):
         """
         key = self.queryset.model_config.pk
         kwargs = key.expand_pk_kwarg(kwargs=kwargs)
+        if (
+            self.type_ == ormar.RelationType.REVERSE
+            and self.related_field_name in key.fields
+        ):
+            kwargs.setdefault(self.related_field_name, self._owner)
         lookup = key.lookup(kwargs=kwargs)
         if lookup is None:
             return await self.create(**kwargs)

@@ -147,8 +147,7 @@ class FilterAction(QueryAction):
                 and not field.is_multi
             ):
                 relation_field = cast("ForeignKeyField", field)
-                values = relation_field.link.values_for(related=self.filter_value)
-                return values[self.field_name]
+                return relation_field.target_value_of(related=self.filter_value)
             return self.filter_value.pk
         return self.filter_value
 
