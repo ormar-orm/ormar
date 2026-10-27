@@ -33,6 +33,7 @@ from ormar.models.helpers import (
     config_field_not_set,
     expand_reverse_relationships,
     extract_annotations_and_default_vals,
+    get_namespace_annotations,
     get_potential_fields,
     merge_or_generate_pydantic_config,
     modify_schema_example,
@@ -504,7 +505,9 @@ def extract_from_parents_definition(  # noqa: CCR001
     potential_fields = get_potential_fields(base_class.__dict__)
     if potential_fields:
         # parent model has ormar fields defined and was not parsed before
-        new_attrs = {key: {k: v for k, v in base_class.__dict__.get(key, {}).items()}}
+        new_attrs = {
+            key: dict(get_namespace_annotations(namespace=base_class.__dict__))
+        }
         new_attrs.update(potential_fields)
 
         new_fields = set(potential_fields.keys())
