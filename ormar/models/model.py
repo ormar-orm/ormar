@@ -447,8 +447,13 @@ class Model(ModelRow):
         :return: reloaded Model
         :rtype: Model
         """
-        if self.persisted_key is None:
+        if self.persisted_key is None and self.__pk_only__:
             kwargs = await self._load_by_set_fields()
+        elif self.persisted_key is None:
+            raise NoMatch(
+                f"{self.get_name(lower=False)} has no primary key, it cannot be "
+                "loaded from the database"
+            )
         else:
             template = pk_select_template(model_cls=type(self), pk=self.persisted_key)
             row = await self._execute_query(

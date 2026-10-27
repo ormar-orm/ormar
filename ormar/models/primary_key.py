@@ -310,7 +310,10 @@ class SingleColumnKey(PrimaryKey):
         :return: value of the key field, ``None`` when not set
         :rtype: Any
         """
-        return self.part_value(field=self.field, value=data.get(self.field))
+        value = data.get(self.field)
+        if self.relation_parts:
+            return self.part_value(field=self.field, value=value)
+        return value
 
     def bind_params(self, value: Any) -> dict[str, Any]:
         """

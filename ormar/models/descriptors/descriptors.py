@@ -115,7 +115,10 @@ class PkDescriptor:
         """
         instance.remember_persisted_key()
         for field_name, part in self.key.to_dict(value=value).items():
-            instance._internal_set(name=field_name, value=part)
+            if field_name in self.key.relation_parts:
+                setattr(instance, field_name, part)
+            else:
+                instance._internal_set(name=field_name, value=part)
         instance.set_save_status(False)
 
 

@@ -121,23 +121,26 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         for field in cls.extract_related_names():
             field_value = model_dict.get(field, None)
             if field_value is not None:
-                target_field = cls.ormar_config.model_fields[field]
+                target_field = cast(
+                    "ForeignKeyField", cls.ormar_config.model_fields[field]
+                )
                 target_key = target_field.to.ormar_config.pk
                 if isinstance(field_value, ormar.Model):  # pragma: no cover
-                    pk_value = target_key.value(instance=field_value)
+                    pk_value = target_field.target_value_of(related=field_value)
                     if pk_value is None:
                         raise ModelPersistenceError(
                             f"You cannot save {field_value.get_name()} "
                             f"model without pk set!"
                         )
                     model_dict[field] = pk_value
-                elif isinstance(field_value, (list, dict)) and field_value:
-                    if isinstance(field_value, list):
-                        model_dict[field] = [
-                            target_key.value_from(data=target) for target in field_value
-                        ]
-                    else:
-                        model_dict[field] = target_key.value_from(data=field_value)
+                elif isinstance(field_value, list) and field_value:
+                    model_dict[field] = [
+                        target_key.value_from(data=target) for target in field_value
+                    ]
+                elif isinstance(field_value, dict) and field_value:
+                    model_dict[field] = target_field.target_value_of(
+                        related=field_value
+                    )
                 else:
                     model_dict.pop(field, None)
         return model_dict
@@ -326,21 +329,20 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         :return: pk value of the related model
         :rtype: Any
         """
-        target = cls.ormar_config.model_fields[field_name].to
-        target_key = target.ormar_config.pk
-        if isinstance(value, ormar.Model):
-            value = target_key.value(instance=value)
-            if value is None:
+        field = cast("ForeignKeyField", cls.ormar_config.model_fields[field_name])
+        target = field.to
+        if isinstance(value, (ormar.Model, dict)):
+            is_model = isinstance(value, ormar.Model)
+            value = field.target_value_of(related=value)
+            if value is None and is_model:
                 raise ModelPersistenceError(
                     f"You cannot update {field_name} with {target.get_name()} "
                     f"model without pk set!"
                 )
-        elif isinstance(value, dict):
-            value = target_key.value_from(data=value)
         if value is None:
             return None
         validators = target._build_individual_schema_validator()
-        return validators[target_key.fields[0]].validate_python(value)
+        return validators[field.target_fields()[0]].validate_python(value)
 
     @classmethod
     def _build_individual_schema_validator(cls) -> Any:

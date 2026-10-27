@@ -208,10 +208,11 @@ class PydanticMixin(RelationMixin):
         :return: pydantic annotation of the field
         :rtype: Any
         """
+        relation_field = cast("ForeignKeyField", field)
         target: Any = Annotated[
-            field.to.ormar_config.pk.python_type(),  # type: ignore
+            relation_field.target_value_type(),  # type: ignore
             BeforeValidator(
-                partial(extract_pk_value, fields=field.to.ormar_config.pk.fields)
+                partial(extract_pk_value, fields=relation_field.target_fields())
             ),
         ]
         return cls._wrap_relation_field_type(

@@ -54,7 +54,6 @@ def key_only_instance(*, target: type["Model"], values: dict[str, Any]) -> "Mode
     :rtype: Model
     """
     init_dict = {
-        **values,
         **{
             name: key_only_instance(
                 target=field.to, values=field.to.ormar_config.pk.to_dict(value=-1)
@@ -62,6 +61,7 @@ def key_only_instance(*, target: type["Model"], values: dict[str, Any]) -> "Mode
             for name, field in target.ormar_config.model_fields.items()
             if field.is_relation and not field.nullable and not field.virtual
         },
+        **values,
     }
     return cast(
         "Model", target._internal_construct(_pk_only=True, _excluded=None, **init_dict)

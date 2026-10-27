@@ -187,7 +187,7 @@ def ForeignKey(  # type: ignore # noqa CFQ002
     *,
     name: Optional[str] = None,
     unique: bool = False,
-    nullable: bool = True,
+    nullable: Optional[bool] = None,
     related_name: Optional[str] = None,
     virtual: bool = False,
     onupdate: Union[ReferentialAction, str, None] = None,
@@ -207,8 +207,9 @@ def ForeignKey(  # type: ignore # noqa CFQ002
     :type name: str
     :param unique: parameter passed to sqlalchemy.ForeignKey, unique flag
     :type unique: bool
-    :param nullable: marks field as optional/ required
-    :type nullable: bool
+    :param nullable: marks field as optional/ required; defaults to optional,
+        and to required for a foreign key in the primary key
+    :type nullable: Optional[bool]
     :param related_name: name of reversed FK relation populated for you on to model
     :type related_name: str
     :param virtual: marks if relation is virtual.
@@ -242,21 +243,25 @@ def ForeignKey(  # type: ignore # noqa CFQ002
     skip_reverse = kwargs.pop("skip_reverse", False)
     skip_field = kwargs.pop("skip_field", False)
 
+    primary_key = kwargs.pop("primary_key", False)
+    if primary_key and nullable:
+        raise ModelDefinitionError(
+            "A foreign key that is part of the primary key cannot be nullable."
+        )
+    nullable = (not primary_key) if nullable is None else nullable
     sql_nullable = kwargs.pop("sql_nullable", None)
     sql_nullable = nullable if sql_nullable is None else sql_nullable
 
     index = kwargs.pop("index", False)
     to_field = kwargs.pop("to_field", None)
     db_constraint = kwargs.pop("db_constraint", True)
-    if not db_constraint and (onupdate is not None or ondelete is not None):
+    if not db_constraint and (
+        onupdate is not None or ondelete is not None or foreign_key_name is not None
+    ):
         raise ModelDefinitionError(
-            "ondelete/onupdate need a database constraint, they cannot be used "
-            "with db_constraint=False."
+            "ondelete/onupdate/foreign_key_name need a database constraint, they "
+            "cannot be used with db_constraint=False."
         )
-    primary_key = kwargs.pop("primary_key", False)
-    if primary_key:
-        nullable = False
-        sql_nullable = False
 
     validate_not_allowed_fields(kwargs)
     key_only_model = None
@@ -581,6 +586,17 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
                 f"while {type(value)} passed as a parameter."
             )
         return key_only_instance(target=self.to, values=self.target_values(value=value))
+
+    def target_value_of(self, related: Any) -> Any:
+        """
+        :param related: related model, its key-only model, a dict of its
+            fields or a raw value
+        :type related: Any
+        :return: the value this foreign key stores for it, ``None`` when the
+            related model lacks it
+        :rtype: Any
+        """
+        return self.link.values_for(related=related)[self.name]
 
     def target_value_type(self) -> Any:
         """
