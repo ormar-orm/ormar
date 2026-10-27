@@ -113,6 +113,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
     __slots__ = (
         "_orm_id",
         "_orm_saved",
+        "_orm_persisted",
+        "_orm_persisted_key",
         "_orm",
         "__pk_only__",
         "__ormar_excludable__",
@@ -130,6 +132,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         _orm: RelationsManager
         _orm_id: int
         _orm_saved: bool
+        _orm_persisted: bool
+        _orm_persisted_key: Any
         _related_names: Optional[set]
         _through_names: Optional[set]
         _related_names_hash: str
@@ -476,6 +480,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         :rtype: None
         """
         prev_hash = hash(self)
+        if name in self.ormar_config.pk.fields:
+            self.remember_persisted_key()
 
         if hasattr(self, name):
             object.__setattr__(self, name, value)
@@ -693,6 +699,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         """
         # object.__setattr__(self, "_orm_id", uuid.uuid4().hex)
         object.__setattr__(self, "_orm_saved", False)
+        object.__setattr__(self, "_orm_persisted", False)
+        object.__setattr__(self, "_orm_persisted_key", None)
         object.__setattr__(self, "__cached_hash__", None)
         object.__setattr__(self, "__setattr_fields__", set())
         object.__setattr__(
@@ -804,8 +812,54 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         self._orm.remove_parent(self, parent, name)
 
     def set_save_status(self, status: bool) -> None:
-        """Sets value of the save status"""
+        """
+        Sets value of the save status. A saved model matches its database row,
+        so it is also marked as persisted under its current key.
+
+        :param status: whether the model matches its database row
+        :type status: bool
+        """
         object.__setattr__(self, "_orm_saved", status)
+        if status:
+            self.set_persisted(persisted=True)
+
+    def set_persisted(self, persisted: bool) -> None:
+        """
+        Marks whether a database row exists for the model under its current key.
+
+        :param persisted: whether the row exists
+        :type persisted: bool
+        """
+        object.__setattr__(self, "_orm_persisted", persisted)
+        object.__setattr__(self, "_orm_persisted_key", None)
+
+    def remember_persisted_key(self) -> None:
+        """
+        Called before a key field changes: keeps the key the database row is
+        stored under, so ``update()``, ``delete()`` and ``load()`` still target
+        that row.
+        """
+        if self._orm_persisted and self._orm_persisted_key is None:
+            object.__setattr__(self, "_orm_persisted_key", self.pk)
+
+    @property
+    def persisted(self) -> bool:
+        """
+        :return: whether a database row exists for the model
+        :rtype: bool
+        """
+        return self._orm_persisted
+
+    @property
+    def persisted_key(self) -> Any:
+        """
+        :return: key of the model's database row: the key it was loaded or
+            last saved with, or the current key if it was not changed since
+        :rtype: Any
+        """
+        if self._orm_persisted_key is not None:
+            return self._orm_persisted_key
+        return self.pk
 
     @classmethod
     def update_forward_refs(cls, **localns: Any) -> None:

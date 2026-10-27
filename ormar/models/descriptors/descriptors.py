@@ -106,6 +106,7 @@ class PkDescriptor:
         :param value: new key value
         :type value: Any
         """
+        instance.remember_persisted_key()
         for field_name, part in self.key.to_dict(value).items():
             instance._internal_set(field_name, part)
         instance.set_save_status(False)

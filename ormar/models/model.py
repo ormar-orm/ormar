@@ -94,32 +94,57 @@ class Model(ModelRow):
 
     async def upsert(self: T, **kwargs: Any) -> T:
         """
-        Performs either a save or an update depending on the presence of the pk.
-        If the pk field is filled it's an update, otherwise the save is performed.
-        For save kwargs are ignored, used only in update if provided.
+        Performs either a save or an update:
 
-        When ``__force_save__`` is passed and the pk is filled, the database is
-        checked for an existing row first, so a model with a preset pk
-        (i.e. uuid default) is inserted instead of updated.
+        * a model loaded from or already saved to the database is updated,
+        * a model without a primary key is inserted,
+        * a model never saved but with its key set (uuid default, natural or
+          composite key) is looked up first and updated if the row exists,
+          inserted otherwise.
+
+        For save kwargs are ignored, used only in update if provided.
+        ``__force_save__`` is accepted for backwards compatibility and ignored.
 
         :param kwargs: list of fields to update
         :type kwargs: Any
         :return: saved Model
         :rtype: Model
         """
-
-        force_save = kwargs.pop("__force_save__", False)
-        if not self.pk:
+        kwargs.pop("__force_save__", None)
+        if self.persisted:
+            return await self.update(**kwargs)
+        if self.pk is None:
             return await self.save()
-
-        if force_save:
-            template = pk_select_template(model_cls=type(self), pk=self.pk)
-            row = await self._execute_query(
-                expr=template.statement, is_select=True, params=template.params
-            )
-            if not row:
-                return await self.save()
+        template = pk_select_template(model_cls=type(self), pk=self.pk)
+        row = await self._execute_query(
+            expr=template.statement, is_select=True, params=template.params
+        )
+        if not row:
+            return await self.save()
         return await self.update(**kwargs)
+
+    def _verify_key_parts_set(self, self_fields: dict[str, Any]) -> None:
+        """
+        Checks that every primary key part the database does not generate is
+        set before an insert.
+
+        :raises ModelPersistenceError: if a key part is missing
+        :param self_fields: values about to be inserted
+        :type self_fields: dict[str, Any]
+        """
+        model_fields = self.ormar_config.model_fields
+        missing = [
+            name
+            for name in self.ormar_config.pk.fields
+            if self_fields.get(name) is None
+            and not model_fields[name].autoincrement
+            and model_fields[name].server_default is None
+        ]
+        if missing:
+            raise ModelPersistenceError(
+                f"{self.__class__.__name__} primary key parts must be set before "
+                f"saving: {missing}"
+            )
 
     async def save(self: T) -> T:
         """
@@ -152,6 +177,7 @@ class Model(ModelRow):
             for field in key.fields:
                 self_fields.pop(field, None)
         self_fields = self.populate_default_values(self_fields)
+        self._verify_key_parts_set(self_fields=self_fields)
         # Values taken from ``__dict__`` are already set, re-assigning them only
         # costs a validation and two hash recomputations per field.
         current_values = self.__dict__
@@ -331,27 +357,32 @@ class Model(ModelRow):
         if values:
             self.update_from_dict(values)
 
-        if not self.pk:
+        if self.persisted_key is None:
             raise ModelPersistenceError(
                 "You cannot update not saved model! Use save or upsert method."
             )
 
         await self._emit_signal("pre_update", instance=self, passed_args=kwargs)
         self_fields = self._extract_model_db_fields()
-        for field in self.ormar_config.pk.fields:
-            self_fields.pop(field)
+        key_fields = set(self.ormar_config.pk.fields)
+        key_moved = self.persisted_key != self.pk
+        if not key_moved:
+            for field in key_fields:
+                self_fields.pop(field)
         if _columns:
             self_fields = {
                 k: v
                 for k, v in self_fields.items()
-                if k in _columns or k in self._onupdate_fields
+                if k in _columns
+                or k in self._onupdate_fields
+                or (key_moved and k in key_fields)
             }
         if self_fields:
             self_fields = self.translate_columns_to_aliases(self_fields)
             template = update_template(
                 model_cls=type(self),
                 values=self_fields,
-                pk=self.pk,
+                pk=self.persisted_key,
             )
             await self._execute_query(expr=template.statement, params=template.params)
         self.set_save_status(True)
@@ -375,11 +406,12 @@ class Model(ModelRow):
         :rtype: int
         """
         await self._emit_signal("pre_delete", instance=self)
-        template = delete_template(model_cls=type(self), pk=self.pk)
+        template = delete_template(model_cls=type(self), pk=self.persisted_key)
         result = await self._execute_query(
             expr=template.statement, params=template.params
         )
         self.set_save_status(False)
+        self.set_persisted(persisted=False)
         await self._emit_signal("post_delete", instance=self)
         return result
 
@@ -394,7 +426,7 @@ class Model(ModelRow):
         :return: reloaded Model
         :rtype: Model
         """
-        template = pk_select_template(model_cls=type(self), pk=self.pk)
+        template = pk_select_template(model_cls=type(self), pk=self.persisted_key)
         row = await self._execute_query(
             expr=template.statement, is_select=True, params=template.params
         )
