@@ -1,3 +1,4 @@
+import pickle
 import uuid
 from typing import Optional
 
@@ -47,7 +48,7 @@ create_test_database = init_tests(base_ormar_config)
 @pytest_asyncio.fixture(autouse=True)
 async def clean():
     async with base_ormar_config.database:
-        for model in (Item, Token, Country, Order):
+        for model in (Book, Author, Item, Token, Country, Order):
             await model.objects.delete(each=True)
         yield
 
@@ -126,3 +127,68 @@ async def test_composite_key_change_and_missing_part():
     ]
     with pytest.raises(ModelPersistenceError, match="number"):
         await Order(tenant_id=1).save()
+
+
+class Author(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="pk_authors")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=50)
+
+
+class Book(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="pk_books")
+
+    id: int = ormar.Integer(primary_key=True)
+    title: str = ormar.String(max_length=50)
+    author: Optional[Author] = ormar.ForeignKey(Author, related_name="books")
+
+
+@pytest.mark.asyncio
+async def test_bulk_created_rows_without_returned_keys_are_not_persisted():
+    items = [Item(name="x"), Item(name="y")]
+    await Item.objects.bulk_create(items)
+    assert all(item.persisted is (item.pk is not None) for item in items)
+    with pytest.raises(ModelPersistenceError, match="number"):
+        await Order.objects.bulk_create([Order(tenant_id=1)])
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_moves_changed_keys():
+    await Order.objects.bulk_create(
+        [Order(tenant_id=1, number=1), Order(tenant_id=1, number=2)]
+    )
+    orders = await Order.objects.order_by("pk").all()
+    orders[0].number = 50
+    orders[1].note = "kept"
+    await Order.objects.bulk_update(orders)
+    rows = [(o.number, o.note) for o in await Order.objects.order_by("pk").all()]
+    assert rows == [(2, "kept"), (50, None)]
+    orders[0].note = "after"
+    await orders[0].update()
+    assert (await Order.objects.get(pk=(1, 50))).note == "after"
+
+
+@pytest.mark.asyncio
+async def test_prefetched_and_unpickled_rows_track_their_key():
+    async with base_ormar_config.database:
+        author = await Author.objects.create(id=1, name="a")
+        await Book.objects.create(id=10, title="t", author=author)
+        loaded = await Author.objects.prefetch_related("books").get()
+        book = loaded.books[0]
+        book.id = 11
+        await book.update(title="moved")
+        assert [(b.id, b.title) for b in await Book.objects.all()] == [(11, "moved")]
+        await Item.objects.create(id=31, name="p")
+        restored = pickle.loads(pickle.dumps(await Item.objects.get(id=31)))
+        restored.id = 32
+        await restored.update()
+        assert [i.id for i in await Item.objects.all()] == [32]
+
+
+@pytest.mark.asyncio
+async def test_load_all_after_key_change_reads_the_persisted_row():
+    item = await Item.objects.create(id=21, name="a")
+    item.id = 22
+    await item.load_all()
+    assert (item.id, item.name) == (21, "a")

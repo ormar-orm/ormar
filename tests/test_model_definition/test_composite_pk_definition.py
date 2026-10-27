@@ -44,10 +44,8 @@ def test_composite_key_ddl_and_fields():
 
 
 def test_composite_parts_do_not_autoincrement():
-    fields = Order.ormar_config.model_fields
-    assert fields["tenant_id"].autoincrement is False
-    assert fields["number"].autoincrement is False
     assert Order.ormar_config.table.c.tenant_id.autoincrement is False
+    assert Order.ormar_config.table.c.order_no.autoincrement is False
     assert Order.ormar_config.pk.autoincrement is False
 
 

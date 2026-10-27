@@ -518,6 +518,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         state = super().__getstate__()
         self_dict = self.model_dump()
         state["__dict__"].update(**self_dict)
+        state["__ormar_persisted__"] = (self._orm_persisted, self._orm_persisted_key)
         return state
 
     def __setstate__(self, state: dict[Any, Any]) -> None:
@@ -532,8 +533,11 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             if k not in self.extract_related_names()
         }
         state["__dict__"] = basic_state
+        persisted, persisted_key = state.pop("__ormar_persisted__", (False, None))
         super().__setstate__(state)
         self._initialize_internal_attributes()
+        object.__setattr__(self, "_orm_persisted", persisted)
+        object.__setattr__(self, "_orm_persisted_key", persisted_key)
         for name, value in relations.items():
             setattr(self, name, value)
 
@@ -821,7 +825,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         """
         object.__setattr__(self, "_orm_saved", status)
         if status:
-            self.set_persisted(persisted=True)
+            self.set_persisted(persisted=self.pk is not None)
 
     def set_persisted(self, persisted: bool) -> None:
         """

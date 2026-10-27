@@ -271,8 +271,6 @@ def prepare_composite_key_fields(
             f"Composite primary key fields cannot autoincrement: {generated}"
         )
     key_columns = set(key.column_aliases())
-    for name in key_fields:
-        model_fields[name].autoincrement = False
     for column in columns:
         if column.name in key_columns:
             column.autoincrement = False
