@@ -1,10 +1,13 @@
 import base64
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+import ormar  # noqa: I100
 from ormar.fields.parsers import decode_bytes, encode_json
+from ormar.fields.relation_kind import FORWARD_ONE_TO_ONE, REVERSE_ONE_TO_ONE
+from ormar.relations.relation_manager import RelationsManager
 
 if TYPE_CHECKING:  # pragma: no cover
-    from ormar import Model
+    from ormar import BaseField, Model
     from ormar.models.primary_key import PrimaryKey
 
 
@@ -122,6 +125,37 @@ class PkDescriptor:
         instance.set_save_status(False)
 
 
+def unlink_previous_one_to_one(
+    instance: "Model", field: "BaseField", value: Any
+) -> None:
+    """
+    Before either side of a one-to-one relation gets a new value, unlink the
+    model it held, so the previous model doesn't keep pointing back at
+    ``instance``::
+
+        user.profile = new  # old.user becomes None
+        profile.user = bob  # ann.profile becomes None
+
+    :param instance: model the value is assigned on
+    :type instance: Model
+    :param field: assigned relation field
+    :type field: BaseField
+    :param value: new value of the relation
+    :type value: Any
+    """
+    if field.kind not in (FORWARD_ONE_TO_ONE, REVERSE_ONE_TO_ONE):
+        return
+    previous = cast(Optional["Model"], instance._orm.get(field.name))
+    if previous is None or (isinstance(value, ormar.Model) and previous == value):
+        return
+    if field.virtual:
+        RelationsManager.remove_parent(
+            item=previous, parent=instance, name=field.get_related_name()
+        )
+    else:
+        RelationsManager.remove_parent(item=instance, parent=previous, name=field.name)
+
+
 class RelationDescriptor:
     """
     Relation descriptor expands the relation to initialize the related model
@@ -139,6 +173,7 @@ class RelationDescriptor:
 
     def __set__(self, instance: "Model", value: Any) -> None:
         field = instance.ormar_config.model_fields[self.name]
+        unlink_previous_one_to_one(instance=instance, field=field, value=value)
         field.expand_relationship(value=value, child=instance)
 
         if (

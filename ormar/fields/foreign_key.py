@@ -367,9 +367,14 @@ def OneToOne(  # type: ignore
     :return: ormar ForeignKeyField with a one to one relation
     :rtype: ForeignKeyField
     """
+    if kwargs.get("unique") is False:
+        raise ModelDefinitionError(
+            "A OneToOne relation is always unique, use a ForeignKey for a "
+            "non-unique relation."
+        )
     if not kwargs.get("primary_key"):
-        kwargs.setdefault("unique", True)
-    return cast("T", ForeignKey(to, one_to_one=True, **kwargs))
+        kwargs["unique"] = True
+    return cast("T", ForeignKey(to=to, one_to_one=True, **kwargs))
 
 
 class ForeignKeyField(BaseField):  # type: ignore[misc]

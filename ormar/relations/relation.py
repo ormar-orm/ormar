@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Generic, Optional, TypeVar, Union, cast
 import ormar  # noqa I100
 from ormar.exceptions import RelationshipInstanceError  # noqa I100
 from ormar.relations.relation_proxy import RelationProxy
+from ormar.relations.utils import is_dead_proxy
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar.models import Model, NewBaseModel, T
@@ -211,6 +212,9 @@ class Relation(Generic[T]):
         """
         if self._to_remove:
             self._clean_related()
+        if self._type == RelationType.PRIMARY and is_dead_proxy(self.related_models):
+            self.related_models = None
+            self._owner.__dict__.pop(self.field_name, None)
         if self.related_models is None and self._type in (
             RelationType.REVERSE,
             RelationType.MULTIPLE,

@@ -47,3 +47,9 @@ user.model_dump()  # {"id": 1, "name": "Ann", "profile": {"id": 1, "bio": ...}}
   `select_related` / `prefetch_related`.
 * Assigning on the reverse side (`user.profile = profile`) links both models in memory;
   save the profile to store the link.
+* Assigning a new value on either side unlinks the model it replaced: after
+  `user.profile = new` the old profile's `user` is `None`, and after
+  `profile.user = bob` the previous user's `profile` is `None`. `user.profile = None`
+  unlinks both models. Save the changed models to store it.
+* Like the reverse side of a `ForeignKey`, the reverse side holds a weak reference: if
+  the profile is not referenced anywhere else, `user.profile` reads `None` again.
