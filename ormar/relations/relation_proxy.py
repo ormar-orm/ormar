@@ -273,9 +273,14 @@ class RelationProxy(Generic[T], list[T]):
         :rtype: QuerySet
         """
         related_field_name = self.related_field_name
-        pkname = self._owner.get_column_alias(self._owner.ormar_config.pkname)
+        key = self._owner.ormar_config.pk
         self._check_if_model_saved()
-        kwargs = {f"{related_field_name}__{pkname}": self._owner.pk}
+        kwargs = {
+            f"{related_field_name}__{alias}": part
+            for alias, part in zip(
+                key.column_aliases(), key.to_dict(self._owner.pk).values()
+            )
+        }
         queryset = (
             ormar.QuerySet(
                 model_cls=self.relation.to, proxy_source_model=self._owner.__class__

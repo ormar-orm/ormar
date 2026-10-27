@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, Sequence, Union, cast
 
 import ormar_rust_utils
 
-import ormar  # noqa:  I100, I202
 from ormar.queryset.clause import QueryClause
 from ormar.queryset.queries.query import Query
 from ormar.queryset.utils import translate_list_to_dict
@@ -14,6 +13,7 @@ from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import ForeignKeyField, Model
+    from ormar.fields.link import RelationLink
     from ormar.models.excludable import ExcludableItems
     from ormar.queryset import FilterAction, OrderAction
 
@@ -37,28 +37,9 @@ class Node(abc.ABC):
         self.table_prefix = ""
         self.rows: list = []
         self.models: list["Model"] = []
-        self.use_alias: bool = False
-
-    @property
-    def target_name(self) -> str:
-        """
-        Return the name of the relation that is used to
-        fetch excludes/includes from the excludable mixin
-        as well as specifying the target to join in m2m relations
-
-        :return: name of the relation
-        :rtype: str
-        """
-        if (
-            self.relation_field.self_reference
-            and self.relation_field.self_reference_primary == self.relation_field.name
-        ):
-            return self.relation_field.default_source_field_name()
-        else:
-            return self.relation_field.default_target_field_name()
 
     @abstractmethod
-    def extract_related_ids(self, column_name: str) -> list:  # pragma: no cover
+    def extract_related_ids(self, link: "RelationLink") -> list:  # pragma: no cover
         pass
 
     @abstractmethod
@@ -73,39 +54,40 @@ class Node(abc.ABC):
         """
         Populates where clause with condition to return only models within the
         set of extracted ids.
+
         If there are no ids for relation the empty list is returned.
 
         :return: list of filter clauses based on original models
         :rtype: list[sqlalchemy.sql.elements.TextClause]
         """
-        column_name = self.relation_field.get_model_relation_fields(
-            self.parent.use_alias
-        )
-
-        ids = self.parent.extract_related_ids(column_name=column_name)
-
+        link = self.relation_field.link
+        ids = self.parent.extract_related_ids(link=link)
         if ids:
-            return self._prepare_filter_clauses(ids=ids)
+            return self._prepare_filter_clauses(link=link, ids=ids)
         return []
 
-    def _prepare_filter_clauses(self, ids: list) -> list["FilterAction"]:
+    def _prepare_filter_clauses(
+        self, link: "RelationLink", ids: list
+    ) -> list["FilterAction"]:
         """
         Gets the list of ids and construct a list of filter queries on
-        extracted appropriate column names
+        the target columns of the relation link.
 
+        :param link: columns connecting the parent models to the queried ones
+        :type link: RelationLink
         :param ids: list of ids that should be used to fetch data
         :type ids: list
         :return: list of filter actions to use in query
         :rtype: list["FilterAction"]
         """
         clause_target = self.relation_field.get_filter_clause_target()
-        filter_column = self.relation_field.get_related_field_alias()
+        (filter_column,) = link.target_columns()
         qryclause = QueryClause(
             model_cls=clause_target,
             select_related=[],
             filter_clauses=[],
         )
-        kwargs = {f"{cast(str, filter_column)}__in": ids}
+        kwargs = {f"{filter_column}__in": ids}
         filter_clauses, _ = qryclause.prepare_filter(_own_only=False, **kwargs)
         return filter_clauses
 
@@ -117,7 +99,6 @@ class AlreadyLoadedNode(Node):
 
     def __init__(self, relation_field: "ForeignKeyField", parent: "Node") -> None:
         super().__init__(relation_field=relation_field, parent=parent)
-        self.use_alias = False
         self._extract_own_models()
 
     def _extract_own_models(self) -> None:
@@ -146,23 +127,21 @@ class AlreadyLoadedNode(Node):
         for child in self.children:
             child.reload_tree()
 
-    def extract_related_ids(self, column_name: str) -> list:
+    def extract_related_ids(self, link: "RelationLink") -> list:
         """
-        Extracts the selected column(s) values from own models.
+        Extracts the values own models hold for a relation link.
         Those values are used to construct filter clauses and populate child models.
 
-        :param column_name: names of the column(s) that holds the relation info
-        :type column_name: Union[str, list[str]]
+        :param link: link from own models to the prefetched ones
+        :type link: RelationLink
         :return: list of extracted values of relation columns
         :rtype: list
         """
         list_of_ids = UniqueList()
         for model in self.models:
-            child = getattr(model, column_name)
-            if isinstance(child, ormar.Model):
-                list_of_ids.append(child.pk)
-            elif child is not None:
-                list_of_ids.append(child)
+            key = link.key_of(model)
+            if key is not None:
+                list_of_ids.append(key)
         return list_of_ids
 
 
@@ -199,7 +178,6 @@ class LoadNode(Node):
         self.query_excludable = excludable
         self.exclude_prefix: str = ""
         self.orders_by = orders_by
-        self.use_alias = True
         self.grouped_models: dict[Any, list["Model"]] = dict()
         self.source_model = source_model
 
@@ -215,7 +193,9 @@ class LoadNode(Node):
         self._update_excludable_with_related_pks()
         if self.relation_field.is_multi:
             query_target = self.relation_field.through
-            select_related = [self.target_name]
+            select_related = [
+                self.relation_field.through_target_field_name()  # type: ignore
+            ]
             self.query_excludable = self.excludable.with_entry_alias(
                 model_cls=self.relation_field.to,
                 source_alias=self.exclude_prefix,
@@ -258,10 +238,12 @@ class LoadNode(Node):
         Makes sure that excludable is populated with own model primary keys values
         if the excludable has the exclude/include clauses
         """
-        related_field_names = self.relation_field.get_related_field_name()
+        related_field_names = self.relation_field.link.target_fields()
         self.exclude_prefix = alias_for(self._build_relation_key())
         if self.relation_field.is_multi:
-            self.table_prefix = alias_for(self.target_name)
+            self.table_prefix = alias_for(
+                self.relation_field.through_target_field_name()  # type: ignore
+            )
         target_model = self.relation_field.to
         model_excludable = self.excludable.get(
             model_cls=target_model, alias=self.exclude_prefix
@@ -322,37 +304,23 @@ class LoadNode(Node):
             relation_str = f"{node.relation_field.name}__{relation_str}"
         return relation_str
 
-    def extract_related_ids(self, column_name: str) -> list:
+    def extract_related_ids(self, link: "RelationLink") -> list:
         """
-        Extracts the selected column(s) values from own models.
+        Extracts the values own rows hold for a relation link, read from the
+        own table's (prefixed) columns.
         Those values are used to construct filter clauses and populate child models.
 
-        :param column_names: names of the column(s) that holds the relation info
-        :type column_names: Union[str, list[str]]
+        :param link: link from own models to the prefetched ones
+        :type link: RelationLink
         :return: list of extracted values of relation columns
         :rtype: list
         """
-        column_name = self._prefix_column_names_with_table_prefix(
-            column_name=column_name
-        )
-        return self._extract_simple_relation_keys(column_name=column_name)
-
-    def _prefix_column_names_with_table_prefix(self, column_name: str) -> str:
-        return (f"{self.table_prefix}_" if self.table_prefix else "") + column_name
-
-    def _extract_simple_relation_keys(self, column_name: str) -> list:
-        """
-        Extracts simple relation keys values.
-
-        :param column_name: names of the column(s) that holds the relation info
-        :type column_name: str
-        :return: list of extracted values of relation columns
-        :rtype: list
-        """
+        read_key = link.key_getter(side="source", prefix=self.table_prefix)
         list_of_ids = UniqueList()
         for row in self.rows:
-            if row[column_name]:
-                list_of_ids.append(row[column_name])
+            key = read_key(row)
+            if key:
+                list_of_ids.append(key)
         return list_of_ids
 
     def reload_tree(self) -> None:
@@ -416,55 +384,19 @@ class LoadNode(Node):
         when iterating parent models. Note that order is important as it reflects
         order by issued by the user.
         """
-        relation_key = self.relation_field.get_related_field_alias()
+        read_key = self.relation_field.link.key_getter(side="target")
         for index, row in enumerate(self.rows):
-            key = row[relation_key]
-            current_group = self.grouped_models.setdefault(key, [])
+            current_group = self.grouped_models.setdefault(read_key(row), [])
             current_group.append(self.models[index])
 
     def _populate_parent_models(self) -> None:
         """
         Populate parent node models with own child models from grouped dictionary
         """
-        relation_key = self._get_relation_key_linking_models()
+        link = self.relation_field.link
         for model in self.parent.models:
-            children = self._get_own_models_related_to_parent(
-                model=model, relation_key=relation_key
-            )
-            for child in children:
+            for child in self.grouped_models.get(link.key_of(model), []):
                 setattr(model, self.relation_field.name, child)
-
-    def _get_relation_key_linking_models(self) -> tuple[str, str]:
-        """
-        Extract names and aliases of relation columns to use
-        in linking between own models and parent models
-
-        :return: tuple of name and alias of relation columns
-        :rtype: list[tuple[str, str]]
-        """
-        column_name = self.relation_field.get_model_relation_fields(False)
-        column_alias = self.relation_field.get_model_relation_fields(True)
-        return column_name, column_alias
-
-    def _get_own_models_related_to_parent(
-        self, model: "Model", relation_key: tuple[str, str]
-    ) -> list["Model"]:
-        """
-        Extracts related column values from parent and based on this key gets the
-        own grouped models.
-
-        :param model: parent model from parent node
-        :type model: Model
-        :param relation_key: name and aliases linking relations
-        :type relation_key: list[tuple[str, str]]
-        :return: list of own models to set on parent
-        :rtype: list[Model]
-        """
-        column_name, column_alias = relation_key
-        model_value = getattr(model, column_name)
-        if isinstance(model_value, ormar.Model):
-            model_value = model_value.pk
-        return self.grouped_models.get(model_value, [])
 
 
 class PrefetchQuery:
