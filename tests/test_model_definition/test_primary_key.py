@@ -28,11 +28,11 @@ def test_single_key_shape():
 def test_single_key_values():
     key = build_primary_key(owner=Book, fields=("id",))
     book = Book(id=3, title="a")
-    assert key.value(book) == 3
-    assert key.to_dict(3) == {"id": 3}
-    assert key.getter(("book_id",))({"book_id": 7, "x": 1}) == 7
+    assert key.value(instance=book) == 3
+    assert key.to_dict(value=3) == {"id": 3}
+    assert key.getter(keys=("book_id",))({"book_id": 7, "x": 1}) == 7
     assert key.bind_slots() == ("ormar_pk",)
-    assert key.bind_params(5) == {"ormar_pk": 5}
+    assert key.bind_params(value=5) == {"ormar_pk": 5}
 
 
 def test_single_key_where_clause_compiles_like_before():
@@ -62,14 +62,17 @@ def test_rebind_changes_owner_only():
 
 def test_expand_pk_kwarg_and_lookup():
     key = build_primary_key(owner=Book, fields=("id",))
-    assert key.expand_pk_kwarg({"pk": 4, "title": "a"}) == {"id": 4, "title": "a"}
-    assert key.expand_pk_kwarg({"title": "a"}) == {"title": "a"}
-    assert key.lookup({"id": 4, "title": "a"}) == {"id": 4}
-    assert key.lookup({"id": None, "title": "a"}) is None
-    assert key.lookup({"title": "a"}) is None
+    assert key.expand_pk_kwarg(kwargs={"pk": 4, "title": "a"}) == {
+        "id": 4,
+        "title": "a",
+    }
+    assert key.expand_pk_kwarg(kwargs={"title": "a"}) == {"title": "a"}
+    assert key.lookup(kwargs={"id": 4, "title": "a"}) == {"id": 4}
+    assert key.lookup(kwargs={"id": None, "title": "a"}) is None
+    assert key.lookup(kwargs={"title": "a"}) is None
 
 
 def test_value_from_mapping():
     key = build_primary_key(owner=Book, fields=("id",))
-    assert key.value_from({"id": 4, "title": "a"}) == 4
-    assert key.value_from({"title": "a"}) is None
+    assert key.value_from(data={"id": 4, "title": "a"}) == 4
+    assert key.value_from(data={"title": "a"}) is None

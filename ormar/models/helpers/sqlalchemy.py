@@ -138,7 +138,7 @@ def create_and_append_m2m_fk(
         field_name,
         pk_column.type,
         sqlalchemy.schema.ForeignKey(
-            qualified_fk_reference(model, pk_alias),
+            qualified_fk_reference(target=model, column_alias=pk_alias),
             ondelete="CASCADE",
             onupdate="CASCADE",
             name=foreign_key_name or default_name,
@@ -264,8 +264,10 @@ def populate_config_tablename_columns_and_pk(
         else tablename
     )
     if new_model.ormar_config.columns:
+        # a config with columns is shared with the model that built them
+        # (e.g. pydantic copies made for circular references), keep its key
         columns = new_model.ormar_config.columns
-        key = new_model.ormar_config.pk.rebind(owner=new_model)
+        key = new_model.ormar_config.pk
     else:
         pk_fields, columns = sqlalchemy_columns_from_model_fields(
             model_fields=new_model.ormar_config.model_fields, new_model=new_model

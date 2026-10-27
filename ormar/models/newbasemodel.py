@@ -615,7 +615,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             kwargs.pop(prop_field, None)
 
         if "pk" in kwargs:
-            kwargs = config.pk.expand_pk_kwarg(kwargs)
+            kwargs = config.pk.expand_pk_kwarg(kwargs=kwargs)
 
         # extract through fields
         through_tmp_dict = {
@@ -1552,14 +1552,16 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         self_fields = {
             k: v
             for k, v in self_fields.items()
-            if self.get_column_alias(k) in self.ormar_config.table.columns
+            if self.get_column_alias(field_name=k) in self.ormar_config.table.columns
         }
         for field in self._extract_db_related_names():
             relation_field = cast(
                 "ForeignKeyField", self.ormar_config.model_fields[field]
             )
-            self_fields.update(relation_field.link.values_for(getattr(self, field)))
-            if not relation_field.nullable and not self_fields[field]:
+            self_fields.update(
+                relation_field.link.values_for(related=getattr(self, field))
+            )
+            if not relation_field.nullable and self_fields[field] is None:
                 raise ModelPersistenceError(
                     f"You cannot save {relation_field.to.get_name()} "
                     f"model without pk set!"

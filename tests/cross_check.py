@@ -58,7 +58,7 @@ def primary_key_condition(model_cls: Any, pk: Any) -> Any:
     return sqlalchemy.and_(
         *(
             column == part
-            for column, part in zip(key.columns(), key.to_dict(pk).values())
+            for column, part in zip(key.columns(), key.to_dict(value=pk).values())
         )
     )
 

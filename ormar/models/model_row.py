@@ -416,7 +416,7 @@ class ModelRow(NewBaseModel):
             key = (position, field_name, value)
             related = instances.get(key)
             if related is None:
-                related = field.construct_key_only_model(value)
+                related = field.construct_key_only_model(value=value)
                 instances[key] = related
             item[field_name] = related
 
@@ -733,8 +733,8 @@ class ModelRow(NewBaseModel):
         read_pk_from_item = None
         if all(field in column_by_field for field in key.fields):
             pk_columns = tuple(column_by_field[field] for field in key.fields)
-            read_pk_from_row = key.getter(pk_columns)
-            read_pk_from_item = key.getter(key.fields)
+            read_pk_from_row = key.getter(keys=pk_columns)
+            read_pk_from_item = key.getter(keys=key.fields)
         model_fields = cls.ormar_config.model_fields
         foreign_key_names = tuple(
             field_name

@@ -1612,8 +1612,8 @@ class QuerySet(Generic[T]):
         :rtype: Model
         """
         key = self.model_config.pk
-        kwargs = key.expand_pk_kwarg(kwargs)
-        lookup = key.lookup(kwargs)
+        kwargs = key.expand_pk_kwarg(kwargs=kwargs)
+        lookup = key.lookup(kwargs=kwargs)
         if lookup is None:
             return await self.create(**kwargs)
         try:
@@ -1683,7 +1683,9 @@ class QuerySet(Generic[T]):
 
         rows: list = []
         last_primary_key = None
-        read_pk = self.model_config.pk.getter(self.model_config.pk.column_aliases())
+        read_pk = self.model_config.pk.getter(
+            keys=self.model_config.pk.column_aliases()
+        )
         # Single shared cache across all yielded chunks so 1-row chunks
         # (the common iterate case) still amortize the plan build.
         plan_cache: dict = {}
@@ -1821,7 +1823,7 @@ class QuerySet(Generic[T]):
             if field_name not in columns:
                 columns.append(field_name)
 
-        columns = [self.model.get_column_alias(k) for k in columns]
+        columns = [self.model.get_column_alias(field_name=k) for k in columns]
 
         for i, obj in enumerate(objects):
             explicit_fields = obj.__setattr_fields__

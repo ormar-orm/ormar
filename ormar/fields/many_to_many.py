@@ -281,8 +281,7 @@ class ManyToManyField(  # type: ignore
             return self.default_source_field_name()
         return self.default_target_field_name()
 
-    @property
-    def link(self) -> RelationLink:
+    def build_link(self) -> RelationLink:
         """
         Columns connecting the owner's table to the through table: the mirror
         of the through model's foreign key to the owner. The second hop, from

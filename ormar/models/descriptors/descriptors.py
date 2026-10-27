@@ -85,6 +85,7 @@ class PkDescriptor:
         :type key: PrimaryKey
         """
         self.key = key
+        self.read = key.value
 
     def __get__(self, instance: "Model", owner: type["Model"]) -> Any:
         """
@@ -95,7 +96,7 @@ class PkDescriptor:
         :return: key value of the instance
         :rtype: Any
         """
-        return self.key.value(instance)
+        return self.read(instance)
 
     def __set__(self, instance: "Model", value: Any) -> None:
         """
@@ -106,8 +107,8 @@ class PkDescriptor:
         :param value: new key value
         :type value: Any
         """
-        for field_name, part in self.key.to_dict(value).items():
-            instance._internal_set(field_name, part)
+        for field_name, part in self.key.to_dict(value=value).items():
+            instance._internal_set(name=field_name, value=part)
         instance.set_save_status(False)
 
 

@@ -278,7 +278,7 @@ class RelationProxy(Generic[T], list[T]):
         kwargs = {
             f"{related_field_name}__{alias}": part
             for alias, part in zip(
-                key.column_aliases(), key.to_dict(self._owner.pk).values()
+                key.column_aliases(), key.to_dict(value=self._owner.pk).values()
             )
         }
         queryset = (

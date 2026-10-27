@@ -208,8 +208,8 @@ class QueryClause:
             kwargs = {
                 **{name: value for name, value in kwargs.items() if name != "pk"},
                 **{
-                    self.model_cls.get_column_alias(field): part
-                    for field, part in key.to_dict(kwargs["pk"]).items()
+                    self.model_cls.get_column_alias(field_name=field): part
+                    for field, part in key.to_dict(value=kwargs["pk"]).items()
                 },
             }
 
