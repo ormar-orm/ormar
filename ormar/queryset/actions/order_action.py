@@ -1,6 +1,6 @@
 import copy
 from functools import lru_cache
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import sqlalchemy
 from sqlalchemy import text
@@ -194,3 +194,29 @@ class OrderAction(QueryAction):
         :rtype: bool
         """
         return target_model == self.target_model and alias == self.table_prefix
+
+
+def expand_pk_orders(model_cls: type["Model"], columns: list[Any]) -> list[Any]:
+    """
+    Replace ``"pk"`` / ``"-pk"`` in an ``order_by`` list with the primary key
+    fields of the model, in key order::
+
+        ["-pk", "name"] -> ["-tenant_id", "-number", "name"]
+
+    :param model_cls: ordered model
+    :type model_cls: type[Model]
+    :param columns: order strings or ``OrderAction`` instances
+    :type columns: list[Any]
+    :return: order list with ``pk`` expanded
+    :rtype: list[Any]
+    """
+    expanded: list[Any] = []
+    for column in columns:
+        if isinstance(column, str) and column.lstrip("-") == "pk":
+            sign = "-" if column.startswith("-") else ""
+            expanded.extend(
+                f"{sign}{field}" for field in model_cls.ormar_config.pk.fields
+            )
+        else:
+            expanded.append(column)
+    return expanded

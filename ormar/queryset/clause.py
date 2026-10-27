@@ -5,6 +5,7 @@ import sqlalchemy
 from sqlalchemy import ColumnElement
 
 import ormar  # noqa I100
+from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.filter_action import FilterAction
 
 if TYPE_CHECKING:  # pragma no cover
@@ -203,16 +204,6 @@ class QueryClause:
         :return: tuple with list of where clauses and updated select_related list
         :rtype: tuple[list[sqlalchemy.sql.elements.TextClause], list[str]]
         """
-        if kwargs.get("pk"):
-            key = self.model_cls.ormar_config.pk
-            kwargs = {
-                **{name: value for name, value in kwargs.items() if name != "pk"},
-                **{
-                    self.model_cls.get_column_alias(field_name=field): part
-                    for field, part in key.to_dict(value=kwargs["pk"]).items()
-                },
-            }
-
         filter_clauses, select_related = self._populate_filter_clauses(
             _own_only=_own_only, **kwargs
         )
@@ -249,3 +240,65 @@ class QueryClause:
         if _own_only:
             return own_filter_clauses, select_related
         return filter_clauses + own_filter_clauses, select_related
+
+
+def extract_pk_lookups(
+    model_cls: type["Model"], kwargs: dict[str, Any]
+) -> tuple[list[FilterGroup], dict[str, Any]]:
+    """
+    Rewrite ``pk`` lookups into lookups on the primary key fields::
+
+        pk=4             -> id=4
+        pk__gt=4         -> id__gt=4
+        pk=(1, 7)        -> tenant_id=1, number=7          (composite key)
+        pk__in=[(1, 7)]  -> or_(and_(tenant_id=1, number=7))  (composite key)
+
+    :raises QueryDefinitionError: for operators other than ``in`` on a
+        composite key, or values not matching the key
+    :param model_cls: filtered model
+    :type model_cls: type[Model]
+    :param kwargs: filter keyword arguments
+    :type kwargs: dict[str, Any]
+    :return: filter groups to add and the rewritten keyword arguments
+    :rtype: tuple[list[FilterGroup], dict[str, Any]]
+    """
+    key = model_cls.ormar_config.pk
+    groups: list[FilterGroup] = []
+    rewritten: dict[str, Any] = {}
+    for name, value in kwargs.items():
+        lookup, _, operator = name.partition("__")
+        if lookup != "pk":
+            rewritten[name] = value
+        elif not operator or operator == "exact":
+            rewritten.update(key.to_dict(value=value))
+        elif not key.is_composite:
+            rewritten[f"{key.fields[0]}__{operator}"] = value
+        elif operator == "in":
+            groups.append(composite_key_in_group(model_cls=model_cls, values=value))
+        else:
+            raise QueryDefinitionError(
+                f"Only pk=... and pk__in=... lookups are supported on the composite "
+                f"primary key of {model_cls.__name__}, got {name}."
+            )
+    return groups, rewritten
+
+
+def composite_key_in_group(model_cls: type["Model"], values: Any) -> FilterGroup:
+    """
+    Build the filter matching any of the given composite key values::
+
+        [(1, 7), (2, 8)] -> (tenant_id=1 AND number=7) OR (tenant_id=2 AND number=8)
+
+    An empty list matches no rows.
+
+    :param model_cls: filtered model
+    :type model_cls: type[Model]
+    :param values: composite key values
+    :type values: Any
+    :return: filter group over the key fields
+    :rtype: FilterGroup
+    """
+    key = model_cls.ormar_config.pk
+    if not values:
+        return and_(**{f"{key.fields[0]}__in": []})
+    return or_(*(and_(**key.to_dict(value=value)) for value in values))

@@ -25,8 +25,8 @@ from ormar.exceptions import (
 )
 from ormar.models.row_registry import RowRegistry
 from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
-from ormar.queryset.actions.order_action import OrderAction
-from ormar.queryset.clause import FilterGroup, QueryClause
+from ormar.queryset.actions.order_action import OrderAction, expand_pk_orders
+from ormar.queryset.clause import FilterGroup, QueryClause, extract_pk_lookups
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
 from ormar.queryset.templates import (
@@ -665,7 +665,10 @@ class QuerySet(Generic[T]):
         :return: filtered QuerySet
         :rtype: QuerySet
         """
-        filter_groups, select_related = self._resolve_filter_groups(groups=args)
+        pk_groups, kwargs = extract_pk_lookups(model_cls=self.model, kwargs=kwargs)
+        filter_groups, select_related = self._resolve_filter_groups(
+            groups=(*args, *pk_groups)
+        )
         qryclause = QueryClause(
             model_cls=self.model,
             select_related=select_related,
@@ -990,6 +993,7 @@ class QuerySet(Generic[T]):
         """
         if not isinstance(columns, list):
             columns = [columns]
+        columns = expand_pk_orders(model_cls=self.model, columns=columns)
 
         orders_by = [
             (

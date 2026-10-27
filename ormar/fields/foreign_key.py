@@ -40,7 +40,9 @@ class FkParams(NamedTuple):
     key_only_model: type[BaseModel]
 
 
-def populate_fk_params_based_on_to_model(*, to: type["T"], nullable: bool) -> FkParams:
+def populate_fk_params_based_on_to_model(
+    *, to: type["T"], nullable: bool, virtual: bool
+) -> FkParams:
     """
     Based on target to model to which relation leads to populates the type of the
     pydantic field to use and the type of the referencing column.
@@ -49,11 +51,15 @@ def populate_fk_params_based_on_to_model(*, to: type["T"], nullable: bool) -> Fk
     :type to: Model class
     :param nullable: marks field as optional/ required
     :type nullable: bool
+    :param virtual: whether the field is a reverse relation holding no column
+    :type virtual: bool
+    :raises ModelDefinitionError: if a column-holding relation leads to a model
+        with a composite primary key (not supported yet)
     :return: annotation, column type and key-only model of the relation
     :rtype: FkParams
     """
     key = to.ormar_config.pk
-    if key.is_composite:
+    if key.is_composite and not virtual:
         raise ModelDefinitionError(
             f"Relations to models with a composite primary key are not supported "
             f"yet ({to.__name__})."
@@ -61,9 +67,9 @@ def populate_fk_params_based_on_to_model(*, to: type["T"], nullable: bool) -> Fk
     to_field = to.ormar_config.model_fields[key.fields[0]]
     key_only_model = key_only_model_type(target=to, fields=key.fields)
     annotation = (
-        Union[to_field.__type__, to, key_only_model]
+        Union[key.python_type(), to, key_only_model]
         if not nullable
-        else Optional[Union[to_field.__type__, to, key_only_model]]
+        else Optional[Union[key.python_type(), to, key_only_model]]
     )
     return FkParams(
         annotation=annotation,
@@ -212,6 +218,7 @@ def ForeignKey(  # type: ignore # noqa CFQ002
         params = populate_fk_params_based_on_to_model(
             to=to,  # type: ignore
             nullable=nullable,
+            virtual=virtual,
         )
         __type__ = params.annotation
         column_type = params.column_type
@@ -391,7 +398,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         if self.to.__class__ == ForwardRef:
             self._evaluate_forward_ref(globalns, localns)
             params = populate_fk_params_based_on_to_model(
-                to=self.to, nullable=self.nullable
+                to=self.to, nullable=self.nullable, virtual=self.virtual
             )
             self.__type__ = params.annotation
             self.column_type = params.column_type
