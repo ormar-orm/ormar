@@ -55,6 +55,11 @@ def populate_m2m_params_based_on_to_model(
     :rtype: tuple with target pydantic type and target col type
     """
     key = to.ormar_config.pk
+    if key.is_composite:
+        raise ModelDefinitionError(
+            f"Relations to models with a composite primary key are not supported "
+            f"yet ({to.__name__})."
+        )
     to_field = to.ormar_config.model_fields[key.fields[0]]
     pk_only_model = key_only_model_type(target=to, fields=key.fields)
     base_type = Union[  # type: ignore

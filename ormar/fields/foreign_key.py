@@ -53,6 +53,11 @@ def populate_fk_params_based_on_to_model(*, to: type["T"], nullable: bool) -> Fk
     :rtype: FkParams
     """
     key = to.ormar_config.pk
+    if key.is_composite:
+        raise ModelDefinitionError(
+            f"Relations to models with a composite primary key are not supported "
+            f"yet ({to.__name__})."
+        )
     to_field = to.ormar_config.model_fields[key.fields[0]]
     key_only_model = key_only_model_type(target=to, fields=key.fields)
     annotation = (
@@ -193,6 +198,10 @@ def ForeignKey(  # type: ignore # noqa CFQ002
     sql_nullable = nullable if sql_nullable is None else sql_nullable
 
     index = kwargs.pop("index", False)
+    if kwargs.pop("primary_key", False):
+        raise ModelDefinitionError(
+            "Relation fields cannot be part of a primary key yet."
+        )
 
     validate_not_allowed_fields(kwargs)
     key_only_model = None

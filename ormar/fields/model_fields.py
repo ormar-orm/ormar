@@ -74,6 +74,9 @@ class ModelFieldFactory:
         sql_nullable = kwargs.pop("sql_nullable", None)
 
         primary_key = kwargs.pop("primary_key", False)
+        autoincrement_explicit = kwargs.pop(
+            "autoincrement_explicit", "autoincrement" in kwargs
+        )
         autoincrement = kwargs.pop("autoincrement", False)
 
         encrypt_secret = kwargs.pop("encrypt_secret", None)
@@ -113,6 +116,7 @@ class ModelFieldFactory:
             index=kwargs.pop("index", False),
             unique=kwargs.pop("unique", False),
             autoincrement=autoincrement,
+            autoincrement_explicit=autoincrement_explicit,
             column_type=cls.get_column_type(
                 **kwargs, sql_nullable=sql_nullable, enum_class=enum_class
             ),
@@ -216,6 +220,7 @@ class Integer(ModelFieldFactory, int):
         **kwargs: Any,
     ) -> Self:
         autoincrement = kwargs.pop("autoincrement", None)
+        autoincrement_explicit = autoincrement is not None
         autoincrement = (
             autoincrement
             if autoincrement is not None
@@ -524,6 +529,7 @@ class BigInteger(Integer, int):
         **kwargs: Any,
     ) -> Self:
         autoincrement = kwargs.pop("autoincrement", None)
+        autoincrement_explicit = autoincrement is not None
         autoincrement = (
             autoincrement
             if autoincrement is not None
@@ -572,6 +578,7 @@ class SmallInteger(Integer, int):
         **kwargs: Any,
     ) -> Self:
         autoincrement = kwargs.pop("autoincrement", None)
+        autoincrement_explicit = autoincrement is not None
         autoincrement = (
             autoincrement
             if autoincrement is not None
