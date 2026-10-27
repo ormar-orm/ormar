@@ -92,16 +92,6 @@ def test_relation_to_composite_key_model_raises_for_now():
             orders = ormar.ManyToMany(Order)
 
 
-def test_relation_in_primary_key_raises_for_now():
-    with pytest.raises(ModelDefinitionError, match="primary key"):
-
-        class Link(ormar.Model):
-            ormar_config = base_ormar_config.copy(tablename="cpd_links")
-
-            code: str = ormar.String(max_length=20, primary_key=True)
-            single: Optional[Single] = ormar.ForeignKey(Single, primary_key=True)
-
-
 def test_many_to_many_on_composite_key_model_raises_for_now():
     with pytest.raises(ModelDefinitionError, match="Many to many"):
 

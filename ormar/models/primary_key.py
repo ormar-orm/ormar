@@ -9,14 +9,16 @@ primary key field name, so the same code serves single-column keys and
 
 import abc
 import operator
-from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, cast
 
 import sqlalchemy
+from pydantic import BaseModel
 
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.templates.slots import PK_SLOT
 
 if TYPE_CHECKING:  # pragma: no cover
+    from ormar.fields import ForeignKeyField
     from ormar.models import Model, NewBaseModel
 
 
@@ -41,6 +43,42 @@ class PrimaryKey(abc.ABC):
         """
         self.owner = owner
         self.fields = fields
+        model_fields = owner.ormar_config.model_fields
+        self.relation_parts: dict[str, "ForeignKeyField"] = {
+            field: cast("ForeignKeyField", model_fields[field])
+            for field in fields
+            if model_fields[field].is_relation
+        }
+
+    def part_value(self, field: str, value: Any) -> Any:
+        """
+        Turn the value a model holds for a key field into the key part: a
+        related model in a relation part is replaced by the value its foreign
+        key stores (e.g. the related model's pk), raw values pass through.
+
+        :param field: key field name
+        :type field: str
+        :param value: value held for the field
+        :type value: Any
+        :return: key part
+        :rtype: Any
+        """
+        relation_field = self.relation_parts.get(field)
+        if relation_field is None or not isinstance(value, BaseModel):
+            return value
+        return relation_field.link.values_for(related=value)[field]
+
+    def part_type(self, field: str) -> Any:
+        """
+        :param field: key field name
+        :type field: str
+        :return: python type of the key part
+        :rtype: Any
+        """
+        relation_field = self.relation_parts.get(field)
+        if relation_field is not None:
+            return relation_field.target_value_type()
+        return self.owner.ormar_config.model_fields[field].__type__
 
     @property
     @abc.abstractmethod
@@ -233,7 +271,7 @@ class SingleColumnKey(PrimaryKey):
         :return: python type of the key field
         :rtype: Any
         """
-        return self.owner.ormar_config.model_fields[self.fields[0]].__type__
+        return self.part_type(field=self.field)
 
     def value(self, instance: "NewBaseModel") -> Any:
         """
@@ -242,7 +280,10 @@ class SingleColumnKey(PrimaryKey):
         :return: value of the key field, ``None`` if not set
         :rtype: Any
         """
-        return instance.__dict__.get(self.field)
+        value = instance.__dict__.get(self.field)
+        if self.relation_parts:
+            return self.part_value(field=self.field, value=value)
+        return value
 
     def to_dict(self, value: Any) -> dict[str, Any]:
         """
@@ -269,7 +310,7 @@ class SingleColumnKey(PrimaryKey):
         :return: value of the key field, ``None`` when not set
         :rtype: Any
         """
-        return data.get(self.fields[0])
+        return self.part_value(field=self.field, value=data.get(self.field))
 
     def bind_params(self, value: Any) -> dict[str, Any]:
         """
@@ -344,7 +385,9 @@ class CompositeKey(PrimaryKey):
         :return: tuple of the key parts, ``None`` when any part is not set
         :rtype: Any
         """
-        parts = tuple(data.get(field) for field in self.fields)
+        parts = tuple(
+            self.part_value(field=field, value=data.get(field)) for field in self.fields
+        )
         return None if None in parts else parts
 
     def to_dict(self, value: Any) -> dict[str, Any]:

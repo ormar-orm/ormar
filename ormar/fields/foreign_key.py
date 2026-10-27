@@ -253,10 +253,10 @@ def ForeignKey(  # type: ignore # noqa CFQ002
             "ondelete/onupdate need a database constraint, they cannot be used "
             "with db_constraint=False."
         )
-    if kwargs.pop("primary_key", False):
-        raise ModelDefinitionError(
-            "Relation fields cannot be part of a primary key yet."
-        )
+    primary_key = kwargs.pop("primary_key", False)
+    if primary_key:
+        nullable = False
+        sql_nullable = False
 
     validate_not_allowed_fields(kwargs)
     key_only_model = None
@@ -287,7 +287,7 @@ def ForeignKey(  # type: ignore # noqa CFQ002
         column_type=column_type,
         related_name=related_name,
         virtual=virtual,
-        primary_key=False,
+        primary_key=primary_key,
         index=index,
         default=None,
         server_default=None,
