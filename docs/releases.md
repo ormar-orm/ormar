@@ -4,6 +4,24 @@
 
 ### ✨ Breaking changes
 
+* **`upsert()` inserts never-saved models whose key is already set**
+
+    `upsert()` of a model that was never saved but has its primary key set (a uuid
+    `default`, a natural or a composite key) used to run an `UPDATE` that matched no
+    row and silently saved nothing (unless `__force_save__=True` was passed). It now
+    looks the row up and inserts it when it's missing. Loaded or saved models are
+    still updated directly. `__force_save__` is accepted and ignored.
+
+* **`update()`, `delete()` and `load()` target the row the model was loaded with**
+
+    After changing a model's primary key, `update()` moves the row to the new key
+    (`UPDATE ... SET id = 5 WHERE id = 1`) instead of updating the row with the new
+    key, and `delete()` / `load()` use the original key.
+
+* **`save()` raises `ModelPersistenceError` for a missing primary key value** that
+  the database doesn't generate (no autoincrement, no server default), before
+  sending the insert.
+
 * **Primary key and relation internals replaced (preparing composite keys)**
 
     The primary key of a model is now described by `ormar_config.pk` and the
@@ -43,6 +61,15 @@
     Python 3.11+.
 
 ### 🆕 Features
+
+* Composite primary keys: mark several fields with `primary_key=True`. The key value
+  is a tuple (`order.pk == (1, 7)`) and works in `get(pk=...)`, `filter(pk__in=...)`,
+  `exclude()`, `order_by("pk")`, bulk operations and `update_or_create(pk=...)`.
+  Relations to models with a composite key follow in a later release. Part of
+  [#137](https://github.com/ormar-orm/ormar/issues/137). See
+  [primary keys](models/primary-keys.md).
+* `pk` lookups (`pk__in`, `pk__gt`, ...) and `order_by("pk")` / `order_by("-pk")`
+  work for every model (`order_by("pk")` produced invalid SQL before).
 
 * Python 3.15 is now supported and tested in CI, and the CI matrix now also
   covers Python 3.14.

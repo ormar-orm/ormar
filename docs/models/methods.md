@@ -539,11 +539,15 @@ assert terminator.year == 1984
 
 `upsert(**kwargs) -> self`
 
-It's a proxy to either `save()` or `update(**kwargs)` methods described above.
+It's a proxy to either `save()` or `update(**kwargs)` methods described above:
 
-If the primary key is set -> the `update` method will be called.
+* a model loaded from the database or already saved -> `update(**kwargs)`,
+* a model without a primary key -> `save()`,
+* a model never saved but with its key set (uuid default, natural or composite key)
+  is looked up by key first -> `update(**kwargs)` if the row exists, `save()`
+  otherwise.
 
-If the pk is not set the `save()` method will be called.
+See [primary keys](primary-keys.md#insert-or-update-with-upsert) for details.
 
 ```python
 track = Track(name='The Bird')

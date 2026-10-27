@@ -68,6 +68,7 @@ async def test_get_and_filter_by_composite_pk():
         "c",
     ]
     assert await Order.objects.filter(pk=(9, 9)).exists() is False
+    assert await Order.objects.filter(pk__in=[]).all() == []
 
 
 @pytest.mark.asyncio

@@ -652,7 +652,7 @@ Available Model Fields (with required args - optional ones in docs):
 ### Available fields options
 The following keyword arguments are supported on all field types.
 
-* `primary_key: bool`
+* `primary_key: bool` (set it on several fields for a composite primary key)
 * `nullable: bool`
 * `default: Any`
 * `server_default: Any`

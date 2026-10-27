@@ -6,6 +6,7 @@ nav:
   - Installation: install.md
   - Models:
     - Definition: models/index.md
+    - Primary keys: models/primary-keys.md
     - Inheritance: models/inheritance.md
     - Methods: models/methods.md
     - Migrations: models/migrations.md
