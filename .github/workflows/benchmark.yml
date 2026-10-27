@@ -3,15 +3,42 @@ name: codspeed-benchmarks
 on:
   push:
     branches: [ master ]
+    paths:
+      - "ormar/**"
+      - "benchmarks/**"
+      - "pyproject.toml"
+      - "poetry.lock"
+      - ".github/workflows/benchmark.yml"
   pull_request:
     branches: [ master ]
+    paths:
+      - "ormar/**"
+      - "benchmarks/**"
+      - "pyproject.toml"
+      - "poetry.lock"
+      - ".github/workflows/benchmark.yml"
   # `workflow_dispatch` allows CodSpeed to trigger backtest
   # performance analysis in order to generate initial data.
   workflow_dispatch:
 
+# A new push to a PR cancels its previous run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   benchmarks:
-    if: github.actor != 'dependabot[bot]'
+    # Dependabot bumps only run when they touch pydantic or sqlalchemy.
+    if: >-
+      (github.event_name == 'pull_request'
+        && (!startsWith(github.head_ref, 'dependabot/')
+          || contains(github.head_ref, 'pydantic')
+          || contains(github.head_ref, 'sqlalchemy')))
+      || (github.event_name == 'push'
+        && (github.event.head_commit.author.name != 'dependabot[bot]'
+          || contains(github.event.head_commit.message, 'pydantic')
+          || contains(github.event.head_commit.message, 'sqlalchemy')))
+      || github.event_name == 'workflow_dispatch'
     permissions:
       contents: read
       id-token: write
