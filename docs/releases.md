@@ -1,5 +1,28 @@
 # Release notes
 
+## Unreleased
+
+### ✨ Breaking changes
+
+* **Python 3.10 is no longer supported**
+
+    Python 3.10 reaches end-of-life in October 2026, and the fixes for the
+    `filelock` advisories (GHSA-567q-5qvw-pf92, GHSA-9vhv-jxww-xfm5,
+    GHSA-v4x8-3wr5-3wq8) require Python 3.11 or newer. ormar now requires
+    Python 3.11+.
+
+### 🆕 Features
+
+* Python 3.15 is now supported and tested in CI, and the CI matrix now also
+  covers Python 3.14.
+
+### 🐛 Fixes
+
+* Pydantic-only fields (`pydantic.Field(...)` or plain defaults) on ormar models
+  no longer fail with `PydanticUserError: Field ... requires a type annotation`
+  on Python 3.14+, where class bodies no longer store `__annotations__`
+  (PEP 649).
+
 ## 0.27.0
 
 ### ✨ Breaking changes
