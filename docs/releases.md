@@ -6,16 +6,34 @@
 
 * **Primary key and relation internals replaced (preparing composite keys)**
 
-    `ormar_config.pkname`, `Model.pk_column` and `Model.pk_type()` are removed. Use
-    `ormar_config.pk`: `ormar_config.pk.fields` (field names),
-    `.column_aliases()` (database column names), `.columns()` (SQLAlchemy columns)
-    and `.python_type()`. The `ForeignKeyField` helpers
-    `get_related_field_alias()`, `get_related_field_name()` and
-    `get_model_relation_fields()` are replaced by `field.link` (the column pairs
-    connecting two models), `to_pk_only` is renamed to `to_key_only`, and the
-    internal `ForeignKeyConstraint` dataclass and per-field `constraints` list are
-    gone (foreign keys are built from `field.link`). Model definitions, queries,
-    generated SQL and DDL are unchanged.
+    The primary key of a model is now described by `ormar_config.pk` and the
+    columns connecting two models by `field.link`. Model definitions, queries,
+    generated SQL and DDL are unchanged; code using these internals needs updating:
+
+    | Removed | Use instead |
+    |---|---|
+    | `Model.ormar_config.pkname` | `Model.ormar_config.pk.fields` (field names) |
+    | `model.pk_column` | `Model.ormar_config.pk.columns()` |
+    | `Model.pk_type()` | `Model.ormar_config.pk.python_type()` |
+    | `field.get_related_field_alias()`, `field.get_related_field_name()`, `field.get_model_relation_fields()` | `field.link` (`source_fields()`, `source_columns()`, `target_fields()`, `target_columns()`) |
+    | `field.to_pk_only`, `field.construct_pk_only_model()` | `field.to_key_only`, `field.construct_key_only_model()` |
+    | `ormar.fields.foreign_key.create_dummy_instance` / `create_dummy_model` | `ormar.fields.key_only.key_only_instance` / `key_only_model_type` |
+    | `ForeignKeyConstraint` and `field.constraints` | foreign keys are built from `field.link` |
+    | `ormar.queryset.templates.primary_key_column` / `primary_key_bind` | `Model.ormar_config.pk.columns()` / `.where_clause()` |
+
+    ```python
+    # before
+    pk_name = Album.ormar_config.pkname
+    column = album.pk_column
+    # after
+    (pk_name,) = Album.ormar_config.pk.fields
+    (column,) = Album.ormar_config.pk.columns()
+    ```
+
+    The statement builders `build_update`, `build_delete`, `build_pk_select` and
+    `build_bulk_update` take `primary_key=` instead of `pk_column=`, and
+    `count_statement` takes `pk_column_names=` (a tuple) instead of
+    `pk_column_name=`.
 
 * **Python 3.10 is no longer supported**
 
@@ -35,8 +53,9 @@
   one field object. Queries joining or filtering through that relation from any
   child but the last one defined (e.g. `select_related("label")`) referenced
   the other child's table and failed with `no such column`.
-* A foreign key set to a related primary key value of `0` (e.g. `Track(album=0)`)
-  kept `0` as the related model's pk; it was replaced with `-1` before.
+* Relations to a model whose primary key is `0` work: the foreign key keeps `0`
+  (it was replaced with `-1`), non-nullable foreign keys to it can be saved, and
+  `prefetch_related` loads its related rows.
 * Pydantic-only fields (`pydantic.Field(...)` or plain defaults) on ormar models
   no longer fail with `PydanticUserError: Field ... requires a type annotation`
   on Python 3.14+, where class bodies no longer store `__annotations__`

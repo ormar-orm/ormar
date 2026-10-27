@@ -124,8 +124,8 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
                 target_field = cls.ormar_config.model_fields[field]
                 target_key = target_field.to.ormar_config.pk
                 if isinstance(field_value, ormar.Model):  # pragma: no cover
-                    pk_value = target_key.value(field_value)
-                    if not pk_value:
+                    pk_value = target_key.value(instance=field_value)
+                    if pk_value is None:
                         raise ModelPersistenceError(
                             f"You cannot save {field_value.get_name()} "
                             f"model without pk set!"
@@ -134,10 +134,10 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
                 elif isinstance(field_value, (list, dict)) and field_value:
                     if isinstance(field_value, list):
                         model_dict[field] = [
-                            target_key.value_from(target) for target in field_value
+                            target_key.value_from(data=target) for target in field_value
                         ]
                     else:
-                        model_dict[field] = target_key.value_from(field_value)
+                        model_dict[field] = target_key.value_from(data=field_value)
                 else:
                     model_dict.pop(field, None)
         return model_dict
@@ -329,14 +329,14 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         target = cls.ormar_config.model_fields[field_name].to
         target_key = target.ormar_config.pk
         if isinstance(value, ormar.Model):
-            value = target_key.value(value)
+            value = target_key.value(instance=value)
             if value is None:
                 raise ModelPersistenceError(
                     f"You cannot update {field_name} with {target.get_name()} "
                     f"model without pk set!"
                 )
         elif isinstance(value, dict):
-            value = target_key.value_from(value)
+            value = target_key.value_from(data=value)
         if value is None:
             return None
         validators = target._build_individual_schema_validator()

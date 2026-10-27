@@ -1,5 +1,6 @@
 import copy
 import pickle
+from typing import Optional
 
 import pytest
 
@@ -89,3 +90,16 @@ def test_missing_pk_still_raises():
             ormar_config = base_ormar_config.copy(tablename="pkc_no_pk")
 
             name: str = ormar.String(max_length=10, primary_key=False)
+
+
+class Shelf(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="pkc_shelves")
+
+    id: int = ormar.Integer(primary_key=True)
+    book: Optional[Book] = ormar.ForeignKey(Book)
+
+
+def test_models_with_relations_keep_their_own_key_owner():
+    assert Shelf.ormar_config.pk.owner is Shelf
+    assert Shelf.__dict__["pk"].key is Shelf.ormar_config.pk
+    assert pickle.loads(pickle.dumps(Shelf.ormar_config.pk)).owner is Shelf

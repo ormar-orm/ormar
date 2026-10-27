@@ -179,7 +179,7 @@ def add_field_serializer_for_reverse_relations(
                     if not hasattr(child, "ormar_config"):
                         continue
                     # If there is one circular ref dump all children as pk only
-                    result.append(child.ormar_config.pk.to_dict(child.pk))
+                    result.append(child.ormar_config.pk.to_dict(value=child.pk))
                 return result
         except ReferenceError:
             # Pydantic >= 2.13 may invoke this serializer with weakref

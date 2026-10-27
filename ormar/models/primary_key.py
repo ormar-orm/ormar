@@ -125,7 +125,7 @@ class PrimaryKey(abc.ABC):
         if "pk" not in kwargs:
             return dict(kwargs)
         expanded = {name: value for name, value in kwargs.items() if name != "pk"}
-        expanded.update(self.to_dict(kwargs["pk"]))
+        expanded.update(self.to_dict(value=kwargs["pk"]))
         return expanded
 
     def lookup(self, kwargs: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -206,7 +206,19 @@ class PrimaryKey(abc.ABC):
 class SingleColumnKey(PrimaryKey):
     """
     Primary key of one column, whose value is a plain scalar.
+
+    :ivar field: name of the key field
     """
+
+    def __init__(self, *, owner: type["Model"], fields: tuple[str, ...]) -> None:
+        """
+        :param owner: model class the key belongs to
+        :type owner: type[Model]
+        :param fields: the one key field name
+        :type fields: tuple[str, ...]
+        """
+        super().__init__(owner=owner, fields=fields)
+        self.field = fields[0]
 
     @property
     def is_composite(self) -> bool:
@@ -230,7 +242,7 @@ class SingleColumnKey(PrimaryKey):
         :return: value of the key field, ``None`` if not set
         :rtype: Any
         """
-        return instance.__dict__.get(self.fields[0], None)
+        return instance.__dict__.get(self.field)
 
     def to_dict(self, value: Any) -> dict[str, Any]:
         """
@@ -323,7 +335,7 @@ class CompositeKey(PrimaryKey):
         :return: tuple of the key parts, ``None`` when any part is not set
         :rtype: Any
         """
-        return self.value_from(instance.__dict__)
+        return self.value_from(data=instance.__dict__)
 
     def value_from(self, data: Mapping[str, Any]) -> Any:
         """
@@ -377,7 +389,7 @@ class CompositeKey(PrimaryKey):
         :return: parameters binding the parts to ``bind_slots()``
         :rtype: dict[str, Any]
         """
-        return dict(zip(self.bind_slots(), self.to_dict(value).values()))
+        return dict(zip(self.bind_slots(), self.to_dict(value=value).values()))
 
 
 def build_primary_key(*, owner: type["Model"], fields: tuple[str, ...]) -> PrimaryKey:

@@ -644,7 +644,7 @@ def get_serializer() -> Callable:
                 # 2.11 floor pinned in CI.
                 if value is None or not hasattr(value, "ormar_config"):
                     return None  # pragma: no cover
-                return value.ormar_config.pk.to_dict(value.pk)
+                return value.ormar_config.pk.to_dict(value=value.pk)
         except ReferenceError:
             return None
 

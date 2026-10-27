@@ -670,8 +670,8 @@ class QuerysetProxy(Generic[T]):
         :rtype: Model
         """
         key = self.queryset.model_config.pk
-        kwargs = key.expand_pk_kwarg(kwargs)
-        lookup = key.lookup(kwargs)
+        kwargs = key.expand_pk_kwarg(kwargs=kwargs)
+        lookup = key.lookup(kwargs=kwargs)
         if lookup is None:
             return await self.create(**kwargs)
         try:

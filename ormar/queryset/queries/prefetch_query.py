@@ -139,7 +139,7 @@ class AlreadyLoadedNode(Node):
         """
         list_of_ids = UniqueList()
         for model in self.models:
-            key = link.key_of(model)
+            key = link.key_of(model=model)
             if key is not None:
                 list_of_ids.append(key)
         return list_of_ids
@@ -319,7 +319,7 @@ class LoadNode(Node):
         list_of_ids = UniqueList()
         for row in self.rows:
             key = read_key(row)
-            if key:
+            if key is not None:
                 list_of_ids.append(key)
         return list_of_ids
 
@@ -395,7 +395,7 @@ class LoadNode(Node):
         """
         link = self.relation_field.link
         for model in self.parent.models:
-            for child in self.grouped_models.get(link.key_of(model), []):
+            for child in self.grouped_models.get(link.key_of(model=model), []):
                 setattr(model, self.relation_field.name, child)
 
 

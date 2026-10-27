@@ -57,7 +57,7 @@ def key_only_instance(*, target: type["Model"], values: dict[str, Any]) -> "Mode
         **values,
         **{
             name: key_only_instance(
-                target=field.to, values=field.to.ormar_config.pk.to_dict(-1)
+                target=field.to, values=field.to.ormar_config.pk.to_dict(value=-1)
             )
             for name, field in target.ormar_config.model_fields.items()
             if field.is_relation and not field.nullable and not field.virtual

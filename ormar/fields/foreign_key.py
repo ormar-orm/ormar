@@ -282,7 +282,9 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         target_table = self.to.ormar_config.tablename
         return [
             sqlalchemy.ForeignKey(
-                qualified_fk_reference(self.to, pair.target_column),
+                column=qualified_fk_reference(
+                    target=self.to, column_alias=pair.target_column
+                ),
                 ondelete=self.ondelete,
                 onupdate=self.onupdate,
                 name=self.foreign_key_name
@@ -324,12 +326,25 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
     @property
     def link(self) -> RelationLink:
         """
-        Columns connecting the owner's table to the table of the related model.
+        Columns connecting the owner's table to the table of the related model,
+        built once per owner and target: a field copied to another model
+        (inheritance) or re-targeted (forward refs) builds its own link.
+
+        :return: link from the owner to the related model
+        :rtype: RelationLink
+        """
+        cache_key = (self.owner, self.to, self.through)
+        cached = self.__dict__.get("link_cache")
+        if cached is not None and cached[0] == cache_key:
+            return cached[1]
+        link = self.build_link()
+        self.__dict__["link_cache"] = (cache_key, link)
+        return link
+
+    def build_link(self) -> RelationLink:
+        """
         A foreign key links its own column to the target's primary key, a
         reverse relation is the mirror of the foreign key it was created from.
-
-        Computed on access, so a field copied to another model (inheritance)
-        never keeps a link of its previous owner.
 
         :return: link from the owner to the related model
         :rtype: RelationLink
@@ -345,7 +360,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
                     source_field=self.name,
                     source_column=self.get_alias(),
                     target_field=field,
-                    target_column=self.to.get_column_alias(field),
+                    target_column=self.to.get_column_alias(field_name=field),
                 )
                 for field in self.to.ormar_config.pk.fields
             ),
@@ -431,7 +446,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         own_keys = set(value.keys()) - self.to.extract_related_names()
         if (
             own_keys == set(key.fields)
-            and key.lookup(value) is not None
+            and key.lookup(kwargs=value) is not None
             and not self.is_through
         ):
             key_only_model = self.to_key_only(**value)
@@ -463,7 +478,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :return: (if needed) registered Model
         :rtype: Model
         """
-        model = self.construct_key_only_model(value)
+        model = self.construct_key_only_model(value=value)
         if to_register:
             self.register_relation(model=model, child=child)
         return model
@@ -485,14 +500,14 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
             value = uuid.UUID(value)
         if not isinstance(value, key_type):
             if isinstance(value, self.to_key_only):
-                value = key.value(value)  # type: ignore[arg-type]
+                value = key.value(instance=value)  # type: ignore[arg-type]
             else:
                 raise RelationshipInstanceError(
                     f"Relationship error - ForeignKey {self.to.__name__} "
                     f"is of type {key_type} "
                     f"while {type(value)} passed as a parameter."
                 )
-        return key_only_instance(target=self.to, values=key.to_dict(value))
+        return key_only_instance(target=self.to, values=key.to_dict(value=value))
 
     def register_relation(self, model: "Model", child: "Model") -> None:
         """

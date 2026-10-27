@@ -197,7 +197,7 @@ class Model(ModelRow):
         pk_returned_from_insert = False
         pk = await self._execute_query(expr=template.statement, params=template.params)
         if pk and isinstance(pk, key.python_type()):
-            for field, part in key.to_dict(pk).items():
+            for field, part in key.to_dict(value=pk).items():
                 setattr(self, field, part)
             pk_returned_from_insert = True
 

@@ -96,26 +96,26 @@ def test_m2m_through_fk_ddl_unchanged():
 
 def test_values_for_accepts_model_dict_and_raw():
     link = Track.ormar_config.model_fields["album"].link
-    assert link.values_for(Album(id=2, name="a")) == {"album": 2}
-    assert link.values_for({"id": 2}) == {"album": 2}
-    assert link.values_for(2) == {"album": 2}
-    assert link.values_for(None) == {"album": None}
-    assert link.values_for(Album(name="no pk")) == {"album": None}
+    assert link.values_for(related=Album(id=2, name="a")) == {"album": 2}
+    assert link.values_for(related={"id": 2}) == {"album": 2}
+    assert link.values_for(related=2) == {"album": 2}
+    assert link.values_for(related=None) == {"album": None}
+    assert link.values_for(related=Album(name="no pk")) == {"album": None}
 
 
 def test_construct_key_only_model_keeps_type_checks():
     field = Track.ormar_config.model_fields["album"]
-    assert field.construct_key_only_model(5).pk == 5
+    assert field.construct_key_only_model(value=5).pk == 5
     with pytest.raises(RelationshipInstanceError):
-        field.construct_key_only_model("not an int")
+        field.construct_key_only_model(value="not an int")
 
 
 def test_values_for_accepts_key_only_pydantic_model():
     link = Track.ormar_config.model_fields["album"].link
     key_only = Track.ormar_config.model_fields["album"].to_key_only(id=8)
-    assert link.values_for(key_only) == {"album": 8}
+    assert link.values_for(related=key_only) == {"album": 8}
 
 
 def test_construct_key_only_model_keeps_zero_key():
     field = Track.ormar_config.model_fields["album"]
-    assert field.construct_key_only_model(0).pk == 0
+    assert field.construct_key_only_model(value=0).pk == 0

@@ -134,7 +134,7 @@ def test_link_of_inherited_field_points_at_child_owner():
 def test_key_of_and_key_getter():
     link = Track.ormar_config.model_fields["album"].link
     track = Track(album=Album(id=4, name="x"), title="t")
-    assert link.key_of(track) == 4
+    assert link.key_of(model=track) == 4
     assert link.key_getter(side="source", prefix="ab")({"ab_album_ref": 4}) == 4
     assert link.key_getter(side="target")({"album_pk": 5}) == 5
     reverse = Album.ormar_config.model_fields["tracks"].link
@@ -147,3 +147,12 @@ def test_key_value_and_key_parts_round_trip():
     assert key_parts(value=3, size=1) == (3,)
     assert key_parts(value=(1, 7), size=2) == (1, 7)
     assert key_parts(value=[1, 7], size=2) == (1, 7)
+
+
+def test_link_is_cached_per_owner_and_rebuilt_for_a_new_owner():
+    field = Track.ormar_config.model_fields["album"]
+    assert field.link is field.link
+    copy = type(field)(**dict(field.__dict__))
+    copy.owner = SubTrack
+    assert copy.link.source is SubTrack
+    assert field.link.source is Track

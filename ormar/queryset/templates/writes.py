@@ -218,7 +218,10 @@ def update_template(
         names=names,
         primary_key=primary_key,
     )
-    params = {**value_params(names=names, values=values), **primary_key.bind_params(pk)}
+    params = {
+        **value_params(names=names, values=values),
+        **primary_key.bind_params(value=pk),
+    }
     return StatementTemplate(statement=statement, params=params)
 
 
@@ -245,7 +248,7 @@ def delete_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
         table=table,
         primary_key=primary_key,
     )
-    params = primary_key.bind_params(pk)
+    params = primary_key.bind_params(value=pk)
     return StatementTemplate(statement=statement, params=params)
 
 
@@ -273,5 +276,5 @@ def pk_select_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
         table=table,
         primary_key=primary_key,
     )
-    params = primary_key.bind_params(pk)
+    params = primary_key.bind_params(value=pk)
     return StatementTemplate(statement=statement, params=params)
