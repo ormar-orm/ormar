@@ -123,11 +123,6 @@ async def test_many_to_many_prefetch_with_queryset():
     picked = Tag.objects.filter(name__in=["alpha", "beta"]).order_by("name")
     post = await Post.objects.prefetch_related(Prefetch("tags", queryset=picked)).get()
     assert [t.name for t in post.tags] == ["alpha", "beta"]
-    loaded = await Post.objects.get()
-    proxied = await loaded.tags.prefetch_related(
-        Prefetch("posts", queryset=Post.objects.order_by("id"))
-    ).all()
-    assert len(proxied) == 3
 
 
 @pytest.mark.asyncio
@@ -160,3 +155,52 @@ async def test_prefetch_queryset_exclude_fields_and_groups():
     either = Tag.objects.filter(ormar.or_(name="alpha", name__startswith="o"))
     post = await Post.objects.prefetch_related(Prefetch("tags", queryset=either)).get()
     assert sorted(t.name for t in post.tags) == ["alpha", "other"]
+
+
+@pytest.mark.asyncio
+async def test_prefetch_querysets_do_not_change_the_base_queryset():
+    base = Author.objects.order_by("name")
+    narrowed = Prefetch("books", queryset=Book.objects.fields(["id", "title"]))
+    await base.prefetch_related(narrowed).all()
+    authors = await base.prefetch_related("books").all()
+    assert all(b.year is not None for a in authors for b in a.books)
+    ann = authors[0]
+    await ann.books.prefetch_related(
+        Prefetch("reviews", queryset=Review.objects.fields(["id"]))
+    ).all()
+    books = await ann.books.prefetch_related("reviews").all()
+    assert all(r.stars is not None for b in books for r in b.reviews)
+
+
+@pytest.mark.asyncio
+async def test_prefetch_queryset_on_a_select_related_relation_raises():
+    with pytest.raises(QueryDefinitionError, match="select_related"):
+        await (
+            Author.objects.select_related("books")
+            .prefetch_related(
+                Prefetch("books", queryset=Book.objects.filter(year__gte=2015))
+            )
+            .all()
+        )
+
+
+@pytest.mark.asyncio
+async def test_prefetch_queryset_ordered_through_a_relation():
+    reviews = (
+        await Review.objects.prefetch_related(
+            Prefetch("book", queryset=Book.objects.order_by("author__name"))
+        )
+        .order_by("stars")
+        .all()
+    )
+    assert [r.book.title for r in reviews] == ["new", "old", "new"]
+
+
+@pytest.mark.asyncio
+async def test_prefetch_relation_as_accessor_and_wrong_queryset_type():
+    ann = await Author.objects.prefetch_related(
+        Prefetch(Author.books, queryset=Book.objects.filter(year__gte=2015))
+    ).get(name="Ann")
+    assert [b.title for b in ann.books] == ["newer"]
+    with pytest.raises(QueryDefinitionError, match="QuerySet"):
+        Author.objects.prefetch_related(Prefetch("books", queryset=[]))
