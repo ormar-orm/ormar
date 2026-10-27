@@ -210,9 +210,9 @@ class PydanticMixin(RelationMixin):
         """
         relation_field = cast("ForeignKeyField", field)
         target: Any = Annotated[
-            relation_field.target_value_type(),  # type: ignore
+            relation_field.flat_value_type(),  # type: ignore
             BeforeValidator(
-                partial(extract_pk_value, fields=relation_field.target_fields())
+                partial(extract_pk_value, fields=relation_field.flat_fields())
             ),
         ]
         return cls._wrap_relation_field_type(

@@ -1068,14 +1068,14 @@ class QuerySet(Generic[T]):
             rows = await executor.fetch_all(template.statement, template.params)
         if not rows:
             return []
-        column_map = values_column_map(
+        columns = values_column_map(
             model_cls=self.model_cls,  # type: ignore
             select_related=self._select_related,
             excludable=excludable,
             exclude_through=exclude_through,
             column_names=list(rows[0].keys()),  # type: ignore
         )
-        result = extract_values(rows=rows, column_map=column_map, as_dict=_as_dict)
+        result = extract_values(rows=rows, columns=columns, as_dict=_as_dict)
         if _as_dict:
             return result
         if _flatten and self._excludable.include_entry_count() != 1:
@@ -1851,7 +1851,11 @@ class QuerySet(Generic[T]):
             if field_name not in columns:
                 columns.append(field_name)
 
-        columns = [self.model.get_column_alias(field_name=k) for k in columns]
+        columns = [
+            alias
+            for field_name in columns
+            for alias in self.model.get_column_aliases(field_name=field_name)
+        ]
 
         for i, obj in enumerate(objects):
             explicit_fields = obj.__setattr_fields__

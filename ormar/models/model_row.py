@@ -1,3 +1,4 @@
+from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import (
@@ -51,6 +52,8 @@ class RowExtractionPlan:
         value becomes a pk-only related model unless the relation is selected
     :ivar holds_required_fields: every required field of the model is among
         the mapped fields, so every row built with this plan holds them
+    :ivar multi_column_keys: ``(field_name, prefixed_db_columns)`` of foreign
+        keys stored in several columns, read as one tuple value
     """
 
     column_mappings: tuple[tuple[str, str], ...]
@@ -60,6 +63,29 @@ class RowExtractionPlan:
     read_pk_from_item: Optional[Callable[[Mapping[str, Any]], Any]] = None
     foreign_key_names: tuple[str, ...] = ()
     holds_required_fields: bool = False
+    multi_column_keys: tuple[tuple[str, tuple[str, ...]], ...] = ()
+
+
+def read_multi_column_keys(
+    plan: RowExtractionPlan, row: Mapping[str, Any], item: dict
+) -> None:
+    """
+    Set the values of foreign keys stored in several columns as tuples of
+    their column values, ``None`` when every column is null. Keys already in
+    ``item`` are kept.
+
+    :param plan: row extraction plan of the model
+    :type plan: RowExtractionPlan
+    :param row: database row
+    :type row: Mapping[str, Any]
+    :param item: model dict being built from the row
+    :type item: dict
+    """
+    for field_name, columns in plan.multi_column_keys:
+        if field_name in item:
+            continue
+        parts = tuple(row[column] for column in columns)
+        item[field_name] = None if all(part is None for part in parts) else parts
 
 
 PlanCache = dict[tuple[type, str, int], RowExtractionPlan]
@@ -220,6 +246,8 @@ class ModelRow(NewBaseModel):
         instances: list["Model"] = []
         for row in rows:
             item = {field_name: row[column] for column, field_name in mappings}
+            if plan.multi_column_keys:
+                read_multi_column_keys(plan=plan, row=row, item=item)
             pk = read_pk(item)
             if pk in seen:
                 continue
@@ -719,10 +747,20 @@ class ModelRow(NewBaseModel):
         )
         column_prefix = table_prefix + "_" if table_prefix else ""
         column_pairs = cls._get_table_column_pairs(cls)
-        mappings = tuple(
+        all_mappings = tuple(
             (f"{column_prefix}{col_name}", field_name)
             for col_name, field_name in column_pairs
             if field_name in selected_columns
+        )
+        column_counts = Counter(field_name for _, field_name in all_mappings)
+        mappings = tuple(pair for pair in all_mappings if column_counts[pair[1]] == 1)
+        multi_column_keys = tuple(
+            (
+                field_name,
+                tuple(column for column, name in all_mappings if name == field_name),
+            )
+            for field_name, count in column_counts.items()
+            if count > 1
         )
         excluded = frozenset(
             cls.get_names_to_exclude(excludable=excludable, alias=table_prefix)
@@ -739,7 +777,7 @@ class ModelRow(NewBaseModel):
         model_fields = cls.ormar_config.model_fields
         foreign_key_names = tuple(
             field_name
-            for _, field_name in mappings
+            for field_name in column_counts
             if model_fields[field_name].is_relation
         )
         cls.trusted_row_construction()  # fills ``_required_row_fields``
@@ -750,9 +788,8 @@ class ModelRow(NewBaseModel):
             read_pk_from_row=read_pk_from_row,
             read_pk_from_item=read_pk_from_item,
             foreign_key_names=foreign_key_names,
-            holds_required_fields=cls._required_row_fields.issubset(
-                field_name for _, field_name in mappings
-            ),
+            holds_required_fields=cls._required_row_fields.issubset(column_counts),
+            multi_column_keys=multi_column_keys,
         )
 
     @classmethod
@@ -833,4 +870,6 @@ class ModelRow(NewBaseModel):
         for prefixed_name, field_name in plan.column_mappings:
             if field_name not in item:
                 item[field_name] = row[prefixed_name]
+        if plan.multi_column_keys:
+            read_multi_column_keys(plan=plan, row=row, item=item)
         return item

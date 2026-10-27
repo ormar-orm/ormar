@@ -1,15 +1,20 @@
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Generator, Optional, Union
+from typing import TYPE_CHECKING, Any, Generator, Optional, Union, cast
 
 import sqlalchemy
 from sqlalchemy import ColumnElement
 
 import ormar  # noqa I100
 from ormar.exceptions import QueryDefinitionError
-from ormar.queryset.actions.filter_action import FilterAction, KeyInFilterAction
+from ormar.queryset.actions.filter_action import (
+    FILTER_OPERATORS,
+    FilterAction,
+    KeyInFilterAction,
+    KeyNullFilterAction,
+)
 
 if TYPE_CHECKING:  # pragma no cover
-    from ormar import Model
+    from ormar import ForeignKeyField, Model
     from ormar.models.primary_key import PrimaryKey
     from ormar.queryset.templates import SlotBinder
 
@@ -229,9 +234,13 @@ class QueryClause:
         select_related = list(self._select_related)
 
         for key, value in kwargs.items():
-            actions = pk_filter_actions(
-                model_cls=self.model_cls, name=key, value=value
-            ) or [FilterAction(filter_str=key, value=value, model_cls=self.model_cls)]
+            actions = (
+                pk_filter_actions(model_cls=self.model_cls, name=key, value=value)
+                or multi_column_filter_actions(
+                    model_cls=self.model_cls, name=key, value=value
+                )
+                or [FilterAction(filter_str=key, value=value, model_cls=self.model_cls)]
+            )
             for filter_action in actions:
                 select_related = filter_action.update_select_related(
                     select_related=select_related
@@ -308,6 +317,78 @@ def pk_filter_actions(
         )
     values = [tuple(key_parts_of(key=key, value=item).values()) for item in value]
     return [KeyInFilterAction(prefix=prefix, values=values, model_cls=model_cls)]
+
+
+def multi_column_filter_actions(
+    model_cls: type["Model"], name: str, value: Any
+) -> Optional[list[FilterAction]]:
+    """
+    Turn a filter on a foreign key stored in several columns (also through
+    relations) into a row-value filter on its columns::
+
+        order=Order(1, 7)       -> (ord_tenant, ord_no) IN ((1, 7))
+        order__in=[(1, 7)]      -> (ord_tenant, ord_no) IN ((1, 7))
+        order__isnull=True      -> ord_tenant IS NULL AND ord_no IS NULL
+
+    :raises QueryDefinitionError: for other operators
+    :param model_cls: model the filter starts from
+    :type model_cls: type[Model]
+    :param name: filter key
+    :type name: str
+    :param value: filter value
+    :type value: Any
+    :return: filter actions, ``None`` if the key is not such a filter
+    :rtype: Optional[list[FilterAction]]
+    """
+    parts = name.split("__")
+    operator = parts[-1] if parts[-1] in FILTER_OPERATORS else "exact"
+    path = parts if operator == "exact" and parts[-1] != "exact" else parts[:-1]
+    target = model_cls
+    field = None
+    for part in path:
+        field = target.ormar_config.model_fields.get(part)
+        if field is None or not field.is_relation:
+            return None
+        target = field.to
+    if (
+        field is None
+        or field.virtual
+        or field.is_multi
+        or len(cast("ForeignKeyField", field).link.pairs) == 1
+    ):
+        return None
+    relation_field = cast("ForeignKeyField", field)
+    prefix = "".join(f"{part}__" for part in path[:-1])
+    if operator == "exact" and value is None:
+        (operator, value) = ("isnull", True)
+    if operator == "isnull":
+        return [
+            KeyNullFilterAction(
+                prefix=prefix,
+                values=value,
+                model_cls=model_cls,
+                anchor=path[-1],
+                columns=relation_field.link.source_columns(),
+            )
+        ]
+    if operator not in ("exact", "in"):
+        raise QueryDefinitionError(
+            f"Only =, __in and __isnull lookups are supported on "
+            f"{'__'.join(path)}, a foreign key stored in several columns."
+        )
+    items = [value] if operator == "exact" else list(value)
+    values = [
+        tuple(relation_field.link.values_for(related=item).values()) for item in items
+    ]
+    return [
+        KeyInFilterAction(
+            prefix=prefix,
+            values=values,
+            model_cls=model_cls,
+            anchor=path[-1],
+            columns=relation_field.link.source_columns(),
+        )
+    ]
 
 
 def key_parts_of(key: "PrimaryKey", value: Any) -> dict[str, Any]:

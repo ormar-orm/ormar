@@ -90,9 +90,15 @@
 * Composite primary keys: mark several fields with `primary_key=True`. The key value
   is a tuple (`order.pk == (1, 7)`) and works in `get(pk=...)`, `filter(pk__in=...)`,
   `exclude()`, `order_by("pk")`, bulk operations and `update_or_create(pk=...)`.
-  Relations to models with a composite key follow in a later release. Part of
-  [#137](https://github.com/ormar-orm/ormar/issues/137). See
+  Part of [#137](https://github.com/ormar-orm/ormar/issues/137). See
   [primary keys](models/primary-keys.md).
+* Foreign keys to models with a composite key, and to a set of unique columns
+  (`to_field=["tenant_id", "sku"]`), are stored in several columns (named with
+  `columns={...}` or `<field>_<column>` by default) under one composite
+  `FOREIGN KEY` constraint. They work in joins, prefetching, filters
+  (`order=...`, `order__in=...`, `order__isnull=...`), bulk operations,
+  `values()` / `values_list()` and flattened dumps. See
+  [foreign keys to several columns](relations/foreign-key.md#foreign-keys-to-several-columns).
 * `pk` lookups (`pk__in`, `pk__gt`, ...) and `order_by("pk")` / `order_by("-pk")`
   work for every model (`order_by("pk")` produced invalid SQL before).
 
@@ -100,6 +106,11 @@
   covers Python 3.14.
 
 ### 🐛 Fixes
+
+* `values()` / `values_list()` return fields with a custom database column `name=`
+  (they were left out).
+* Flattened relations with a `to_field` (`model_dump(flatten_fields=...)`) dump the
+  referenced value instead of the related primary key, matching `get_pydantic`.
 
 * Self-referencing `ManyToMany` relations with explicit `through_relation_name` and
   `through_reverse_relation_name` use the names as documented on both sides; the

@@ -33,6 +33,10 @@ class AliasMixin:
         cls._alias_to_field_map = ormar_rust_utils.build_reverse_alias_map(
             field_to_alias
         )
+        for field_name, field in cls.ormar_config.model_fields.items():
+            if field.is_relation and not field.virtual and not field.is_multi:
+                for column in field.column_aliases():
+                    cls._alias_to_field_map.setdefault(column, field_name)
 
     @classmethod
     def get_column_alias(cls, field_name: str) -> str:
@@ -49,6 +53,22 @@ class AliasMixin:
         except AttributeError:
             cls._build_alias_cache()
             return cls._field_to_alias_map.get(field_name, field_name)
+
+    @classmethod
+    def get_column_aliases(cls, field_name: str) -> tuple[str, ...]:
+        """
+        Returns db column names of given ormar field: one for most fields,
+        several for a foreign key stored in several columns.
+
+        :param field_name: name of the field
+        :type field_name: str
+        :return: column names of the field
+        :rtype: tuple[str, ...]
+        """
+        field = cls.ormar_config.model_fields.get(field_name)
+        if field is None:
+            return (cls.get_column_alias(field_name=field_name),)
+        return field.column_aliases()
 
     @classmethod
     def get_column_name_from_alias(cls, alias: str) -> str:

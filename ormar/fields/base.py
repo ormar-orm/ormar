@@ -316,6 +316,27 @@ class BaseField(FieldInfo):  # type: ignore[misc]
         """
         return []
 
+    def get_columns(self) -> list[sqlalchemy.Column]:
+        """
+        :return: the table columns of the field, one for plain fields
+        :rtype: list[sqlalchemy.Column]
+        """
+        return [self.get_column(self.get_alias())]
+
+    def column_aliases(self) -> tuple[str, ...]:
+        """
+        :return: names of the table columns of the field
+        :rtype: tuple[str, ...]
+        """
+        return (self.get_alias(),)
+
+    def construct_table_constraints(self) -> list:
+        """
+        :return: table-level constraints of the field, none for plain fields
+        :rtype: list
+        """
+        return []
+
     def get_column(self, name: str) -> sqlalchemy.Column:
         """
         Returns definition of sqlalchemy.Column used in creation of sqlalchemy.Table.

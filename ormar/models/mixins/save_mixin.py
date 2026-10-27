@@ -126,21 +126,21 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
                 )
                 target_key = target_field.to.ormar_config.pk
                 if isinstance(field_value, ormar.Model):  # pragma: no cover
-                    pk_value = target_field.target_value_of(related=field_value)
-                    if pk_value is None:
+                    values = target_field.link.values_for(related=field_value)
+                    if None in values.values():
                         raise ModelPersistenceError(
                             f"You cannot save {field_value.get_name()} "
                             f"model without pk set!"
                         )
-                    model_dict[field] = pk_value
+                    model_dict.pop(field)
+                    model_dict.update(values)
                 elif isinstance(field_value, list) and field_value:
                     model_dict[field] = [
                         target_key.value_from(data=target) for target in field_value
                     ]
                 elif isinstance(field_value, dict) and field_value:
-                    model_dict[field] = target_field.target_value_of(
-                        related=field_value
-                    )
+                    model_dict.pop(field)
+                    model_dict.update(target_field.link.values_for(related=field_value))
                 else:
                     model_dict.pop(field, None)
         return model_dict
@@ -304,19 +304,22 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         """
         validators = cls._build_individual_schema_validator()
         foreign_keys = cls._extract_db_related_names()
+        validated: dict = {}
         for key, value in new_kwargs.items():
             if key in foreign_keys:
-                new_kwargs[key] = cls._related_pk_for_update(
-                    field_name=key, value=value
+                validated.update(
+                    cls._related_values_for_update(field_name=key, value=value)
                 )
             elif key in cls._json_fields:
-                new_kwargs[key] = validators[key].validate_python(encode_json(value))
-            elif key in validators:
-                validators[key].validate_python(value)
-        return new_kwargs
+                validated[key] = validators[key].validate_python(encode_json(value))
+            else:
+                if key in validators:
+                    validators[key].validate_python(value)
+                validated[key] = value
+        return validated
 
     @classmethod
-    def _related_pk_for_update(cls, field_name: str, value: Any) -> Any:
+    def _related_values_for_update(cls, field_name: str, value: Any) -> dict:
         """
         Returns the validated pk value of a related model passed to a queryset
         update as a model, a dictionary with its pk or the pk itself.
@@ -331,18 +334,21 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         """
         field = cast("ForeignKeyField", cls.ormar_config.model_fields[field_name])
         target = field.to
-        if isinstance(value, (ormar.Model, dict)):
-            is_model = isinstance(value, ormar.Model)
-            value = field.target_value_of(related=value)
-            if value is None and is_model:
-                raise ModelPersistenceError(
-                    f"You cannot update {field_name} with {target.get_name()} "
-                    f"model without pk set!"
+        is_model = isinstance(value, ormar.Model)
+        values = field.link.values_for(related=value)
+        if is_model and None in values.values():
+            raise ModelPersistenceError(
+                f"You cannot update {field_name} with {target.get_name()} "
+                f"model without pk set!"
+            )
+        if len(values) == 1:
+            ((key, single),) = values.items()
+            if single is not None:
+                validators = target._build_individual_schema_validator()
+                values[key] = validators[field.target_fields()[0]].validate_python(
+                    single
                 )
-        if value is None:
-            return None
-        validators = target._build_individual_schema_validator()
-        return validators[field.target_fields()[0]].validate_python(value)
+        return values
 
     @classmethod
     def _build_individual_schema_validator(cls) -> Any:

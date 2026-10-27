@@ -191,6 +191,7 @@ class Model(ModelRow):
                 k: v
                 for k, v in self_fields.items()
                 if k not in related_names
+                and k in self.ormar_config.model_fields
                 and (k not in current_values or current_values[k] is not v)
             }
         )

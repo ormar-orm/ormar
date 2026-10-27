@@ -224,7 +224,7 @@ def _process_fields(
         if field.primary_key:
             pk_fields.append(field_name)
         if _is_db_field(field):
-            columns.append(field.get_column(field.get_alias()))
+            columns.extend(field.get_columns())
     return tuple(pk_fields), columns
 
 
@@ -378,6 +378,11 @@ def populate_config_sqlalchemy_table_if_required(config: "OrmarConfig") -> None:
             ),
             *config.columns,
             *config.constraints,
+            *(
+                constraint
+                for field in config.model_fields.values()
+                for constraint in field.construct_table_constraints()
+            ),
             schema=config.schema,
             comment=config.comment,
         )
@@ -440,6 +445,5 @@ def update_column_definition(
     columns = model.ormar_config.columns
     for ind, column in enumerate(columns):
         if column.name == field.get_alias():
-            new_column = field.get_column(field.get_alias())
-            columns[ind] = new_column
+            columns[ind : ind + 1] = field.get_columns()
             break

@@ -314,7 +314,53 @@ await Enrollment.objects.get(student=ann, course=math)  # the same row
 ```
 
 Foreign keys in the primary key are not nullable. They can point only at models with
-a single column primary key (or a `to_field`) for now.
+a single column primary key (or a single `to_field`) for now.
+
+## Foreign keys to several columns
+
+A foreign key to a model with a composite primary key, or to a set of columns that is
+unique together (`to_field=[...]`, matching a `UniqueColumns` constraint), is stored in
+one column per referenced column, with one composite `FOREIGN KEY` constraint. The
+columns are named `<field>_<referenced column>` unless `columns=` maps each referenced
+column (by its database name) to a column name. `name=` can't be used for them.
+
+```python
+class Order(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="orders")
+
+    tenant_id: int = ormar.Integer(primary_key=True)
+    number: int = ormar.Integer(primary_key=True, name="order_no")
+
+
+class OrderLine(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="order_lines")
+
+    id: int = ormar.Integer(primary_key=True)
+    order: Optional[Order] = ormar.ForeignKey(
+        Order, columns={"tenant_id": "ord_tenant", "order_no": "ord_no"}
+    )
+    # FOREIGN KEY (ord_tenant, ord_no) REFERENCES orders (tenant_id, order_no)
+
+
+await OrderLine.objects.create(order=order)  # a model,
+await OrderLine.objects.create(order=(1, 7))  # its key tuple
+await OrderLine.objects.create(order={"tenant_id": 1, "number": 7})  # or a dict
+
+await OrderLine.objects.filter(order=order).all()
+await OrderLine.objects.filter(order__in=[(1, 7), (1, 8)]).all()
+await OrderLine.objects.filter(order__isnull=True).all()
+await OrderLine.objects.filter(order__note="first").all()  # through the relation
+await Order.objects.prefetch_related("lines").get(pk=(1, 7))
+
+await OrderLine.objects.values(["id", "order"])
+# [{"id": 1, "order": {"tenant_id": 1, "number": 7}}]
+await OrderLine.objects.values_list(["id", "order"])  # [(1, (1, 7))]
+line.model_dump(flatten_fields={"order"})["order"]  # {"tenant_id": 1, "number": 7}
+```
+
+Only `=`, `__in` and `__isnull` lookups work on the relation itself; filter other
+conditions through the related fields. A foreign key to several columns can't be part
+of a primary key yet.
 
 ## Relation Setup
 

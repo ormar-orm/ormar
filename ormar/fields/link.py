@@ -193,9 +193,11 @@ class RelationLink:
 
     def values_for(self, related: Any) -> dict[str, Any]:
         """
-        Turn a related value into the source-side field values that store it::
+        Turn a related value into the source-side values that store it, keyed
+        by ``source_keys()``::
 
             Track.album link: Album(id=2) | {"id": 2} | 2 -> {"album": 2}
+            OrderLine.order link: Order(1, 7) -> {"ord_tenant": 1, "ord_no": 7}
 
         A related model without its key yields ``None`` values; callers decide
         whether that is an error.
@@ -207,20 +209,27 @@ class RelationLink:
         :rtype: dict[str, Any]
         """
         if related is None:
-            return {pair.source_field: None for pair in self.pairs}
-        if isinstance(related, BaseModel):
-            return {
-                pair.source_field: referenced_value(
-                    related=related, field=pair.target_field
-                )
+            parts: tuple[Any, ...] = (None,) * len(self.pairs)
+        elif isinstance(related, BaseModel):
+            parts = tuple(
+                referenced_value(related=related, field=pair.target_field)
                 for pair in self.pairs
-            }
-        if isinstance(related, dict):
-            return {
-                pair.source_field: related.get(pair.target_field) for pair in self.pairs
-            }
-        parts = key_parts(value=related, size=len(self.pairs))
-        return {pair.source_field: part for pair, part in zip(self.pairs, parts)}
+            )
+        elif isinstance(related, dict):
+            parts = tuple(related.get(pair.target_field) for pair in self.pairs)
+        else:
+            parts = key_parts(value=related, size=len(self.pairs))
+        return dict(zip(self.source_keys(), parts))
+
+    def source_keys(self) -> tuple[str, ...]:
+        """
+        :return: keys the source side stores the link's values under in a model
+            dict: the relation field for a single column, the columns otherwise
+        :rtype: tuple[str, ...]
+        """
+        if len(self.pairs) == 1:
+            return (self.pairs[0].source_field,)
+        return self.source_columns()
 
     def key_getter(
         self, *, side: Literal["source", "target"], prefix: str = ""
