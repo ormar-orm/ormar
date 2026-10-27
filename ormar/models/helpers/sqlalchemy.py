@@ -89,7 +89,8 @@ def adjust_through_many_to_many_model(model_field: "ManyToManyField") -> None:
         model_fields[field_name] = ormar.ForeignKey(  # type: ignore
             to=target,
             real_name=field_name,
-            ondelete="CASCADE",
+            ondelete=None if target.ormar_config.view else "CASCADE",
+            db_constraint=not target.ormar_config.view,
             owner=model_field.through,
         )
         create_and_append_m2m_fk(
@@ -140,15 +141,22 @@ def create_and_append_m2m_fk(
     through_table = model_field.through.ormar_config.tablename
     target_table = model.ormar_config.tablename
     default_name = f"fk_{through_table}_{target_table}_{field_name}_{pk_alias}"
+    foreign_keys = (
+        []
+        if model.ormar_config.view
+        else [
+            sqlalchemy.schema.ForeignKey(
+                qualified_fk_reference(target=model, column_alias=pk_alias),
+                ondelete="CASCADE",
+                onupdate="CASCADE",
+                name=foreign_key_name or default_name,
+            )
+        ]
+    )
     column = sqlalchemy.Column(
         field_name,
         pk_column.type,
-        sqlalchemy.schema.ForeignKey(
-            qualified_fk_reference(target=model, column_alias=pk_alias),
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-            name=foreign_key_name or default_name,
-        ),
+        *foreign_keys,
         nullable=nullable,
     )
     model_field.through.ormar_config.columns.append(column)
@@ -360,7 +368,14 @@ def populate_config_sqlalchemy_table_if_required(config: "OrmarConfig") -> None:
         # a view gets its own metadata so create_all and Alembic leave it alone
         table = sqlalchemy.Table(
             config.tablename,
-            sqlalchemy.MetaData() if config.view else config.metadata,
+            (
+                sqlalchemy.MetaData(
+                    schema=config.metadata.schema,
+                    naming_convention=config.metadata.naming_convention,
+                )
+                if config.view
+                else config.metadata
+            ),
             *config.columns,
             *config.constraints,
             schema=config.schema,

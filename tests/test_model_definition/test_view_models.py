@@ -68,6 +68,7 @@ async def view(create_test_database):
 async def data():
     async with base_ormar_config.database:
         await Flag.objects.delete(each=True)
+        await Badge.objects.delete(each=True)
         await Purchase.objects.delete(each=True)
         await Customer.objects.delete(each=True)
         ann = await Customer.objects.create(name="Ann")
@@ -141,3 +142,95 @@ async def test_writing_a_view_raises(data):
         await CustomerTotal.objects.delete(each=True)
     with pytest.raises(ReadOnlyModelError):
         await ann.totals.create(total=3)
+
+
+class CustomerTotalProxy(CustomerTotal):
+    ormar_config = base_ormar_config.copy(proxy=True)
+
+
+class Badge(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="vw_badges")
+
+    id: int = ormar.Integer(primary_key=True)
+    totals = ormar.ManyToMany(CustomerTotal, related_name="badges")
+
+
+class ReportBase(ormar.Model):
+    ormar_config = base_ormar_config.copy(abstract=True, view=True)
+
+    customer_id: int = ormar.Integer(primary_key=True)
+
+
+class ReportChild(ReportBase):
+    ormar_config = base_ormar_config.copy(tablename="vw_report_child")
+
+    total: float = ormar.Float()
+
+
+def test_proxies_and_children_of_views_are_views():
+    assert CustomerTotalProxy.ormar_config.view is True
+    assert ReportChild.ormar_config.view is True
+    assert "vw_report_child" not in base_ormar_config.metadata.tables
+
+
+def test_view_table_keeps_metadata_schema_and_naming():
+    metadata = sqlalchemy.MetaData(
+        schema="reporting", naming_convention={"ix": "ix_%(column_0_label)s"}
+    )
+    config = ormar.OrmarConfig(database=base_ormar_config.database, metadata=metadata)
+
+    class SchemaView(ormar.Model):
+        ormar_config = config.copy(tablename="schema_view", view=True)
+
+        id: int = ormar.Integer(primary_key=True)
+
+    table = SchemaView.ormar_config.table
+    assert table.schema == "reporting"
+    assert table.metadata.naming_convention["ix"] == "ix_%(column_0_label)s"
+
+
+def test_many_to_many_to_a_view_creates_no_constraint_to_it():
+    through = Badge.ormar_config.model_fields["totals"].through
+    targets = {
+        fk.target_fullname
+        for column in through.ormar_config.table.c
+        for fk in column.foreign_keys
+    }
+    assert targets == {"vw_badges.id"}
+
+
+@pytest.mark.asyncio
+async def test_relation_writes_through_views_are_refused_before_changing_anything(
+    data, monkeypatch
+):
+    monkeypatch.setattr(cross_check, "ENABLED", False)
+    ann, bob = data
+    total = await CustomerTotal.objects.get(pk=ann.id)
+    with pytest.raises(ReadOnlyModelError):
+        await CustomerTotalProxy(customer=ann, total=1).save()
+    with pytest.raises(ReadOnlyModelError):
+        await CustomerTotalProxy.objects.delete(each=True)
+    loaded = await Customer.objects.select_related("totals").get(id=bob.id)
+    with pytest.raises(ReadOnlyModelError):
+        await loaded.totals.add(total)
+    assert [t.pk for t in loaded.totals] == [bob.id]
+    with pytest.raises(ReadOnlyModelError):
+        await loaded.totals.remove(loaded.totals[0])
+    assert [t.pk for t in loaded.totals] == [bob.id]
+    with pytest.raises(ReadOnlyModelError):
+        await total.save_related()
+    badge = await Badge.objects.create()
+    await badge.totals.add(total)
+    assert [t.total for t in await badge.totals.all()] == [4.0]
+
+
+@pytest.mark.asyncio
+async def test_save_related_of_a_table_skips_loaded_view_relations(data, monkeypatch):
+    monkeypatch.setattr(cross_check, "ENABLED", False)
+    ann, _ = data
+    customer = await Customer.objects.prefetch_related("totals").get(id=ann.id)
+    customer.name = "Anna"
+    await customer.save_related(save_all=True)
+    assert (await Customer.objects.get(id=ann.id)).name == "Anna"
+    loaded = await Customer.objects.select_related("totals").get(id=ann.id)
+    await loaded.save_related(save_all=True)

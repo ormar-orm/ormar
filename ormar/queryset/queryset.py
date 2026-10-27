@@ -23,7 +23,6 @@ from ormar.exceptions import (
     ModelPersistenceError,
     QueryDefinitionError,
 )
-from ormar.models.helpers.models import verify_writable
 from ormar.models.row_registry import RowRegistry
 from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
 from ormar.queryset.actions.order_action import OrderAction, expand_pk_orders
@@ -1249,7 +1248,7 @@ class QuerySet(Generic[T]):
         :return: number of updated rows
         :rtype: int
         """
-        verify_writable(model_cls=self.model)
+        self.model.verify_writable()
         if not each and not (self.filter_clauses or self.exclude_clauses):
             raise QueryDefinitionError(
                 "You cannot update without filtering the queryset first. "
@@ -1289,7 +1288,7 @@ class QuerySet(Generic[T]):
         :return: number of deleted rows
         :rtype:int
         """
-        verify_writable(model_cls=self.model)
+        self.model.verify_writable()
         if kwargs or args:
             return await self.filter(*args, **kwargs).delete()
         if not each and not (self.filter_clauses or self.exclude_clauses):
@@ -1746,7 +1745,7 @@ class QuerySet(Generic[T]):
         :param objects: list of ormar models already initialized and ready to save.
         :type objects: list[Model]
         """
-        verify_writable(model_cls=self.model)
+        self.model.verify_writable()
 
         if not objects:
             raise ModelListEmptyError("Bulk create objects are empty!")
@@ -1808,7 +1807,7 @@ class QuerySet(Generic[T]):
         :param columns: list of columns to update
         :type columns: list[str]
         """
-        verify_writable(model_cls=self.model)
+        self.model.verify_writable()
         if not objects:
             raise ModelListEmptyError("Bulk update objects are empty!")
 
