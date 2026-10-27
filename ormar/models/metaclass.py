@@ -275,7 +275,7 @@ def copy_and_replace_m2m_through_model(  # noqa: CFQ002
     :type ormar_config: OrmarConfig
     """
     if field.through and any(
-        through_field.is_relation
+        through_field.is_relation and not through_field.virtual
         for through_field in field.through.ormar_config.model_fields.values()
     ):
         raise ModelDefinitionError(

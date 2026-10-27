@@ -253,11 +253,19 @@ await Enrollment.objects.get(pk=(student.id, course.id))
 ```
 
 * The through model may only have relations to the two models of the relation.
-* When both foreign keys lead to the same model (a self-referencing relation), pass
-  `through_relation_name` and `through_reverse_relation_name` to tell them apart.
+* When several foreign keys lead to the same model (e.g. a self-referencing
+  relation), pass `through_relation_name` (the field leading to the model declaring
+  the `ManyToMany`) and `through_reverse_relation_name` (the field leading to the
+  related model) to tell them apart.
 * Foreign keys the through model doesn't declare are added as usual.
 * A many-to-many relation using such a link table can't be declared on an abstract
   model yet; declare it on the concrete model.
+* ormar's generated foreign keys use `ondelete="CASCADE"`; foreign keys you declare
+  keep the options you give them, so set `ondelete="CASCADE"` on them if deleting a
+  side should delete its link rows.
+* If the link table declares its foreign keys with forward references, call its
+  `update_forward_refs()` before the model declaring the `ManyToMany` is completed
+  (or declare the `ManyToMany` with `through=ForwardRef("LinkTable")` as above).
 
 ## Overriding foreign key constraint names on the through model
 
