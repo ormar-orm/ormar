@@ -2,11 +2,13 @@ import abc
 import copy
 import logging
 from abc import abstractmethod
-from typing import TYPE_CHECKING, Any, Sequence, Union, cast
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Optional, Sequence, Union, cast
 
 import ormar_rust_utils
 
-from ormar.queryset.clause import QueryClause
+from ormar.exceptions import QueryDefinitionError
+from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.query import Query
 from ormar.queryset.utils import translate_list_to_dict
 from ormar.relations.aliases import alias_for
@@ -15,7 +17,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from ormar import ForeignKeyField, Model
     from ormar.fields.link import RelationLink
     from ormar.models.excludable import ExcludableItems
-    from ormar.queryset import FilterAction, OrderAction
+    from ormar.queryset import FilterAction, OrderAction, QuerySet
 
 logger = logging.getLogger(__name__)
 
@@ -172,8 +174,12 @@ class LoadNode(Node):
         orders_by: list["OrderAction"],
         parent: "Node",
         source_model: type["Model"],
+        queryset: Optional["QuerySet"] = None,
     ) -> None:
         super().__init__(relation_field=relation_field, parent=parent)
+        self.queryset = queryset
+        if queryset is not None:
+            validate_prefetch_queryset(relation_field=relation_field, queryset=queryset)
         self.excludable = excludable
         self.query_excludable = excludable
         self.exclude_prefix: str = ""
@@ -208,15 +214,16 @@ class LoadNode(Node):
         filter_clauses = self.get_filter_for_prefetch()
 
         if filter_clauses:
+            parts = self._queryset_parts()
             qry = Query(
                 model_cls=query_target,
-                select_related=select_related,
-                filter_clauses=filter_clauses,
-                exclude_clauses=[],
+                select_related=select_related + parts.select_related,
+                filter_clauses=filter_clauses + parts.filter_clauses,
+                exclude_clauses=parts.exclude_clauses,
                 offset=None,
                 limit_count=None,
                 excludable=self.query_excludable,
-                order_bys=self._extract_own_order_bys(),
+                order_bys=self._extract_own_order_bys() + parts.order_bys,
                 limit_raw_sql=False,
             )
             expr = qry.build_select_expression()
@@ -240,6 +247,7 @@ class LoadNode(Node):
         """
         related_field_names = self.relation_field.link.target_fields()
         self.exclude_prefix = alias_for(self._build_relation_key())
+        self._merge_queryset_excludable()
         if self.relation_field.is_multi:
             self.table_prefix = alias_for(
                 self.relation_field.through_target_field_name()  # type: ignore
@@ -254,6 +262,71 @@ class LoadNode(Node):
                 related_name
             ):
                 model_excludable.set_values({related_name}, slot="include")
+
+    def _merge_queryset_excludable(self) -> None:
+        """
+        Apply ``fields`` / ``exclude_fields`` of a ``Prefetch`` queryset to the
+        prefetched models.
+        """
+        if self.queryset is None:
+            return
+        target_model = self.relation_field.to
+        own = self.queryset._excludable.get(model_cls=target_model, alias="")
+        merged = self.excludable.get(model_cls=target_model, alias=self.exclude_prefix)
+        if own.include:
+            merged.set_values(value=own.include, slot="include")
+        if own.exclude:
+            merged.set_values(value=own.exclude, slot="exclude")
+
+    def _queryset_parts(self) -> "PrefetchQuerysetParts":
+        """
+        Filters, excludes, ordering and joins of a ``Prefetch`` queryset, adapted
+        to the prefetch query: a many-to-many relation is queried through its
+        through model, so the clauses are re-aliased to the joined target table.
+
+        :raises QueryDefinitionError: if a many-to-many prefetch queryset filters
+            or orders through other relations of the target
+        :return: parts to add to the prefetch query
+        :rtype: PrefetchQuerysetParts
+        """
+        queryset = self.queryset
+        if queryset is None:
+            return PrefetchQuerysetParts(
+                filter_clauses=[], exclude_clauses=[], order_bys=[], select_related=[]
+            )
+        filter_clauses = copy.deepcopy(queryset.filter_clauses)
+        exclude_clauses = copy.deepcopy(queryset.exclude_clauses)
+        order_bys = [copy.copy(order) for order in queryset.order_bys]
+        for order in order_bys:
+            order.is_source_model_order = True
+        if not self.relation_field.is_multi:
+            return PrefetchQuerysetParts(
+                filter_clauses=filter_clauses,
+                exclude_clauses=exclude_clauses,
+                order_bys=order_bys,
+                select_related=list(queryset._select_related),
+            )
+        actions = [
+            *iter_filter_actions(clauses=filter_clauses),
+            *iter_filter_actions(clauses=exclude_clauses),
+        ]
+        if any(action.related_parts for action in actions) or any(
+            order.related_str for order in order_bys
+        ):
+            raise QueryDefinitionError(
+                "A Prefetch queryset of a many to many relation can only filter and "
+                "order by fields of the related model itself."
+            )
+        for action in actions:
+            action.table_prefix = self.table_prefix
+        for order in order_bys:
+            order.table_prefix = self.table_prefix
+        return PrefetchQuerysetParts(
+            filter_clauses=filter_clauses,
+            exclude_clauses=exclude_clauses,
+            order_bys=order_bys,
+            select_related=[],
+        )
 
     def _build_relation_string(self) -> str:
         node: Union[LoadNode, Node] = self
@@ -400,6 +473,68 @@ class LoadNode(Node):
                 setattr(model, self.relation_field.name, child)
 
 
+@dataclass
+class PrefetchQuerysetParts:
+    """
+    Parts of a ``Prefetch`` queryset added to a prefetch query.
+
+    :ivar filter_clauses: filter actions and groups
+    :ivar exclude_clauses: exclude actions and groups
+    :ivar order_bys: order actions
+    :ivar select_related: relations joined for filters and ordering
+    """
+
+    filter_clauses: list[Any]
+    exclude_clauses: list[Any]
+    order_bys: list["OrderAction"]
+    select_related: list[str]
+
+
+def iter_filter_actions(clauses: list[Any]) -> list["FilterAction"]:
+    """
+    :param clauses: filter actions and filter groups
+    :type clauses: list[Any]
+    :return: every filter action, including those nested in groups
+    :rtype: list[FilterAction]
+    """
+    actions: list["FilterAction"] = []
+    for clause in clauses:
+        if isinstance(clause, FilterGroup):
+            actions.extend(clause._iter())
+        else:
+            actions.append(clause)
+    return actions
+
+
+def validate_prefetch_queryset(
+    relation_field: "ForeignKeyField", queryset: "QuerySet"
+) -> None:
+    """
+    Check that a ``Prefetch`` queryset can be applied to its relation.
+
+    :raises QueryDefinitionError: if the queryset is of another model or uses
+        limit, offset or prefetch_related
+    :param relation_field: prefetched relation
+    :type relation_field: ForeignKeyField
+    :param queryset: queryset passed with ``Prefetch``
+    :type queryset: QuerySet
+    """
+    if queryset.model is not relation_field.to:
+        raise QueryDefinitionError(
+            f"Prefetch of {relation_field.name} needs a queryset of "
+            f"{relation_field.to.__name__}, got {queryset.model.__name__}."
+        )
+    if (
+        queryset.limit_count is not None
+        or queryset.query_offset is not None
+        or queryset._prefetch_related
+    ):
+        raise QueryDefinitionError(
+            "A Prefetch queryset cannot use limit, offset, paginate or "
+            "prefetch_related; prefetch nested relations with their own paths."
+        )
+
+
 class PrefetchQuery:
     """
     Query used to fetch related models in subsequent queries.
@@ -414,8 +549,10 @@ class PrefetchQuery:
         prefetch_related: list,
         select_related: list,
         orders_by: list["OrderAction"],
+        prefetch_querysets: Optional[dict[str, "QuerySet"]] = None,
     ) -> None:
         self.model = model_cls
+        self.prefetch_querysets = prefetch_querysets or {}
         self.excludable = excludable
         self.select_dict = translate_list_to_dict(select_related, default={})
         self.prefetch_dict = translate_list_to_dict(prefetch_related, default={})
@@ -445,6 +582,7 @@ class PrefetchQuery:
             select_dict=self.select_dict,
             parent=parent_task,
             model=self.model,
+            path="",
         )
         await parent_task.load_data()
         parent_task.reload_tree()
@@ -456,6 +594,7 @@ class PrefetchQuery:
         prefetch_dict: dict,
         parent: Node,
         model: type["Model"],
+        path: str,
     ) -> None:
         """
         Build a tree of already loaded nodes and nodes that need
@@ -471,6 +610,7 @@ class PrefetchQuery:
         :type model: Model
         """
         for related in prefetch_dict.keys():
+            relation_path = f"{path}__{related}" if path else related
             relation_field = cast(
                 "ForeignKeyField", model.ormar_config.model_fields[related]
             )
@@ -485,6 +625,7 @@ class PrefetchQuery:
                     orders_by=self.orders_by,
                     parent=parent,
                     source_model=self.model,
+                    queryset=self.prefetch_querysets.get(relation_path),
                 )
             if prefetch_dict:
                 self._build_load_tree(
@@ -492,4 +633,5 @@ class PrefetchQuery:
                     prefetch_dict=prefetch_dict.get(related, {}),
                     parent=task,
                     model=model.ormar_config.model_fields[related].to,
+                    path=relation_path,
                 )

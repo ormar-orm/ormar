@@ -62,6 +62,10 @@
 
 ### 🆕 Features
 
+* `ormar.Prefetch(relation, queryset=...)` in `prefetch_related()` filters, orders and
+  narrows prefetched models with a queryset of the related model. See
+  [prefetch with a queryset](queries/joins-and-subqueries.md#prefetch-with-a-queryset).
+
 * Read-only models for database views: `OrmarConfig(view=True)`. They can be queried,
   joined and prefetched; writes raise the new `ReadOnlyModelError`, and their tables
   are kept out of `metadata.create_all()` / Alembic. Closes

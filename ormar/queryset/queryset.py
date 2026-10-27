@@ -28,6 +28,7 @@ from ormar.models.row_registry import RowRegistry
 from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
 from ormar.queryset.actions.order_action import OrderAction, expand_pk_orders
 from ormar.queryset.clause import FilterGroup, QueryClause
+from ormar.queryset.prefetch import Prefetch
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
 from ormar.queryset.templates import (
@@ -108,6 +109,7 @@ class QuerySet(Generic[T]):
         limit_raw_sql: bool = False,
         proxy_source_model: Optional[type["Model"]] = None,
         reverse_result: bool = False,
+        prefetch_querysets: Optional[dict[str, "QuerySet"]] = None,
     ) -> None:
         self.proxy_source_model = proxy_source_model
         self.model_cls = model_cls
@@ -121,6 +123,9 @@ class QuerySet(Generic[T]):
         self.order_bys = order_bys or []
         self.limit_sql_raw = limit_raw_sql
         self._reverse_result = reverse_result
+        self._prefetch_querysets: dict[str, "QuerySet"] = (
+            {} if prefetch_querysets is None else prefetch_querysets
+        )
 
     @property
     def model_config(self) -> "OrmarConfig":
@@ -159,6 +164,7 @@ class QuerySet(Generic[T]):
         limit_raw_sql: Optional[bool] = None,
         proxy_source_model: Optional[type["Model"]] = None,
         reverse_result: Optional[bool] = None,
+        prefetch_querysets: Optional[dict[str, "QuerySet"]] = None,
     ) -> "QuerySet":
         """
         Method that returns new instance of queryset based on passed params,
@@ -171,6 +177,7 @@ class QuerySet(Generic[T]):
             "prefetch_related": "_prefetch_related",
             "limit_raw_sql": "limit_sql_raw",
             "reverse_result": "_reverse_result",
+            "prefetch_querysets": "_prefetch_querysets",
         }
         passed_args = locals()
 
@@ -192,6 +199,7 @@ class QuerySet(Generic[T]):
             limit_raw_sql=replace_if_none("limit_raw_sql"),
             proxy_source_model=replace_if_none("proxy_source_model"),
             reverse_result=replace_if_none("reverse_result"),
+            prefetch_querysets=replace_if_none("prefetch_querysets"),
         )
 
     async def _prefetch_related_models(
@@ -213,6 +221,7 @@ class QuerySet(Generic[T]):
             prefetch_related=self._prefetch_related,
             select_related=self._select_related,
             orders_by=self.order_bys,
+            prefetch_querysets=self._prefetch_querysets,
         )
         return await query.prefetch_related(models=models)  # type: ignore
 
@@ -763,7 +772,7 @@ class QuerySet(Generic[T]):
         return self.rebuild_self(select_related=relations)
 
     def prefetch_related(
-        self, related: Union[list, str, FieldAccessor]
+        self, related: Union[list, str, FieldAccessor, Prefetch]
     ) -> "QuerySet[T]":
         """
         Allows to prefetch related models during query - but opposite to
@@ -784,10 +793,17 @@ class QuerySet(Generic[T]):
         """
         if not isinstance(related, list):
             related = [related]
+        querysets = dict(self._prefetch_querysets)
+        for item in related:
+            if isinstance(item, Prefetch):
+                querysets[item.relation] = item.queryset
+        related = [
+            item.relation if isinstance(item, Prefetch) else item for item in related
+        ]
         related = cast(list, extract_access_chains(related))
 
         related = list(set(list(self._prefetch_related) + related))
-        return self.rebuild_self(prefetch_related=related)
+        return self.rebuild_self(prefetch_related=related, prefetch_querysets=querysets)
 
     def flatten_fields(
         self,

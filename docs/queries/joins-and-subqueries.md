@@ -331,6 +331,37 @@ fields and the final `Models` are fetched for you.
     
     Something like `Track.object.select_related("album").filter(album__name="Malibu").offset(1).limit(1).all()`
 
+### Prefetch with a queryset
+
+Pass `ormar.Prefetch(relation, queryset=...)` instead of a relation name to filter,
+order and narrow the prefetched models. Its filters, excludes, ordering and
+`fields()` / `exclude_fields()` apply to the related models only:
+
+```python
+from ormar import Prefetch
+
+authors = await Author.objects.prefetch_related(
+    Prefetch(
+        "books",
+        queryset=Book.objects.filter(year__gte=2000).order_by("-year").fields(
+            ["id", "title"]
+        ),
+    )
+).all()
+# each author.books holds only books from 2000 on, newest first
+
+await Author.objects.prefetch_related(
+    ["books", Prefetch("books__reviews", queryset=Review.objects.filter(stars__gte=4))]
+).all()
+```
+
+* The queryset must be of the related model. It can't use `limit()`, `offset()`,
+  `paginate()` or `prefetch_related()`; prefetch nested relations with their own
+  paths (plain strings or `Prefetch`).
+* For many-to-many relations the queryset can filter and order only by fields of the
+  related model itself.
+* `Prefetch` works in `QuerysetProxy.prefetch_related()` too.
+
 ## select_related vs prefetch_related
 
 Which should you use -> `select_related` or `prefetch_related`?
