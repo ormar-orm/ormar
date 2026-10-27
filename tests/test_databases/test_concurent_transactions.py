@@ -1,5 +1,4 @@
 import asyncio
-import sys
 
 import pytest
 
@@ -28,11 +27,8 @@ class Course(ormar.Model):
 create_test_database = init_tests(base_ormar_config)
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11), reason="taskgroup requires python3.11 or higher"
-)
 @pytest.mark.asyncio
-async def test_asyncio_run():  # pragma: no cover
+async def test_asyncio_run():
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction():
             csse = await Department(
