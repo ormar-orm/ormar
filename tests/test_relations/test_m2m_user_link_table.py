@@ -80,7 +80,7 @@ create_test_database = init_tests(base_ormar_config)
 @pytest_asyncio.fixture(autouse=True)
 async def clean():
     async with base_ormar_config.database:
-        for model in (Enrollment, Friendship, Course, Student, Person):
+        for model in (Enrollment, Friendship, Course, Student, Person, Follower):
             await model.objects.delete(each=True)
         yield
 
@@ -181,3 +181,185 @@ def test_inheriting_many_to_many_with_user_link_table_raises():
 
         class Post(Tagged):
             ormar_config = base_ormar_config.copy(tablename="lt_posts")
+
+
+def define_link(fields: dict, **m2m_options):
+    """Define a fresh pair of models joined by a link table with given fields."""
+    suffix = str(len(base_ormar_config.metadata.tables))
+
+    class Left(ormar.Model):
+        ormar_config = base_ormar_config.copy(tablename=f"lt_left_{suffix}")
+
+        id: int = ormar.Integer(primary_key=True)
+
+    link = type(
+        f"Link{suffix}",
+        (ormar.Model,),
+        {
+            "ormar_config": base_ormar_config.copy(tablename=f"lt_link_{suffix}"),
+            "__annotations__": {
+                name: annotation for name, (annotation, _) in fields.items()
+            },
+            **{
+                name: field_factory(Left) for name, (_, field_factory) in fields.items()
+            },
+        },
+    )
+
+    class Right(ormar.Model):
+        ormar_config = base_ormar_config.copy(tablename=f"lt_right_{suffix}")
+
+        id: int = ormar.Integer(primary_key=True)
+        lefts = ormar.ManyToMany(Left, through=link, **m2m_options)
+
+    return Left, link, Right
+
+
+def test_plain_field_named_like_the_through_fk_is_replaced():
+    left, link, right = define_link(
+        {
+            "id": (int, lambda target: ormar.Integer(primary_key=True)),
+            "left": (Optional[int], lambda target: ormar.Integer(nullable=True)),
+        }
+    )
+    field = link.ormar_config.model_fields["left"]
+    assert field.is_relation and field.to is left
+
+
+def test_explicit_through_names_must_point_at_the_right_models():
+    with pytest.raises(ModelDefinitionError, match="must be a foreign key"):
+        define_link(
+            {
+                "id": (int, lambda target: ormar.Integer(primary_key=True)),
+                "pointer": (
+                    Optional[int],
+                    lambda target: ormar.ForeignKey(target, related_name="pointers_x"),
+                ),
+            },
+            through_relation_name="pointer",
+        )
+
+
+def test_two_foreign_keys_to_one_side_need_explicit_names():
+    with pytest.raises(ModelDefinitionError, match="several foreign keys"):
+        define_link(
+            {
+                "id": (int, lambda target: ormar.Integer(primary_key=True)),
+                "first": (
+                    Optional[int],
+                    lambda target: ormar.ForeignKey(target, related_name="firsts_y"),
+                ),
+                "second": (
+                    Optional[int],
+                    lambda target: ormar.ForeignKey(target, related_name="seconds_y"),
+                ),
+            }
+        )
+
+
+def test_link_table_with_own_id_and_one_declared_foreign_key():
+    left, link, right = define_link(
+        {
+            "id": (int, lambda target: ormar.Integer(primary_key=True)),
+            "the_left": (
+                Optional[int],
+                lambda target: ormar.ForeignKey(
+                    target, name="left_ref", related_name="link_rows"
+                ),
+            ),
+        }
+    )
+    field = right.ormar_config.model_fields["lefts"]
+    assert field.through_target_field_name() == "the_left"
+    assert link.ormar_config.model_fields[field.through_owner_field_name()].to is right
+    assert sorted(c.name for c in link.ormar_config.table.c) == sorted(
+        ["id", "left_ref", field.through_owner_field_name()]
+    )
+
+
+def test_through_relations_to_other_models_are_rejected():
+    with pytest.raises(ModelDefinitionError, match="can only have relations"):
+        define_link(
+            {
+                "id": (int, lambda target: ormar.Integer(primary_key=True)),
+                "student": (
+                    Optional[int],
+                    lambda target: ormar.ForeignKey(Student, related_name="stray_z"),
+                ),
+            }
+        )
+
+
+def test_reverse_name_colliding_with_through_shortcut_is_rejected():
+    with pytest.raises(ModelDefinitionError, match="collides"):
+        suffix = str(len(base_ormar_config.metadata.tables))
+
+        class Left2(ormar.Model):
+            ormar_config = base_ormar_config.copy(tablename=f"lt_l2_{suffix}")
+
+            id: int = ormar.Integer(primary_key=True)
+
+        class Bridge(ormar.Model):
+            ormar_config = base_ormar_config.copy(tablename=f"lt_bridge_{suffix}")
+
+            id: int = ormar.Integer(primary_key=True)
+            left: Optional[Left2] = ormar.ForeignKey(Left2, related_name="bridge")
+
+        class Right2(ormar.Model):
+            ormar_config = base_ormar_config.copy(tablename=f"lt_r2_{suffix}")
+
+            id: int = ormar.Integer(primary_key=True)
+            lefts = ormar.ManyToMany(Left2, through=Bridge)
+
+
+def test_unresolved_link_table_forward_refs_get_a_clear_error():
+    with pytest.raises(ModelDefinitionError, match="update_forward_refs"):
+        LeftRef = ForwardRef("LeftLate")
+
+        class LateLink(ormar.Model):
+            ormar_config = base_ormar_config.copy(tablename="lt_late_links")
+
+            id: int = ormar.Integer(primary_key=True)
+            left: Optional[LeftRef] = ormar.ForeignKey(  # type: ignore
+                LeftRef, related_name="late_links"
+            )
+
+        class LeftLate(ormar.Model):
+            ormar_config = base_ormar_config.copy(tablename="lt_left_late")
+
+            id: int = ormar.Integer(primary_key=True)
+
+        class RightLate(ormar.Model):
+            ormar_config = base_ormar_config.copy(tablename="lt_right_late")
+
+            id: int = ormar.Integer(primary_key=True)
+            lefts = ormar.ManyToMany(LeftLate, through=LateLink)
+
+
+FollowerRef = ForwardRef("Follower")
+
+
+class Follower(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="lt_followers")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=20)
+    following = ormar.ManyToMany(
+        FollowerRef,
+        related_name="followers",
+        through_relation_name="follower",
+        through_reverse_relation_name="followed",
+    )
+
+
+Follower.update_forward_refs()
+
+
+@pytest.mark.asyncio
+async def test_generated_self_referencing_through_with_explicit_names():
+    ann = await Follower.objects.create(name="Ann")
+    bob = await Follower.objects.create(name="Bob")
+    await ann.following.add(bob)
+    assert [f.name for f in await ann.following.all()] == ["Bob"]
+    assert [f.name for f in await bob.followers.all()] == ["Ann"]
+    assert await bob.following.count() == 0

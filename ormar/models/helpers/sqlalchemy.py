@@ -78,10 +78,16 @@ def adjust_through_many_to_many_model(model_field: "ManyToManyField") -> None:
         ),
     )
     for field_name, target, foreign_key_name, nullable in sides:
-        if field_name in model_fields:
+        existing = model_fields.get(field_name)
+        if (
+            existing is not None
+            and existing.is_relation
+            and not existing.virtual
+            and existing.to is target
+        ):
             continue
         model_fields[field_name] = ormar.ForeignKey(  # type: ignore
-            target,
+            to=target,
             real_name=field_name,
             ondelete="CASCADE",
             owner=model_field.through,
@@ -93,7 +99,9 @@ def adjust_through_many_to_many_model(model_field: "ManyToManyField") -> None:
             foreign_key_name=foreign_key_name,
             nullable=nullable,
         )
-        create_pydantic_field(field_name, target, model_field)
+        create_pydantic_field(
+            field_name=field_name, model=target, model_field=model_field
+        )
         setattr(model_field.through, field_name, RelationDescriptor(name=field_name))
 
 

@@ -25,7 +25,7 @@ from ormar.models.helpers.sqlalchemy import adjust_through_many_to_many_model
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
-    from ormar.fields import ForeignKeyField, ManyToManyField
+    from ormar.fields import BaseField, ForeignKeyField, ManyToManyField
 
 
 def expand_reverse_relationship(model_field: "ForeignKeyField") -> None:
@@ -82,15 +82,20 @@ def resolve_through_fields(model_field: "ManyToManyField") -> None:
     Adopt the foreign keys a user-defined through model already declares to the
     owner and the target of a many-to-many relation (e.g. a legacy link table
     keyed by them), so ormar uses those fields instead of adding its own.
-    Self-referencing relations need ``through_relation_name`` and
-    ``through_reverse_relation_name`` to tell the two foreign keys apart.
+    Explicit ``through_relation_name`` / ``through_reverse_relation_name`` must
+    name foreign keys to the owner / target when the through model declares
+    them; several foreign keys to one side, and any self-referencing link
+    table, need those names.
 
     :raises ModelDefinitionError: if the through model has relations to other
-        models, or its foreign keys of a self-referencing relation are ambiguous
+        models or unresolved forward references, if an explicit name points at
+        the wrong field, or if the foreign keys are ambiguous
     :param model_field: many-to-many relation field
     :type model_field: ManyToManyField
     """
-    through_fields = model_field.through.ormar_config.model_fields
+    through = model_field.through
+    through_name = through.get_name(lower=False)
+    through_fields = through.ormar_config.model_fields
     relations = {
         name: field
         for name, field in through_fields.items()
@@ -98,28 +103,83 @@ def resolve_through_fields(model_field: "ManyToManyField") -> None:
     }
     if not relations:
         return
+    unresolved = [
+        name for name, field in relations.items() if field.to.__class__ == ForwardRef
+    ]
+    if unresolved:
+        raise ModelDefinitionError(
+            f"Through model {through_name} has unresolved forward references "
+            f"{unresolved}, call {through_name}.update_forward_refs() before the "
+            "relation using it is completed."
+        )
     allowed = (model_field.owner, model_field.to)
     foreign = [name for name, field in relations.items() if field.to not in allowed]
     if foreign:
         raise ModelDefinitionError(
-            f"Through model {model_field.through.get_name(lower=False)} can only "
-            f"have relations to {model_field.owner.get_name(lower=False)} and "
+            f"Through model {through_name} can only have relations to "
+            f"{model_field.owner.get_name(lower=False)} and "
             f"{model_field.to.get_name(lower=False)}, got {foreign}."
         )
-    owner_fks = [n for n, f in relations.items() if f.to is model_field.owner]
-    target_fks = [n for n, f in relations.items() if f.to is model_field.to]
     if model_field.owner is model_field.to and not (
         model_field.through_relation_name and model_field.through_reverse_relation_name
     ):
         raise ModelDefinitionError(
-            f"Through model {model_field.through.get_name(lower=False)} has several "
-            "foreign keys to the same model, pass through_relation_name and "
-            "through_reverse_relation_name to tell them apart."
+            f"Self-referencing relation through {through_name} needs "
+            "through_relation_name and through_reverse_relation_name naming its "
+            "foreign keys."
         )
-    if model_field.through_relation_name is None and len(owner_fks) == 1:
-        model_field.through_relation_name = owner_fks[0]
-    if model_field.through_reverse_relation_name is None and len(target_fks) == 1:
-        model_field.through_reverse_relation_name = target_fks[0]
+    for attribute, side in (
+        ("through_relation_name", model_field.owner),
+        ("through_reverse_relation_name", model_field.to),
+    ):
+        resolve_through_side(
+            model_field=model_field, relations=relations, attribute=attribute, side=side
+        )
+
+
+def resolve_through_side(
+    model_field: "ManyToManyField",
+    relations: dict[str, "BaseField"],
+    attribute: str,
+    side: type["Model"],
+) -> None:
+    """
+    Validate or pick the through model foreign key leading to one side of a
+    many-to-many relation and store its name on the relation field.
+
+    :raises ModelDefinitionError: if an explicit name is not a foreign key to
+        the side, or several foreign keys lead to it without an explicit name
+    :param model_field: many-to-many relation field
+    :type model_field: ManyToManyField
+    :param relations: non-virtual relation fields of the through model by name
+    :type relations: dict[str, BaseField]
+    :param attribute: ``through_relation_name`` or
+        ``through_reverse_relation_name``
+    :type attribute: str
+    :param side: model the foreign key must lead to
+    :type side: type[Model]
+    """
+    through_name = model_field.through.get_name(lower=False)
+    name = getattr(model_field, attribute)
+    if name is not None:
+        existing = model_field.through.ormar_config.model_fields.get(name)
+        if existing is not None and (
+            name not in relations or relations[name].to is not side
+        ):
+            raise ModelDefinitionError(
+                f"{attribute} '{name}' must be a foreign key of {through_name} to "
+                f"{side.get_name(lower=False)}."
+            )
+        return
+    candidates = [field_name for field_name, f in relations.items() if f.to is side]
+    if len(candidates) > 1:
+        raise ModelDefinitionError(
+            f"Through model {through_name} has several foreign keys to "
+            f"{side.get_name(lower=False)} ({candidates}), pass {attribute} to "
+            "choose one."
+        )
+    if candidates:
+        setattr(model_field, attribute, candidates[0])
 
 
 def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
@@ -307,6 +367,14 @@ def register_through_shortcut_fields(model_field: "ManyToManyField") -> None:
     through_model = model_field.through
     through_name = through_model.get_name(lower=True)
     related_name = model_field.get_related_name()
+    for model in (model_field.owner, model_field.to):
+        existing = model.ormar_config.model_fields.get(through_name)
+        if existing is not None and not existing.is_through:
+            raise ModelDefinitionError(
+                f"Field {through_name} of {model.get_name(lower=False)} collides "
+                f"with the shortcut to the through model {through_model.__name__}, "
+                "rename the relation."
+            )
 
     model_field.owner.ormar_config.model_fields[through_name] = Through(
         through_model,
