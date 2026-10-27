@@ -22,7 +22,7 @@ test:
 	pytest -svv tests/
 
 coverage:
-	pytest --cov=ormar --cov=tests --cov-fail-under=100 --cov-report=term-missing tests
+	ORMAR_COV_OMIT="$$(sh scripts/coverage_omit.sh)" pytest --cov=ormar --cov=tests --cov-fail-under=100 --cov-report=term-missing tests
 
 type_check:
 	mkdir -p .mypy_cache && poetry run python -m mypy ormar tests --ignore-missing-imports --install-types --non-interactive

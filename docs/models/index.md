@@ -230,6 +230,69 @@ Created instance needs to be passed to every `Model` with `ormar_config` object 
     You need to create the `DatabaseConnection` instance **only once** and use it for all models.
     You can create several ones if you want to use multiple databases.
 
+Any extra keyword arguments are passed to SQLAlchemy's `create_async_engine`, so you can
+tune the connection pool there.
+
+```python
+database = DatabaseConnection(DATABASE_URL, pool_size=20, max_overflow=10)
+```
+
+!!!note
+    By default ormar keeps up to `pool_size=10` connections open and allows
+    `max_overflow=10` extra ones. Overflow connections are closed as soon as they are
+    returned to the pool, so when more queries run at once than `pool_size`, the extra
+    ones open a new database connection each time, which can make concurrent queries
+    several times slower. Set `pool_size` to at least the number of queries you expect
+    to run concurrently in one process, keeping the total across all processes below
+    your database's connection limit (`max_connections` in PostgreSQL).
+
+`connect()` opens the whole pool up front, so the first concurrent requests after
+startup don't wait for new connections. Pass `min_connections` to open fewer (at
+most `pool_size` are opened), or `min_connections=0` to open connections lazily,
+on first use:
+
+```python
+database = DatabaseConnection(DATABASE_URL, pool_size=20, min_connections=5)
+```
+
+JSON columns are serialized and deserialized with [orjson][orjson] by default
+(values orjson rejects, like integers over 64 bits or `NaN`, fall back to the
+standard library `json`). Pass your own functions, e.g. to keep integers over
+64 bits exact when reading (orjson reads them as floats):
+
+```python
+import json
+
+database = DatabaseConnection(
+    DATABASE_URL, json_serializer=json.dumps, json_deserializer=json.loads
+)
+```
+
+#### Native execution
+
+With `asyncpg`, `asyncmy` and `aiosqlite`, ormar runs its queries directly on the
+driver connection instead of through SQLAlchemy's execution layer, which removes a
+noticeable amount of per-query overhead. SQLAlchemy still builds and compiles every
+statement, converts values with its column types, manages the connection pool and
+transactions, and Alembic is unaffected. Results and raised exceptions
+(`sqlalchemy.exc.IntegrityError` and friends) are the same as on the SQLAlchemy path.
+Other drivers (`aiopg`, `aiomysql`) always use SQLAlchemy's execution layer.
+
+Because natively executed statements bypass SQLAlchemy's engine, engine events such as
+`before_cursor_execute` and SQL logging with `echo=True` do not see them. To go back
+to SQLAlchemy's execution layer, e.g. while debugging, pass `native_execution=False`:
+
+```python
+database = DatabaseConnection(DATABASE_URL, native_execution=False)
+```
+
+!!!note
+    With `asyncpg` behind PgBouncer in transaction-pooling mode, use
+    `native_execution=False` together with SQLAlchemy's documented PgBouncer settings
+    (`prepared_statement_name_func` and a zero `prepared_statement_cache_size`).
+    Native execution uses asyncpg's own named prepared statements, which such poolers do
+    not support.
+
 #### Sqlalchemy
 
 Second dependency is sqlalchemy `MetaData` instance.
@@ -557,3 +620,4 @@ You can check if model is saved with `ModelInstance.saved` property
 [alembic]: https://alembic.sqlalchemy.org/en/latest/tutorial.html
 [save status]:  ../models/index/#model-save-status
 [Internals]:  ../models/internals.md
+[orjson]: https://github.com/ijl/orjson

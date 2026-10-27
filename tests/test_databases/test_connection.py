@@ -3,8 +3,14 @@ from sqlalchemy import event, text
 
 import ormar
 from ormar.databases.connection import DatabaseConnection
+from ormar.databases.query_executor import QueryExecutor
 from tests.lifespan import init_tests
-from tests.settings import ASYNC_DATABASE_URL, DATABASE_URL, create_config
+from tests.settings import (
+    ASYNC_DATABASE_URL,
+    DATABASE_URL,
+    MYSQL_DRIVER,
+    create_config,
+)
 
 base_ormar_config = create_config()
 
@@ -24,7 +30,7 @@ def test_url_is_replaced_to_async_and_accessible():
     assert database.url == ASYNC_DATABASE_URL
 
     expected_drivers = {
-        "mysql": "mysql+aiomysql",
+        "mysql": f"mysql+{MYSQL_DRIVER}",
         "sqlite": "sqlite+aiosqlite",
         "postgresql": "postgresql+asyncpg",
     }
@@ -151,43 +157,39 @@ async def test_force_rollback_cascades():
 
 @pytest.mark.asyncio
 async def test_standalone_query_uses_autocommit():
-    """Standalone CRUD must not wrap each statement in BEGIN/COMMIT.
-
-    The old code path held a real transaction around every call; this test
-    pins the replacement behavior so future refactors don't silently reintroduce
-    the per-query commit overhead (see discussion #1629).
+    """Standalone CRUD must not wrap each statement in BEGIN/COMMIT, while
+    statements inside ``database.transaction()`` must stay invisible to other
+    connections until it commits (see discussion #1629).
     """
     seen_autocommit: list[bool] = []
 
     def capture(conn, cursor, statement, parameters, context, executemany):
-        seen_autocommit.append(
-            conn.get_execution_options().get("isolation_level") == "AUTOCOMMIT"
-        )
+        seen_autocommit.append(conn._is_autocommit_isolation())
 
-    async with base_ormar_config.database:
-        event.listen(
-            base_ormar_config.database.engine.sync_engine,
-            "before_cursor_execute",
-            capture,
-        )
+    database = base_ormar_config.database
+    async with database:
+        # SQLAlchemy events only see statements on the SQLAlchemy path; the
+        # native path's autocommit is covered in test_native_transactions.py.
+        native_backend = database.native_backend
+        database.native_backend = None
+        event.listen(database.engine.sync_engine, "before_cursor_execute", capture)
         try:
             await Team.objects.create(name="Standalone")
             await Team.objects.get(name="Standalone")
-
-            async with base_ormar_config.database.transaction():
-                await Team.objects.create(name="InsideTransaction")
-                await Team.objects.get(name="InsideTransaction")
         finally:
-            event.remove(
-                base_ormar_config.database.engine.sync_engine,
-                "before_cursor_execute",
-                capture,
-            )
+            event.remove(database.engine.sync_engine, "before_cursor_execute", capture)
+            database.native_backend = native_backend
 
-    # First two statements were standalone → must have run under AUTOCOMMIT.
-    # Last two were inside an explicit transaction → must NOT have.
-    assert seen_autocommit[:2] == [True, True]
-    assert all(flag is False for flag in seen_autocommit[2:])
+        async with database.transaction():
+            await Team.objects.create(name="InsideTransaction")
+            async with database.engine.connect() as other:
+                visible = await other.scalar(
+                    text("SELECT COUNT(*) FROM teams WHERE name = 'InsideTransaction'")
+                )
+        assert await Team.objects.filter(name="InsideTransaction").count() == 1
+
+    assert seen_autocommit == [True, True]
+    assert visible == 0
 
 
 @pytest.mark.asyncio
@@ -224,3 +226,55 @@ async def test_bulk_update_is_atomic_under_autocommit():
 
         reloaded = await Team.objects.filter(id__in=ids).all()
         assert {t.name for t in reloaded} == {"bulk-X", "bulk-Y", "bulk-Z"}
+
+
+@pytest.mark.asyncio
+async def test_min_connections_are_opened_on_connect():
+    database = DatabaseConnection(ASYNC_DATABASE_URL, min_connections=3, pool_size=5)
+    await database.connect()
+    try:
+        assert database.engine.pool.checkedin() == 3
+        assert database.engine.pool.checkedout() == 0
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_min_connections_are_capped_at_pool_size():
+    database = DatabaseConnection(ASYNC_DATABASE_URL, min_connections=8, pool_size=2)
+    await database.connect()
+    try:
+        assert database.engine.pool.checkedin() == 2
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_min_connections_default_to_pool_size():
+    database = DatabaseConnection(ASYNC_DATABASE_URL, pool_size=3)
+    await database.connect()
+    try:
+        assert database.engine.pool.checkedin() == 3
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_pool_is_lazy_with_zero_min_connections():
+    database = DatabaseConnection(ASYNC_DATABASE_URL, min_connections=0)
+    await database.connect()
+    try:
+        assert database.engine.pool.checkedin() == 0
+    finally:
+        await database.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_executor_reconnects_invalidated_connection():
+    database = base_ormar_config.database
+    async with database:
+        async with database.engine.connect() as connection:
+            await connection.invalidate()
+            executor = QueryExecutor(connection, database.native_backend)
+            rows = await executor.fetch_all(Team.ormar_config.table.select())
+            assert isinstance(rows, list)

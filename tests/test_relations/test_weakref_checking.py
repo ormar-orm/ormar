@@ -1,3 +1,5 @@
+import gc
+
 import ormar
 from tests.settings import create_config
 
@@ -40,3 +42,14 @@ def test_weakref_init():
 
     assert len(band.artists) == 1
     assert band.artists[0].name == artist2.name
+
+
+def test_json_serialization_skips_collected_reverse_children():
+    band = Band(id=1, name="Band")
+    Artist(id=1, name="Artist 1", band=band)
+    Artist(id=2, name="Artist 2", band=band)
+    gc.collect()
+
+    dumped = Band.__pydantic_serializer__.to_python(band, mode="json")
+
+    assert dumped == {"id": 1, "name": "Band", "artists": None}

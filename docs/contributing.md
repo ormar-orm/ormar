@@ -22,7 +22,7 @@ It should be quite straight forward to get started and create a Pull Request.
 
 To make contributing as easy and fast as possible, you'll want to run tests and linting locally. 
 
-You'll need to have **python 3.6.2**, **3.7**, or **3.8**, **poetry**, and **git** installed.
+You'll need to have **python 3.11** or newer (up to **3.15**), **poetry**, and **git** installed.
 
 ```bash
 # 1. clone your fork and cd into the repo directory

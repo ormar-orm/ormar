@@ -2,6 +2,7 @@ from ormar.models.helpers.models import (
     check_required_config_parameters,
     config_field_not_set,
     extract_annotations_and_default_vals,
+    get_namespace_annotations,
     populate_default_options_values,
 )
 from ormar.models.helpers.pydantic import (
@@ -22,6 +23,7 @@ from ormar.models.helpers.validation import modify_schema_example
 __all__ = [
     "expand_reverse_relationships",
     "extract_annotations_and_default_vals",
+    "get_namespace_annotations",
     "populate_config_tablename_columns_and_pk",
     "populate_config_sqlalchemy_table_if_required",
     "populate_default_options_values",

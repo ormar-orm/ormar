@@ -126,13 +126,13 @@ datefmt = %H:%M:%S
 ```
 
 !!! note "Async vs. sync database drivers"
-    Ormar communicates with the database using an asynchronous driver (`sqlite+aiosqlite`, `asyncpg`, `aiomysql`), whereas Alembic's default `env.py` runs synchronously. The two connection URLs intentionally point to the same database through different driver protocols:
+    Ormar communicates with the database using an asynchronous driver (`sqlite+aiosqlite`, `asyncpg`, `asyncmy`), whereas Alembic's default `env.py` runs synchronously. The two connection URLs intentionally point to the same database through different driver protocols:
 
     | Database | Ormar (`DatabaseConnection`) | Alembic (`sqlalchemy.url`) |
     |---|---|---|
     | SQLite | `sqlite+aiosqlite:///db.sqlite` | `sqlite:///%(here)s/db.sqlite` |
     | PostgreSQL | `postgresql+asyncpg://...` | `postgresql+psycopg2://...` |
-    | MySQL | `mysql+aiomysql://...` | `mysql+pymysql://...` |
+    | MySQL | `mysql+asyncmy://...` | `mysql+pymysql://...` |
 
     For SQLite, `%(here)s` makes Alembic's path relative to `alembic.ini`, while the relative path in ormar's URL resolves against the directory the application is started from. The two point at the same file only when you run the application from the project root, so use an absolute path in ormar if you start it from anywhere else.
 

@@ -1,7 +1,8 @@
 import datetime
 import decimal
+import json as std_json
 import uuid
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import orjson as json
 import ormar_rust_utils
@@ -26,6 +27,42 @@ def encode_decimal(value: decimal.Decimal, precision: Optional[int] = None) -> f
 encode_bytes = ormar_rust_utils.encode_bytes
 decode_bytes = ormar_rust_utils.decode_bytes
 encode_json = ormar_rust_utils.encode_json
+
+
+def serialize_json_column(value: Any) -> str:
+    """
+    Serializes a value of a JSON column for the database with orjson.
+
+    Values orjson cannot serialize (integers over 64 bits) fall back to the
+    standard library json module.
+
+    :param value: value of the JSON column
+    :type value: Any
+    :return: JSON text of the value
+    :rtype: str
+    """
+    try:
+        return json.dumps(value, option=json.OPT_NON_STR_KEYS).decode()
+    except TypeError:
+        return std_json.dumps(value)
+
+
+def deserialize_json_column(value: str) -> Any:
+    """
+    Deserializes JSON text of a database column with orjson.
+
+    Text orjson rejects (``NaN``, lone surrogates) falls back to the standard
+    library json module.
+
+    :param value: JSON text read from the database
+    :type value: str
+    :return: deserialized value
+    :rtype: Any
+    """
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return std_json.loads(value)
 
 
 ENCODERS_MAP: dict[type, Callable] = {

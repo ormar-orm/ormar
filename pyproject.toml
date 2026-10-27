@@ -3,7 +3,7 @@ name = "ormar"
 
 [tool.poetry]
 name = "ormar"
-version = "0.26.0"
+version = "0.27.0"
 description = "An async ORM with fastapi in mind and pydantic validation."
 authors = ["Radosław Drążkiewicz <collerek@gmail.com>"]
 license = "MIT"
@@ -35,24 +35,28 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
     "Framework :: AsyncIO",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Programming Language :: Python :: 3 :: Only",
 ]
 
 
 [tool.poetry.dependencies]
-python = "^3.10.0"
+python = "^3.11.0"
 # Pinned below 2.15 because ormar relies on pydantic internals; bump the
 # upper bound manually after verifying compatibility with each new release.
 pydantic = ">=2.11.9,<2.15"
-SQLAlchemy = {version = "^2.0.40", extras = ["asyncio"]}
+# Pinned below 2.1 because native execution relies on SQLAlchemy compiler and
+# async adapter internals; bump the upper bound manually after verifying
+# tests/test_databases/test_sqlalchemy_internals.py against each new release.
+SQLAlchemy = {version = ">=2.0.40,<2.1", extras = ["asyncio"]}
 cryptography = { version = ">=44.0.1,<51.0.0", optional = true }
 # Async database drivers
 aiosqlite = { version = ">=0.19,<0.23", optional = true }
+asyncmy = { version = ">=0.2.10", optional = true }
 aiomysql = { version = ">=0.1.0", optional = true }
 aiopg = { version = "^1.3.3", optional = true }
 asyncpg = { version = ">=0.28,<0.33", optional = true }
@@ -68,7 +72,7 @@ orjson = ">=3.6.4"
 postgresql = ["asyncpg", "psycopg2-binary"]
 postgres = ["asyncpg", "psycopg2-binary"]
 aiopg = ["aiopg", "psycopg2-binary"]
-mysql = ["aiomysql", "PyMySQL"]
+mysql = ["asyncmy", "aiomysql", "PyMySQL"]
 sqlite = ["aiosqlite"]
 crypto = ["cryptography"]
 all = [
@@ -76,6 +80,7 @@ all = [
     "asyncpg",
     "aiopg",
     "psycopg2-binary",
+    "asyncmy",
     "aiomysql",
     "mysqlclient",
     "PyMySQL",
@@ -90,9 +95,13 @@ codecov = "^2.1.13"
 pytest-asyncio = ">=1.1.0,<2.0"
 fastapi = ">=0.125.0"
 
-ruff = ">=0.5.1,<0.17.1"
+ruff = ">=0.5.1,<0.17.3"
 
 setuptools = ">=78.1.1,<85.0.0"
+
+# Transitive (virtualenv); pinned for GHSA-567q-5qvw-pf92, GHSA-9vhv-jxww-xfm5,
+# GHSA-v4x8-3wr5-3wq8.
+filelock = ">=4.2.1,<5"
 
 # types
 mypy = ">=1.8,<3.0"

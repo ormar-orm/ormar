@@ -371,8 +371,12 @@ class RelationProxy(Generic[T], list[T]):
             await self.queryset_proxy.upsert_through_instance(item, **kwargs)
             setattr(self._owner, self.field_name, item)
         else:
+            # a saved child is known to exist, so only an unsaved one (i.e. with
+            # a preset pk) needs the existence check; read it before setattr
+            # marks the child as unsaved
+            check_exists = not item.saved
             setattr(item, relation_name, self._owner)
-            await item.upsert(__force_save__=True)
+            await item.upsert(__force_save__=check_exists)
         self._relation_cache[item.__hash__()] = new_idx
         await self._owner.signals.post_relation_add.send(
             sender=self._owner.__class__,

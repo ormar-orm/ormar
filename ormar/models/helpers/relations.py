@@ -61,6 +61,21 @@ def expand_reverse_relationships(model: type["Model"]) -> None:
             expand_reverse_relationship(model_field=model_field)
 
 
+def reset_relation_caches(model: type["Model"]) -> None:
+    """
+    Drop the lazily cached relation metadata of a model that gains a reverse
+    relation, so models already used before a related model was defined see
+    the new relation (and lose trusted row construction).
+
+    :param model: model receiving a reverse relation
+    :type model: type[Model]
+    """
+    model._related_names = None
+    model._related_fields = None
+    model._related_field_map = None
+    model._trusted_rows = None
+
+
 def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
     """
     Registers reverse ForeignKey field on related model.
@@ -73,6 +88,7 @@ def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
     :type model_field: relation Field
     """
     related_name = model_field.get_related_name()
+    reset_relation_caches(model=model_field.to)
     related_model_fields = model_field.to.ormar_config.model_fields
     if model_field.is_multi:
         related_model_fields[related_name] = ManyToMany(  # type: ignore

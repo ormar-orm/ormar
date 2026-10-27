@@ -17,6 +17,7 @@ class RelationMixin:
         _related_names: Optional[set]
         _through_names: Optional[set]
         _related_fields: Optional[list]
+        _related_field_map: Optional[dict[str, ForeignKeyField]]
         get_name: Callable
 
     @classmethod
@@ -59,6 +60,25 @@ class RelationMixin:
         cls._related_fields = related_fields
 
         return related_fields
+
+    @classmethod
+    def extract_related_field_map(cls) -> dict[str, "ForeignKeyField"]:
+        """
+        Returns the relation fields of a model by name, built once per model
+        and shared by the ``RelationsManager`` of every instance, which must
+        not modify it. Cached in cls._related_field_map and reset together
+        with cls._related_fields::
+
+            Book.extract_related_field_map()  # -> {"author": <ForeignKeyField>}
+
+        :return: relation fields by name
+        :rtype: dict[str, ForeignKeyField]
+        """
+        field_map = cls._related_field_map
+        if field_map is None:
+            field_map = {field.name: field for field in cls.extract_related_fields()}
+            cls._related_field_map = field_map
+        return field_map
 
     @classmethod
     def extract_through_names(cls) -> set[str]:

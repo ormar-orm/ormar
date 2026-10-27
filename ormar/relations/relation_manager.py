@@ -16,19 +16,19 @@ class RelationsManager:
 
     def __init__(
         self,
-        related_fields: Optional[list["ForeignKeyField"]] = None,
+        field_map: Optional[dict[str, "ForeignKeyField"]] = None,
         owner: Optional["Model"] = None,
     ) -> None:
         self.owner = proxy(owner)
-        self._related_fields = related_fields or []
         # ``_field_map`` lets ``_get`` build a ``Relation`` lazily by name.
         # Holding only the field reference (not a constructed Relation) is
         # what skips the per-FK Relation/RelationProxy/QuerysetProxy
-        # allocation tree on every ``Model.__init__``.
-        self._field_map: dict[str, "ForeignKeyField"] = {
-            field.name: field for field in self._related_fields
-        }
-        self._related_names = list(self._field_map)
+        # allocation tree on every ``Model.__init__``. The map is the model's
+        # ``extract_related_field_map()``, shared by all its instances, so it
+        # is only read here.
+        self._field_map: dict[str, "ForeignKeyField"] = (
+            field_map if field_map is not None else {}
+        )
         self._relations: dict[str, Relation] = dict()
 
     def __contains__(self, item: str) -> bool:
@@ -40,7 +40,7 @@ class RelationsManager:
         :return: result of the check
         :rtype: bool
         """
-        return item in self._related_names
+        return item in self._field_map
 
     def clear(self) -> None:
         for relation in self._relations.values():
