@@ -1,5 +1,4 @@
 import copy
-import dataclasses
 import sys
 import warnings
 from pathlib import Path
@@ -432,10 +431,6 @@ def copy_data_from_parent_model(  # noqa: CCR001
                 if fk_field.foreign_key_name:
                     new_fk_name = f"{fk_field.foreign_key_name}_{table_name}"
                     copy_field.foreign_key_name = new_fk_name  # type: ignore
-                    copy_field.constraints = [
-                        dataclasses.replace(constraint, name=new_fk_name)
-                        for constraint in fk_field.constraints
-                    ]
                 parent_fields[field_name] = copy_field
             else:
                 parent_fields[field_name] = field

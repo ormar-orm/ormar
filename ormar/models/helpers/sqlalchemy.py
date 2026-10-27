@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, ForwardRef, Optional, Union
 import sqlalchemy
 
 import ormar  # noqa: I100, I202
+from ormar.fields.link import qualified_fk_reference
 from ormar.models.descriptors import RelationDescriptor
 from ormar.models.helpers.pydantic import create_pydantic_field
 from ormar.models.helpers.related_names_validation import (
@@ -16,25 +17,6 @@ if TYPE_CHECKING:  # pragma no cover
     from ormar import BaseField, ForeignKeyField, ManyToManyField, Model
     from ormar.models import NewBaseModel
     from ormar.models.ormar_config import OrmarConfig
-
-
-def qualified_fk_reference(target: type["Model"], column_alias: str) -> str:
-    """
-    Builds the dotted reference string passed to ``sqlalchemy.ForeignKey``.
-
-    SQLAlchemy expects ``"schema.table.column"`` for cross-schema foreign keys
-    and ``"table.column"`` when the target is in the default schema.
-
-    :param target: target ormar Model
-    :type target: type["Model"]
-    :param column_alias: alias of the referenced column on the target table
-    :type column_alias: str
-    :return: dotted reference string
-    :rtype: str
-    """
-    config = target.ormar_config
-    prefix = f"{config.schema}." if config.schema else ""
-    return f"{prefix}{config.tablename}.{column_alias}"
 
 
 def validate_cross_schema_constraints(
@@ -141,7 +123,7 @@ def create_and_append_m2m_fk(
     :param nullable: whether the created column is nullable.
     :type nullable: bool
     """
-    pk_alias = model.get_column_alias(model.ormar_config.pkname)
+    (pk_alias,) = model.ormar_config.pk.column_aliases()
     pk_column = next(
         (col for col in model.ormar_config.columns if col.name == pk_alias), None
     )

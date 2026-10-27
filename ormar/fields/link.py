@@ -11,10 +11,58 @@ import operator
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping
 
+from pydantic import BaseModel
+
 import ormar
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.models import Model
+
+
+def qualified_fk_reference(target: type["Model"], column_alias: str) -> str:
+    """
+    Builds the dotted reference string passed to ``sqlalchemy.ForeignKey``.
+
+    SQLAlchemy expects ``"schema.table.column"`` for cross-schema foreign keys
+    and ``"table.column"`` when the target is in the default schema.
+
+    :param target: target ormar Model
+    :type target: type["Model"]
+    :param column_alias: alias of the referenced column on the target table
+    :type column_alias: str
+    :return: dotted reference string
+    :rtype: str
+    """
+    config = target.ormar_config
+    prefix = f"{config.schema}." if config.schema else ""
+    return f"{prefix}{config.tablename}.{column_alias}"
+
+
+def key_value(parts: tuple[Any, ...]) -> Any:
+    """
+    Pack the parts of a key into its value: the part itself for a key of one
+    column, a tuple otherwise.
+
+    :param parts: key parts in key order
+    :type parts: tuple[Any, ...]
+    :return: key value
+    :rtype: Any
+    """
+    return parts[0] if len(parts) == 1 else parts
+
+
+def key_parts(value: Any, size: int) -> tuple[Any, ...]:
+    """
+    Unpack a key value into its parts, the inverse of ``key_value``.
+
+    :param value: key value
+    :type value: Any
+    :param size: number of key columns
+    :type size: int
+    :return: key parts in key order
+    :rtype: tuple[Any, ...]
+    """
+    return (value,) if size == 1 else tuple(value)
 
 
 @dataclass(frozen=True)
@@ -120,7 +168,36 @@ class RelationLink:
             if isinstance(value, ormar.Model):
                 value = getattr(value, pair.target_field)
             values.append(value)
-        return values[0] if len(values) == 1 else tuple(values)
+        return key_value(parts=tuple(values))
+
+    def values_for(self, related: Any) -> dict[str, Any]:
+        """
+        Turn a related value into the source-side field values that store it::
+
+            Track.album link: Album(id=2) | {"id": 2} | 2 -> {"album": 2}
+
+        A related model without its key yields ``None`` values; callers decide
+        whether that is an error.
+
+        :param related: related model (or its key-only pydantic model), dict of
+            its fields, raw key value or ``None``
+        :type related: Any
+        :return: values by source field name
+        :rtype: dict[str, Any]
+        """
+        if related is None:
+            return {pair.source_field: None for pair in self.pairs}
+        if isinstance(related, BaseModel):
+            return {
+                pair.source_field: getattr(related, pair.target_field, None)
+                for pair in self.pairs
+            }
+        if isinstance(related, dict):
+            return {
+                pair.source_field: related.get(pair.target_field) for pair in self.pairs
+            }
+        parts = key_parts(value=related, size=len(self.pairs))
+        return {pair.source_field: part for pair, part in zip(self.pairs, parts)}
 
     def key_getter(
         self, *, side: Literal["source", "target"], prefix: str = ""

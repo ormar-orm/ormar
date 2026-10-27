@@ -67,3 +67,9 @@ def test_expand_pk_kwarg_and_lookup():
     assert key.lookup({"id": 4, "title": "a"}) == {"id": 4}
     assert key.lookup({"id": None, "title": "a"}) is None
     assert key.lookup({"title": "a"}) is None
+
+
+def test_value_from_mapping():
+    key = build_primary_key(owner=Book, fields=("id",))
+    assert key.value_from({"id": 4, "title": "a"}) == 4
+    assert key.value_from({"title": "a"}) is None

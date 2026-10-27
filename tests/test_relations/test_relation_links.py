@@ -1,7 +1,7 @@
 from typing import ForwardRef, Optional
 
 import ormar
-from ormar.fields.link import ColumnPair
+from ormar.fields.link import ColumnPair, key_parts, key_value
 from tests.settings import create_config
 
 base_ormar_config = create_config()
@@ -139,3 +139,11 @@ def test_key_of_and_key_getter():
     assert link.key_getter(side="target")({"album_pk": 5}) == 5
     reverse = Album.ormar_config.model_fields["tracks"].link
     assert reverse.key_of(Album(id=6, name="y")) == 6
+
+
+def test_key_value_and_key_parts_round_trip():
+    assert key_value(parts=(3,)) == 3
+    assert key_value(parts=(1, 7)) == (1, 7)
+    assert key_parts(value=3, size=1) == (3,)
+    assert key_parts(value=(1, 7), size=2) == (1, 7)
+    assert key_parts(value=[1, 7], size=2) == (1, 7)

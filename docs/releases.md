@@ -22,6 +22,8 @@
   one field object. Queries joining or filtering through that relation from any
   child but the last one defined (e.g. `select_related("label")`) referenced
   the other child's table and failed with `no such column`.
+* A foreign key set to a related primary key value of `0` (e.g. `Track(album=0)`)
+  kept `0` as the related model's pk; it was replaced with `-1` before.
 * Pydantic-only fields (`pydantic.Field(...)` or plain defaults) on ormar models
   no longer fail with `PydanticUserError: Field ... requires a type annotation`
   on Python 3.14+, where class bodies no longer store `__annotations__`

@@ -185,6 +185,15 @@ class PrimaryKey(abc.ABC):
         """
 
     @abc.abstractmethod
+    def value_from(self, data: Mapping[str, Any]) -> Any:
+        """
+        :param data: values by field name (e.g. a model dict)
+        :type data: Mapping[str, Any]
+        :return: key value held in the mapping, ``None`` when not set
+        :rtype: Any
+        """
+
+    @abc.abstractmethod
     def bind_params(self, value: Any) -> dict[str, Any]:
         """
         :param value: key value
@@ -240,6 +249,15 @@ class SingleColumnKey(PrimaryKey):
         :rtype: Callable[[Mapping[str, Any]], Any]
         """
         return operator.itemgetter(keys[0])
+
+    def value_from(self, data: Mapping[str, Any]) -> Any:
+        """
+        :param data: values by field name (e.g. a model dict)
+        :type data: Mapping[str, Any]
+        :return: value of the key field, ``None`` when not set
+        :rtype: Any
+        """
+        return data.get(self.fields[0])
 
     def bind_params(self, value: Any) -> dict[str, Any]:
         """

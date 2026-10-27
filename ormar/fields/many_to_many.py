@@ -13,9 +13,9 @@ from ormar import ModelDefinitionError
 from ormar.fields import BaseField
 from ormar.fields.foreign_key import (
     ForeignKeyField,
-    create_dummy_model,
     validate_not_allowed_fields,
 )
+from ormar.fields.key_only import key_only_model_type
 from ormar.fields.link import RelationLink
 
 if TYPE_CHECKING:  # pragma no cover
@@ -54,8 +54,9 @@ def populate_m2m_params_based_on_to_model(
     :return: tuple[list, Any]
     :rtype: tuple with target pydantic type and target col type
     """
-    to_field = to.ormar_config.model_fields[to.ormar_config.pkname]
-    pk_only_model = create_dummy_model(to, to_field)
+    key = to.ormar_config.pk
+    to_field = to.ormar_config.model_fields[key.fields[0]]
+    pk_only_model = key_only_model_type(target=to, fields=key.fields)
     base_type = Union[  # type: ignore
         to_field.__type__,  # type: ignore
         to,  # type: ignore
@@ -159,7 +160,7 @@ def ManyToMany(  # type: ignore
     namespace = dict(
         __type__=__type__,
         to=to,
-        to_pk_only=pk_only_model,
+        to_key_only=pk_only_model,
         through=through,
         alias=name,
         name=name,
@@ -239,7 +240,7 @@ class ManyToManyField(  # type: ignore
             ) = populate_m2m_params_based_on_to_model(
                 to=self.to, nullable=self.nullable
             )
-            self.to_pk_only = pk_only_model
+            self.to_key_only = pk_only_model
 
         if self.through.__class__ == ForwardRef:
             self._evaluate_forward_ref(globalns, localns, is_through=True)

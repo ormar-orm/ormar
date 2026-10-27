@@ -1580,10 +1580,10 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             if self.get_column_alias(k) in self.ormar_config.table.columns
         }
         for field in self._extract_db_related_names():
-            relation_field = self.ormar_config.model_fields[field]
-            target_pk_name = relation_field.to.ormar_config.pk.fields[0]
-            target_field = getattr(self, field)
-            self_fields[field] = getattr(target_field, target_pk_name, None)
+            relation_field = cast(
+                "ForeignKeyField", self.ormar_config.model_fields[field]
+            )
+            self_fields.update(relation_field.link.values_for(getattr(self, field)))
             if not relation_field.nullable and not self_fields[field]:
                 raise ModelPersistenceError(
                     f"You cannot save {relation_field.to.get_name()} "

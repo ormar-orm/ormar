@@ -416,7 +416,7 @@ class ModelRow(NewBaseModel):
             key = (position, field_name, value)
             related = instances.get(key)
             if related is None:
-                related = field.construct_pk_only_model(value)
+                related = field.construct_key_only_model(value)
                 instances[key] = related
             item[field_name] = related
 
