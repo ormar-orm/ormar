@@ -70,24 +70,3 @@ def test_explicit_autoincrement_on_composite_part_raises():
 
             a: int = ormar.Integer(primary_key=True, autoincrement=True)
             b: int = ormar.Integer(primary_key=True)
-
-
-def test_many_to_many_to_composite_key_model_raises_for_now():
-    with pytest.raises(ModelDefinitionError, match="composite primary key"):
-
-        class Tag(ormar.Model):
-            ormar_config = base_ormar_config.copy(tablename="cpd_tags")
-
-            id: int = ormar.Integer(primary_key=True)
-            orders = ormar.ManyToMany(Order)
-
-
-def test_many_to_many_on_composite_key_model_raises_for_now():
-    with pytest.raises(ModelDefinitionError, match="Many to many"):
-
-        class Bundle(ormar.Model):
-            ormar_config = base_ormar_config.copy(tablename="cpd_bundles")
-
-            tenant_id: int = ormar.Integer(primary_key=True)
-            code: str = ormar.String(max_length=10, primary_key=True)
-            singles = ormar.ManyToMany(Single)

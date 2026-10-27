@@ -267,6 +267,32 @@ await Enrollment.objects.get(pk=(student.id, course.id))
   `update_forward_refs()` before the model declaring the `ManyToMany` is completed
   (or declare the `ManyToMany` with `through=ForwardRef("LinkTable")` as above).
 
+### Models with a composite primary key
+
+Either side of a many-to-many relation can have a composite primary key. The
+generated through table then stores that key in one column per part, named
+`<through field>_<key column>`, under one composite `FOREIGN KEY` constraint:
+
+```python
+class Document(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="documents")
+
+    tenant_id: int = ormar.Integer(primary_key=True)
+    number: int = ormar.Integer(primary_key=True)
+    tags = ormar.ManyToMany(Tag)
+    # documents_tags: id, tag, document_tenant_id, document_number
+
+
+await document.tags.add(tag)
+await Tag.objects.prefetch_related("documents").get(name="red")
+await Project.objects.filter(documents__pk=(1, 7)).all()
+```
+
+A link table you declare yourself can reference such a model with a foreign key to
+several columns (`ormar.ForeignKey(Document, columns={...})`, see
+[foreign keys to several columns](foreign-key.md#foreign-keys-to-several-columns));
+those foreign keys can't be part of the link table's primary key yet.
+
 ## Overriding foreign key constraint names on the through model
 
 Auto-generated foreign key constraint names on the through model can be

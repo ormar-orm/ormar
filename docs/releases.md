@@ -99,6 +99,10 @@
   (`order=...`, `order__in=...`, `order__isnull=...`), bulk operations,
   `values()` / `values_list()` and flattened dumps. See
   [foreign keys to several columns](relations/foreign-key.md#foreign-keys-to-several-columns).
+* `ManyToMany` relations to and from models with a composite key: the generated
+  through table stores each key in several columns, and a `through` link table can
+  declare such foreign keys itself. See
+  [many to many](relations/many-to-many.md#models-with-a-composite-primary-key).
 * `pk` lookups (`pk__in`, `pk__gt`, ...) and `order_by("pk")` / `order_by("-pk")`
   work for every model (`order_by("pk")` produced invalid SQL before).
 

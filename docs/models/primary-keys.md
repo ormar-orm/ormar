@@ -59,8 +59,9 @@ order.pk = (1, 8)  # sets tenant_id and number
   [foreign keys in the primary key](../relations/foreign-key.md#foreign-keys-in-the-primary-key)).
 * Foreign keys **to** models with a composite key are stored in one column per key
   part (see [foreign keys to several columns](../relations/foreign-key.md#foreign-keys-to-several-columns)).
-  Many-to-many relations to models with a composite key are not supported yet and
-  raise `ModelDefinitionError`.
+  Many-to-many relations to and from models with a composite key work the same way:
+  the through table gets one column per key part (see
+  [many to many](../relations/many-to-many.md#models-with-a-composite-primary-key)).
 
 ## Querying by primary key
 
