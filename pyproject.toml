@@ -35,17 +35,17 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
     "Framework :: AsyncIO",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Programming Language :: Python :: 3 :: Only",
 ]
 
 
 [tool.poetry.dependencies]
-python = "^3.10.0"
+python = "^3.11.0"
 # Pinned below 2.15 because ormar relies on pydantic internals; bump the
 # upper bound manually after verifying compatibility with each new release.
 pydantic = ">=2.11.9,<2.15"
@@ -100,11 +100,8 @@ ruff = ">=0.5.1,<0.17.3"
 setuptools = ">=78.1.1,<85.0.0"
 
 # Transitive (virtualenv); pinned for GHSA-567q-5qvw-pf92, GHSA-9vhv-jxww-xfm5,
-# GHSA-v4x8-3wr5-3wq8. The fix needs Python >=3.11, so 3.10 stays on 4.1.x.
-filelock = [
-    { version = ">=4.2.1,<5", python = ">=3.11" },
-    { version = ">=4.1.0,<4.1.1", python = "<3.11" },
-]
+# GHSA-v4x8-3wr5-3wq8.
+filelock = ">=4.2.1,<5"
 
 # types
 mypy = ">=1.8,<3.0"
