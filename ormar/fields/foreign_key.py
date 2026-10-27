@@ -12,6 +12,7 @@ from pydantic import BaseModel, create_model
 import ormar  # noqa I101
 from ormar.exceptions import ModelDefinitionError, RelationshipInstanceError
 from ormar.fields.base import BaseField
+from ormar.fields.link import ColumnPair, RelationLink
 from ormar.fields.referential_actions import ReferentialAction
 
 if TYPE_CHECKING:  # pragma no cover
@@ -364,6 +365,36 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
 
     def get_filter_clause_target(self) -> type["Model"]:
         return self.to
+
+    @property
+    def link(self) -> RelationLink:
+        """
+        Columns connecting the owner's table to the table of the related model.
+        A foreign key links its own column to the target's primary key, a
+        reverse relation is the mirror of the foreign key it was created from.
+
+        Computed on access, so a field copied to another model (inheritance)
+        never keeps a link of its previous owner.
+
+        :return: link from the owner to the related model
+        :rtype: RelationLink
+        """
+        if self.virtual:
+            forward = self.to.ormar_config.model_fields[self.get_related_name()]
+            return cast("ForeignKeyField", forward).link.mirrored()
+        return RelationLink(
+            source=self.owner,
+            target=self.to,
+            pairs=tuple(
+                ColumnPair(
+                    source_field=self.name,
+                    source_column=self.get_alias(),
+                    target_field=field,
+                    target_column=self.to.get_column_alias(field),
+                )
+                for field in self.to.ormar_config.pk.fields
+            ),
+        )
 
     def get_model_relation_fields(self, use_alias: bool = False) -> str:
         """

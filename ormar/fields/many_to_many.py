@@ -16,6 +16,7 @@ from ormar.fields.foreign_key import (
     create_dummy_model,
     validate_not_allowed_fields,
 )
+from ormar.fields.link import RelationLink
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar.models import Model, T
@@ -259,6 +260,41 @@ class ManyToManyField(  # type: ignore
 
     def get_filter_clause_target(self) -> type["Model"]:
         return self.through
+
+    def through_owner_field_name(self) -> str:
+        """
+        :return: name of the through model field pointing back to the owner
+            (for self-referencing relations depends on which side this is)
+        :rtype: str
+        """
+        if self.self_reference and self.self_reference_primary == self.name:
+            return self.default_target_field_name()
+        return self.default_source_field_name()
+
+    def through_target_field_name(self) -> str:
+        """
+        :return: name of the through model field pointing to the related model
+        :rtype: str
+        """
+        if self.self_reference and self.self_reference_primary == self.name:
+            return self.default_source_field_name()
+        return self.default_target_field_name()
+
+    @property
+    def link(self) -> RelationLink:
+        """
+        Columns connecting the owner's table to the through table: the mirror
+        of the through model's foreign key to the owner. The second hop, from
+        the through table to the related model, is the link of the through
+        model's field named ``through_target_field_name()``.
+
+        :return: link from the owner to the through model
+        :rtype: RelationLink
+        """
+        through_field = self.through.ormar_config.model_fields[
+            self.through_owner_field_name()
+        ]
+        return cast("ForeignKeyField", through_field).link.mirrored()
 
     def get_model_relation_fields(self, use_alias: bool = False) -> str:
         """
