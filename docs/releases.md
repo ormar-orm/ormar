@@ -18,6 +18,10 @@
 
 ### 🐛 Fixes
 
+* Models inheriting the same foreign key from an abstract parent no longer share
+  one field object. Queries joining or filtering through that relation from any
+  child but the last one defined (e.g. `select_related("label")`) referenced
+  the other child's table and failed with `no such column`.
 * Pydantic-only fields (`pydantic.Field(...)` or plain defaults) on ormar models
   no longer fail with `PydanticUserError: Field ... requires a type annotation`
   on Python 3.14+, where class bodies no longer store `__annotations__`

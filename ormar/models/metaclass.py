@@ -420,9 +420,7 @@ def copy_data_from_parent_model(  # noqa: CCR001
                     base_class=base_class,  # type: ignore
                 )
 
-            elif field.is_relation and (
-                field.related_name or cast(ForeignKeyField, field).foreign_key_name
-            ):
+            elif field.is_relation:
                 fk_field = cast(ForeignKeyField, field)
                 Field = type(  # type: ignore
                     field.__class__.__name__, (ForeignKeyField, BaseField), {}
