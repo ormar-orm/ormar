@@ -10,6 +10,7 @@ from ormar.models.helpers.pydantic import create_pydantic_field
 from ormar.models.helpers.related_names_validation import (
     validate_related_names_in_relations,
 )
+from ormar.models.primary_key import build_primary_key
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import BaseField, ForeignKeyField, ManyToManyField, Model
@@ -166,31 +167,9 @@ def create_and_append_m2m_fk(
     model_field.through.ormar_config.table.append_column(column, replace_existing=True)
 
 
-def check_pk_column_validity(
-    field_name: str, field: "BaseField", pkname: Optional[str]
-) -> Optional[str]:
-    """
-    Receives the field marked as primary key and verifies if the pkname
-    was not already set (only one allowed per model).
-
-    :raises ModelDefintionError: if pkname already set
-    :param field_name: name of field
-    :type field_name: str
-    :param field: ormar.Field
-    :type field: BaseField
-    :param pkname: already set pkname
-    :type pkname: Optional[str]
-    :return: name of the field that should be set as pkname
-    :rtype: str
-    """
-    if pkname is not None:
-        raise ormar.ModelDefinitionError("Only one primary key column is allowed.")
-    return field_name
-
-
 def sqlalchemy_columns_from_model_fields(
     model_fields: dict, new_model: type["Model"]
-) -> tuple[Optional[str], list[sqlalchemy.Column]]:
+) -> tuple[tuple[str, ...], list[sqlalchemy.Column]]:
     """
     Iterates over declared on Model model fields and extracts fields that
     should be treated as database fields.
@@ -202,18 +181,16 @@ def sqlalchemy_columns_from_model_fields(
     are leading to the same related model only one can have empty related_name param.
     Also related_names have to be unique.
 
-    Trigger validation of primary_key - only one and required pk can be set
 
     Sets `owner` on each model_field as reference to newly created Model.
 
-    :raises ModelDefinitionError: if validation of related_names fail,
-    or pkname validation fails.
+    :raises ModelDefinitionError: if validation of related_names fail
     :param model_fields: dictionary of declared ormar model fields
     :type model_fields: dict[str, ormar.Field]
     :param new_model:
     :type new_model: Model class
-    :return: pkname, list of sqlalchemy columns
-    :rtype: tuple[Optional[str], list[sqlalchemy.Column]]
+    :return: names of the primary key fields, list of sqlalchemy columns
+    :rtype: tuple[tuple[str, ...], list[sqlalchemy.Column]]
     """
     if len(model_fields.keys()) == 0:
         model_fields["id"] = ormar.Integer(name="id", primary_key=True)
@@ -227,34 +204,32 @@ def sqlalchemy_columns_from_model_fields(
 
 def _process_fields(
     model_fields: dict, new_model: type["Model"]
-) -> tuple[Optional[str], list[sqlalchemy.Column]]:
+) -> tuple[tuple[str, ...], list[sqlalchemy.Column]]:
     """
     Helper method.
 
-    Populates pkname and columns.
+    Collects the primary key field names and columns.
 
     Sets `owner` on each model_field as reference to newly created Model.
 
-    :raises ModelDefinitionError: if validation of related_names fail,
-    or pkname validation fails.
     :param model_fields: dictionary of declared ormar model fields
     :type model_fields: dict[str, ormar.Field]
     :param new_model:
     :type new_model: Model class
-    :return: pkname, list of sqlalchemy columns
-    :rtype: tuple[Optional[str], list[sqlalchemy.Column]]
+    :return: names of the primary key fields, list of sqlalchemy columns
+    :rtype: tuple[tuple[str, ...], list[sqlalchemy.Column]]
     """
     columns = []
-    pkname = None
+    pk_fields = []
     for field_name, field in model_fields.items():
         field.owner = new_model
         if _is_through_model_not_set(field):
             field.create_default_through_model()
         if field.primary_key:
-            pkname = check_pk_column_validity(field_name, field, pkname)
+            pk_fields.append(field_name)
         if _is_db_field(field):
             columns.append(field.get_column(field.get_alias()))
-    return pkname, columns
+    return tuple(pk_fields), columns
 
 
 def _is_through_model_not_set(field: "BaseField") -> bool:
@@ -286,18 +261,18 @@ def populate_config_tablename_columns_and_pk(
     Sets Model tablename if it's not already set in OrmarConfig.
     Default tablename if not present is class name lower + s (i.e. Bed becomes -> beds)
 
-    Checks if Model's OrmarConfig have pkname and columns set.
+    Checks if Model's OrmarConfig have primary key and columns set.
     If not calls the sqlalchemy_columns_from_model_fields to populate
     columns from ormar.fields definitions.
 
-    :raises ModelDefinitionError: if pkname is not present raises ModelDefinitionError.
+    :raises ModelDefinitionError: if no field is marked as primary key.
     Each model has to have pk.
 
     :param name: name of the current Model
     :type name: str
     :param new_model: currently constructed Model
     :type new_model: ormar.models.metaclass.ModelMetaclass
-    :return: Model with populated pkname and columns in OrmarConfig
+    :return: Model with populated primary key and columns in OrmarConfig
     :rtype: ormar.models.metaclass.ModelMetaclass
     """
     tablename = name.lower() + "s"
@@ -306,24 +281,23 @@ def populate_config_tablename_columns_and_pk(
         if new_model.ormar_config.tablename
         else tablename
     )
-    pkname: Optional[str]
-
     if new_model.ormar_config.columns:
         columns = new_model.ormar_config.columns
-        pkname = new_model.ormar_config.pkname
+        key = new_model.ormar_config.pk.rebind(owner=new_model)
     else:
-        pkname, columns = sqlalchemy_columns_from_model_fields(
-            new_model.ormar_config.model_fields, new_model
+        pk_fields, columns = sqlalchemy_columns_from_model_fields(
+            model_fields=new_model.ormar_config.model_fields, new_model=new_model
         )
-
-    if pkname is None:
-        raise ormar.ModelDefinitionError("Table has to have a primary key.")
+        if not pk_fields:
+            raise ormar.ModelDefinitionError("Table has to have a primary key.")
+        key = build_primary_key(owner=new_model, fields=pk_fields)
 
     new_model.ormar_config.columns = columns
-    new_model.ormar_config.pkname = pkname
+    new_model.ormar_config.pk = key
+    new_model.ormar_config.pkname = key.fields[0]
     if not new_model.ormar_config.orders_by:
-        # by default, we sort by pk name if other option not provided
-        new_model.ormar_config.orders_by.append(pkname)
+        # by default, we sort by the primary key if other option not provided
+        new_model.ormar_config.orders_by.extend(key.fields)
     return new_model
 
 

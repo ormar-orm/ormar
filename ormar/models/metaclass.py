@@ -592,11 +592,12 @@ def wire_proxy_from_parent(new_model: type["Model"]) -> None:
     cfg.table = parent_cfg.table
     cfg.tablename = parent_cfg.tablename
     cfg.pkname = parent_cfg.pkname
+    cfg.pk = parent_cfg.pk.rebind(owner=new_model)
     cfg.columns = parent_cfg.columns
     cfg.model_fields = parent_cfg.model_fields
     cfg.metadata = parent_cfg.metadata
     cfg.database = parent_cfg.database
-    new_model.pk = PkDescriptor(name=parent_cfg.pkname)
+    new_model.pk = PkDescriptor(key=cfg.pk)
 
 
 def add_field_descriptor(
@@ -762,7 +763,7 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
                             None,
                         )
                     )
-                new_model.pk = PkDescriptor(name=new_model.ormar_config.pkname)
+                new_model.pk = PkDescriptor(key=new_model.ormar_config.pk)
 
             if not (
                 new_model.ormar_config.abstract
@@ -812,7 +813,7 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
         ):
             raise AttributeError()
         if item == "pk":
-            item = self.ormar_config.pkname
+            item = self.ormar_config.pk.fields[0]
         if item in object.__getattribute__(self, "ormar_config").model_fields:
             field = self.ormar_config.model_fields.get(item)
             if field.is_relation:
