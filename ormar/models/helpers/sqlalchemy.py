@@ -349,9 +349,10 @@ def populate_config_sqlalchemy_table_if_required(config: "OrmarConfig") -> None:
         config=config
     ):
         set_constraint_names(config=config)
+        # a view gets its own metadata so create_all and Alembic leave it alone
         table = sqlalchemy.Table(
             config.tablename,
-            config.metadata,
+            sqlalchemy.MetaData() if config.view else config.metadata,
             *config.columns,
             *config.constraints,
             schema=config.schema,

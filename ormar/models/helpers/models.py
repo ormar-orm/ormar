@@ -6,6 +6,7 @@ import ormar_rust_utils
 import pydantic
 
 import ormar  # noqa: I100
+from ormar.exceptions import ReadOnlyModelError
 from ormar.models.helpers.pydantic import populate_pydantic_default_values
 
 if sys.version_info >= (3, 14):  # pragma: no cover
@@ -176,3 +177,17 @@ def config_field_not_set(model: type["Model"], field_name: str) -> bool:
     :rtype: bool
     """
     return not getattr(model.ormar_config, field_name)
+
+
+def verify_writable(model_cls: type["Model"]) -> None:
+    """
+    Refuse writes to read-only models, such as models mapped to database views.
+
+    :raises ReadOnlyModelError: if the model is read-only
+    :param model_cls: written model
+    :type model_cls: type[Model]
+    """
+    if model_cls.ormar_config.view:
+        raise ReadOnlyModelError(
+            f"{model_cls.__name__} is mapped to a database view and is read-only."
+        )

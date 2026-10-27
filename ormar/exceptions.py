@@ -23,6 +23,15 @@ class ModelDefinitionError(AsyncOrmException):
     pass
 
 
+class ReadOnlyModelError(ModelDefinitionError):
+    """
+    Raised when writing to a read-only model, e.g. one mapped to a database
+    view (``OrmarConfig(view=True)``).
+    """
+
+    pass
+
+
 class ModelError(AsyncOrmException):
     """
     Raised for initialization of model with non-existing field keyword.
