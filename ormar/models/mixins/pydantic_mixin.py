@@ -241,7 +241,7 @@ class PydanticMixin(RelationMixin):
         :return: pydantic annotation of the field
         :rtype: Any
         """
-        if field.is_multi or field.virtual:
+        if field.kind is not None and field.kind.many:
             target = list[target]  # type: ignore
         if field.nullable:
             defaults[name] = None

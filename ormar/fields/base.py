@@ -5,6 +5,15 @@ from pydantic.fields import FieldInfo, _Unset
 
 import ormar  # noqa I101
 from ormar import ModelDefinitionError
+from ormar.fields.relation_kind import (
+    FORWARD_FOREIGN_KEY,
+    FORWARD_ONE_TO_ONE,
+    MANY_TO_MANY,
+    REVERSE_FOREIGN_KEY,
+    REVERSE_ONE_TO_ONE,
+    THROUGH,
+    RelationKind,
+)
 from ormar.fields.sqlalchemy_encrypted import (
     EncryptBackend,
     EncryptBackends,
@@ -44,6 +53,7 @@ class BaseField(FieldInfo):  # type: ignore[misc]
         self.index: bool = kwargs.pop("index", False)
         self.unique: bool = kwargs.pop("unique", False)
 
+        self.one_to_one: bool = kwargs.pop("one_to_one", False)
         self.virtual: bool = kwargs.pop(
             "virtual", None
         )  # ManyToManyFields and reverse ForeignKeyFields
@@ -124,6 +134,23 @@ class BaseField(FieldInfo):  # type: ignore[misc]
         :rtype: bool
         """
         return not self.is_multi and not self.virtual
+
+    @property
+    def kind(self) -> Optional[RelationKind]:
+        """
+        :return: kind of the relation the field declares, ``None`` for plain
+            fields
+        :rtype: Optional[RelationKind]
+        """
+        if not self.is_relation:
+            return None
+        if self.is_multi:
+            return MANY_TO_MANY
+        if self.is_through:
+            return THROUGH
+        if self.one_to_one:
+            return REVERSE_ONE_TO_ONE if self.virtual else FORWARD_ONE_TO_ONE
+        return REVERSE_FOREIGN_KEY if self.virtual else FORWARD_FOREIGN_KEY
 
     def get_alias(self) -> str:
         """

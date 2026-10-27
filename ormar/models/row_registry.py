@@ -57,7 +57,7 @@ def selects_multi_relation(
     model_fields = model_cls.ormar_config.model_fields
     for related in related_models:
         field = model_fields[related]
-        if field.is_multi or field.virtual:
+        if field.kind is not None and field.kind.many:
             return True
         if isinstance(related_models, dict) and related_models[related]:
             if selects_multi_relation(field.to, related_models[related]):

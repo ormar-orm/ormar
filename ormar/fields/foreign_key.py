@@ -339,6 +339,39 @@ def ForeignKey(  # type: ignore # noqa CFQ002
     return Field(**namespace)
 
 
+@overload
+def OneToOne(to: type["T"], **kwargs: Any) -> "T":  # pragma: no cover
+    ...
+
+
+@overload
+def OneToOne(to: ForwardRef, **kwargs: Any) -> "Model":  # pragma: no cover
+    ...
+
+
+def OneToOne(  # type: ignore
+    to: Union[type["T"], "ForwardRef"], **kwargs: Any
+) -> "T":
+    """
+    A foreign key whose related model has at most one model pointing back at it:
+    its column is unique (unless it is the primary key, which already is), and
+    the reverse side holds a single model or ``None`` instead of a list. The
+    default reverse name is the owner model name, without the trailing ``s``.
+
+    Accepts the same arguments as ``ForeignKey``.
+
+    :param to: target related ormar Model
+    :type to: Model class
+    :param kwargs: ``ForeignKey`` parameters
+    :type kwargs: Any
+    :return: ormar ForeignKeyField with a one to one relation
+    :rtype: ForeignKeyField
+    """
+    if not kwargs.get("primary_key"):
+        kwargs.setdefault("unique", True)
+    return cast("T", ForeignKey(to, one_to_one=True, **kwargs))
+
+
 class ForeignKeyField(BaseField):  # type: ignore[misc]
     """
     Actual class returned from ForeignKey function call and stored in model_fields.
@@ -395,7 +428,8 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :return: name of the related_name or default related name.
         :rtype: str
         """
-        return self.related_name or self.owner.get_name() + "s"
+        suffix = "" if self.one_to_one else "s"
+        return self.related_name or self.owner.get_name() + suffix
 
     def default_target_field_name(self) -> str:
         """
@@ -717,7 +751,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :rtype: Optional[Union["Model", list["Model"]]]
         """
         if value is None:
-            return None if not self.virtual else []
+            return [] if self.kind is not None and self.kind.many else None
         # Fast path: ``value`` is already a Model of ``self.to``. Dominant
         # case in row materialization and in user kwargs that pass
         # constructed Models directly. Skips the dispatch table and the

@@ -228,14 +228,17 @@ def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
             self_reference=model_field.self_reference,
             orders_by=model_field.related_orders_by,
             skip_field=model_field.skip_reverse,
+            one_to_one=model_field.one_to_one,
         )
     if not model_field.skip_reverse:
         field_type = related_model_fields[related_name].__type__
         field_type = replace_models_with_copy(
             annotation=field_type, source_model_field=model_field.name
         )
-        if not model_field.is_multi:
+        if not model_field.is_multi and not model_field.one_to_one:
             field_type = Union[field_type, list[field_type], None]  # type: ignore
+        elif model_field.one_to_one:
+            field_type = Optional[field_type]  # type: ignore
         model_field.to.model_fields[related_name] = FieldInfo.from_annotated_attribute(
             annotation=field_type, default=None
         )
@@ -281,6 +284,8 @@ def add_field_serializer_for_reverse_relations(
                 if not str(exc).startswith("Circular reference"):
                     raise exc
 
+                if hasattr(children, "ormar_config"):
+                    return cast("Model", children).reference_dict()
                 result = []
                 for child in children:
                     if not hasattr(child, "ormar_config"):

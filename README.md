@@ -623,6 +623,7 @@ asyncio.run(cleanup_database())
 #### Relation types
 
 *  One to many  - with `ForeignKey(to: Model)`
+*  One to one   - with `OneToOne(to: Model)`
 *  Many to many - with `ManyToMany(to: Model, Optional[through]: Model)`
 
 #### Model fields types

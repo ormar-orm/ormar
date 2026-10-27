@@ -3,6 +3,7 @@
 Currently `ormar` supports two types of relations:
 
 * One-to-many (and many-to-one) with `ForeignKey` field
+* One-to-one with `OneToOne` field (see [OneToOne](one-to-one.md))
 * Many-to-many with `ManyToMany` field
 
 Below you can find a very basic examples of definitions for each of those relations.

@@ -20,6 +20,7 @@ nav:
   - Relations:
     - Relation types: relations/index.md
     - relations/foreign-key.md
+    - relations/one-to-one.md
     - relations/many-to-many.md
     - relations/postponed-annotations.md
     - relations/queryset-proxy.md

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Optional, Sequence, Union, cast
 from weakref import proxy
 
 from ormar.relations.relation import Relation, RelationType
@@ -6,6 +6,7 @@ from ormar.relations.utils import get_relations_sides_and_names
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar.fields import BaseField, ForeignKeyField
+    from ormar.fields.relation_kind import RelationKind
     from ormar.models import Model, NewBaseModel
 
 
@@ -173,4 +174,6 @@ class RelationsManager:
             return RelationType.MULTIPLE
         if field.is_through:
             return RelationType.THROUGH
-        return RelationType.PRIMARY if not field.virtual else RelationType.REVERSE
+        if field.virtual and cast("RelationKind", field.kind).many:
+            return RelationType.REVERSE
+        return RelationType.PRIMARY
