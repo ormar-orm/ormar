@@ -62,6 +62,11 @@
 
 ### 🆕 Features
 
+* A `ManyToMany` `through` model can declare its own foreign keys to both sides,
+  e.g. a legacy link table keyed by them, and ormar uses those fields instead of
+  adding its own. See
+  [using an existing link table](relations/many-to-many.md#using-an-existing-link-table).
+
 * Foreign keys can be (part of) the primary key: `ForeignKey(..., primary_key=True)`
   for link tables keyed by their foreign keys and for shared primary keys. The key
   value holds the referenced values (`enrollment.pk == (student.id, course.id)`).
@@ -83,6 +88,9 @@
 
 ### 🐛 Fixes
 
+* Self-referencing `ManyToMany` relations with explicit `through_relation_name` and
+  `through_reverse_relation_name` use the names as documented on both sides; the
+  primary side swapped them, so the reverse side of the relation returned nothing.
 * Models inheriting the same foreign key from an abstract parent no longer share
   one field object. Queries joining or filtering through that relation from any
   child but the last one defined (e.g. `select_related("label")`) referenced

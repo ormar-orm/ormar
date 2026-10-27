@@ -18,6 +18,7 @@ from pydantic_core.core_schema import SerializerFunctionWrapHandler
 
 import ormar
 from ormar import ForeignKey, ManyToMany
+from ormar.exceptions import ModelDefinitionError
 from ormar.fields import Through
 from ormar.models.descriptors import RelationDescriptor
 from ormar.models.helpers.sqlalchemy import adjust_through_many_to_many_model
@@ -76,6 +77,51 @@ def reset_relation_caches(model: type["Model"]) -> None:
     model._trusted_rows = None
 
 
+def resolve_through_fields(model_field: "ManyToManyField") -> None:
+    """
+    Adopt the foreign keys a user-defined through model already declares to the
+    owner and the target of a many-to-many relation (e.g. a legacy link table
+    keyed by them), so ormar uses those fields instead of adding its own.
+    Self-referencing relations need ``through_relation_name`` and
+    ``through_reverse_relation_name`` to tell the two foreign keys apart.
+
+    :raises ModelDefinitionError: if the through model has relations to other
+        models, or its foreign keys of a self-referencing relation are ambiguous
+    :param model_field: many-to-many relation field
+    :type model_field: ManyToManyField
+    """
+    through_fields = model_field.through.ormar_config.model_fields
+    relations = {
+        name: field
+        for name, field in through_fields.items()
+        if field.is_relation and not field.virtual
+    }
+    if not relations:
+        return
+    allowed = (model_field.owner, model_field.to)
+    foreign = [name for name, field in relations.items() if field.to not in allowed]
+    if foreign:
+        raise ModelDefinitionError(
+            f"Through model {model_field.through.get_name(lower=False)} can only "
+            f"have relations to {model_field.owner.get_name(lower=False)} and "
+            f"{model_field.to.get_name(lower=False)}, got {foreign}."
+        )
+    owner_fks = [n for n, f in relations.items() if f.to is model_field.owner]
+    target_fks = [n for n, f in relations.items() if f.to is model_field.to]
+    if model_field.owner is model_field.to and not (
+        model_field.through_relation_name and model_field.through_reverse_relation_name
+    ):
+        raise ModelDefinitionError(
+            f"Through model {model_field.through.get_name(lower=False)} has several "
+            "foreign keys to the same model, pass through_relation_name and "
+            "through_reverse_relation_name to tell them apart."
+        )
+    if model_field.through_relation_name is None and len(owner_fks) == 1:
+        model_field.through_relation_name = owner_fks[0]
+    if model_field.through_reverse_relation_name is None and len(target_fks) == 1:
+        model_field.through_reverse_relation_name = target_fks[0]
+
+
 def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
     """
     Registers reverse ForeignKey field on related model.
@@ -91,6 +137,7 @@ def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
     reset_relation_caches(model=model_field.to)
     related_model_fields = model_field.to.ormar_config.model_fields
     if model_field.is_multi:
+        resolve_through_fields(model_field=cast("ManyToManyField", model_field))
         related_model_fields[related_name] = ManyToMany(  # type: ignore
             model_field.owner,
             through=model_field.through,

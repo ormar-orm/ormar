@@ -221,6 +221,44 @@ class StudentCourse(ormar.Model):
     provide your own custom Through model you cannot change the names there and you need to use
     same `through_relation_name` and `through_reverse_relation_name` parameters.
 
+### Using an existing link table
+
+A `through` model can declare the foreign keys to both sides itself, for example
+a legacy link table whose primary key is made of them. ormar then uses those fields
+(their names, database columns and primary key) instead of adding its own:
+
+```python
+class Course(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="courses")
+
+    id: int = ormar.Integer(primary_key=True)
+    students = ormar.ManyToMany(
+        Student, through=ForwardRef("Enrollment"), related_name="courses"
+    )
+
+
+class Enrollment(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="student_course")
+
+    student: Student = ormar.ForeignKey(Student, primary_key=True, name="student_id")
+    course: Course = ormar.ForeignKey(Course, primary_key=True, name="course_id")
+    grade: Optional[int] = ormar.Integer(nullable=True)
+
+
+Course.update_forward_refs()
+
+await course.students.add(student, grade=5)  # inserts into student_course
+await course.students.filter(enrollment__grade__gte=4).all()
+await Enrollment.objects.get(pk=(student.id, course.id))
+```
+
+* The through model may only have relations to the two models of the relation.
+* When both foreign keys lead to the same model (a self-referencing relation), pass
+  `through_relation_name` and `through_reverse_relation_name` to tell them apart.
+* Foreign keys the through model doesn't declare are added as usual.
+* A many-to-many relation using such a link table can't be declared on an abstract
+  model yet; declare it on the concrete model.
+
 ## Overriding foreign key constraint names on the through model
 
 Auto-generated foreign key constraint names on the through model can be

@@ -274,6 +274,16 @@ def copy_and_replace_m2m_through_model(  # noqa: CFQ002
     :param ormar_config: metaclass of currently created model
     :type ormar_config: OrmarConfig
     """
+    if field.through and any(
+        through_field.is_relation
+        for through_field in field.through.ormar_config.model_fields.values()
+    ):
+        raise ModelDefinitionError(
+            f"Many to many relation {field_name} uses the link table "
+            f"{field.through.get_name(lower=False)} that declares its own relations, "
+            "it cannot be inherited from an abstract model yet; declare it on the "
+            "concrete model."
+        )
     Field: type[BaseField] = type(  # type: ignore
         field.__class__.__name__, (ManyToManyField, BaseField), {}
     )

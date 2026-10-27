@@ -54,50 +54,47 @@ def validate_cross_schema_constraints(
 def adjust_through_many_to_many_model(model_field: "ManyToManyField") -> None:
     """
     Registers m2m relation on through model.
-    Sets ormar.ForeignKey from through model to both child and parent models.
+    Sets ormar.ForeignKey from through model to both child and parent models,
+    unless the through model already declares them (see resolve_through_fields).
     Sets sqlalchemy.ForeignKey to both child and parent models.
     Sets pydantic fields with child and parent model types.
 
     :param model_field: relation field defined in parent model
     :type model_field: ManyToManyField
     """
-    parent_name = model_field.default_target_field_name()
-    child_name = model_field.default_source_field_name()
     model_fields = model_field.through.ormar_config.model_fields
-    model_fields[parent_name] = ormar.ForeignKey(  # type: ignore
-        model_field.to,
-        real_name=parent_name,
-        ondelete="CASCADE",
-        owner=model_field.through,
+    sides = (
+        (
+            model_field.default_target_field_name(),
+            model_field.to,
+            model_field.through_reverse_foreign_key_name,
+            model_field.through_reverse_relation_nullable,
+        ),
+        (
+            model_field.default_source_field_name(),
+            model_field.owner,
+            model_field.through_foreign_key_name,
+            model_field.through_relation_nullable,
+        ),
     )
-
-    model_fields[child_name] = ormar.ForeignKey(  # type: ignore
-        model_field.owner,
-        real_name=child_name,
-        ondelete="CASCADE",
-        owner=model_field.through,
-    )
-
-    create_and_append_m2m_fk(
-        model=model_field.to,
-        model_field=model_field,
-        field_name=parent_name,
-        foreign_key_name=model_field.through_reverse_foreign_key_name,
-        nullable=model_field.through_reverse_relation_nullable,
-    )
-    create_and_append_m2m_fk(
-        model=model_field.owner,
-        model_field=model_field,
-        field_name=child_name,
-        foreign_key_name=model_field.through_foreign_key_name,
-        nullable=model_field.through_relation_nullable,
-    )
-
-    create_pydantic_field(parent_name, model_field.to, model_field)
-    create_pydantic_field(child_name, model_field.owner, model_field)
-
-    setattr(model_field.through, parent_name, RelationDescriptor(name=parent_name))
-    setattr(model_field.through, child_name, RelationDescriptor(name=child_name))
+    for field_name, target, foreign_key_name, nullable in sides:
+        if field_name in model_fields:
+            continue
+        model_fields[field_name] = ormar.ForeignKey(  # type: ignore
+            target,
+            real_name=field_name,
+            ondelete="CASCADE",
+            owner=model_field.through,
+        )
+        create_and_append_m2m_fk(
+            model=target,
+            model_field=model_field,
+            field_name=field_name,
+            foreign_key_name=foreign_key_name,
+            nullable=nullable,
+        )
+        create_pydantic_field(field_name, target, model_field)
+        setattr(model_field.through, field_name, RelationDescriptor(name=field_name))
 
 
 def create_and_append_m2m_fk(
