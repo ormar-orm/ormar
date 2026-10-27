@@ -135,7 +135,6 @@ def create_and_append_m2m_fk(
     )
     if len(through_field.link.pairs) > 1:
         append_multi_column_m2m_fk(
-            model=model,
             through_field=through_field,
             foreign_key_name=foreign_key_name,
             nullable=nullable,
@@ -175,7 +174,6 @@ def create_and_append_m2m_fk(
 
 
 def append_multi_column_m2m_fk(
-    model: type["Model"],
     through_field: "ForeignKeyField",
     foreign_key_name: Optional[str],
     nullable: bool,
@@ -183,10 +181,9 @@ def append_multi_column_m2m_fk(
     """
     Add the columns of a through model foreign key to a model with a composite
     primary key (``<field>_<key column>``), with one composite
-    ``FOREIGN KEY`` constraint.
+    ``FOREIGN KEY`` constraint (``ON DELETE / ON UPDATE CASCADE``), built by
+    the foreign key field itself.
 
-    :param model: model the through model points at
-    :type model: type[Model]
     :param through_field: foreign key of the through model to that model
     :type through_field: ForeignKeyField
     :param foreign_key_name: name of the constraint, default generated
@@ -196,33 +193,15 @@ def append_multi_column_m2m_fk(
     """
     through = through_field.owner
     table = through.ormar_config.table
-    target_columns = model.ormar_config.table.c
-    pairs = through_field.link.pairs
-    for pair in pairs:
-        column = sqlalchemy.Column(
-            pair.source_column,
-            target_columns[pair.target_column].type,
-            nullable=nullable,
-        )
+    through_field.sql_nullable = nullable
+    through_field.onupdate = "CASCADE"
+    if foreign_key_name is not None:
+        through_field.foreign_key_name = foreign_key_name
+    for column in through_field.get_columns():
         through.ormar_config.columns.append(column)
         table.append_column(column, replace_existing=True)
-    if model.ormar_config.view:
-        return
-    through_table = through.ormar_config.tablename
-    target_table = model.ormar_config.tablename
-    table.append_constraint(
-        sqlalchemy.ForeignKeyConstraint(
-            [pair.source_column for pair in pairs],
-            [
-                qualified_fk_reference(target=model, column_alias=pair.target_column)
-                for pair in pairs
-            ],
-            ondelete="CASCADE",
-            onupdate="CASCADE",
-            name=foreign_key_name
-            or f"fk_{through_table}_{target_table}_{through_field.name}",
-        )
-    )
+    for constraint in through_field.construct_table_constraints():
+        table.append_constraint(constraint)
 
 
 def sqlalchemy_columns_from_model_fields(

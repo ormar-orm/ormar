@@ -283,9 +283,17 @@ class Document(ormar.Model):
     # documents_tags: id, tag, document_tenant_id, document_number
 
 
+class Project(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="projects")
+
+    id: int = ormar.Integer(primary_key=True)
+    documents = ormar.ManyToMany(Document)
+
+
 await document.tags.add(tag)
 await Tag.objects.prefetch_related("documents").get(name="red")
 await Project.objects.filter(documents__pk=(1, 7)).all()
+Project(documents=[[1, 7]])  # keys as JSON lists, tuples, dicts or models
 ```
 
 A link table you declare yourself can reference such a model with a foreign key to

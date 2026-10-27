@@ -4,7 +4,7 @@ import pytest
 import pytest_asyncio
 
 import ormar
-from tests import cross_check
+from ormar.exceptions import RelationshipInstanceError
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -75,8 +75,7 @@ create_test_database = init_tests(base_ormar_config)
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def data(monkeypatch):
-    monkeypatch.setattr(cross_check, "ENABLED", False)
+async def data():
     async with base_ormar_config.database:
         for model in (
             Membership,
@@ -233,3 +232,29 @@ def test_many_to_many_to_a_composite_key_view_has_no_constraint():
         for element in constraint.elements
     }
     assert referenced == {"cm2m_readers.id"}
+
+
+def test_many_to_many_keys_given_as_json_lists():
+    project = Project(name="p", documents=[[1, 7], {"tenant_id": 1, "number": 8}])
+    assert [document.pk for document in project.documents] == [(1, 7), (1, 8)]
+    with pytest.raises(RelationshipInstanceError):
+        Project(name="p", documents=[1, 7])
+
+
+def test_constraint_name_of_a_composite_through_foreign_key():
+    class Shelf(ormar.Model):
+        ormar_config = base_ormar_config.copy(tablename="cm2m_shelves")
+
+        room: int = ormar.Integer(primary_key=True)
+        number: int = ormar.Integer(primary_key=True)
+        tags = ormar.ManyToMany(
+            Tag,
+            related_name="shelves",
+            through_foreign_key_name="fk_shelf_tags_shelf",
+            through_relation_nullable=False,
+        )
+
+    through = Shelf.ormar_config.model_fields["tags"].through.ormar_config.table
+    names = {constraint.name for constraint in through.foreign_key_constraints}
+    assert "fk_shelf_tags_shelf" in names
+    assert through.c.shelf_room.nullable is False

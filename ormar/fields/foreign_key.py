@@ -770,7 +770,10 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         """
         return [
             self.expand_relationship(  # type: ignore
-                value=val, child=child, to_register=to_register
+                # a key of several columns given as a JSON list
+                value=tuple(val) if val.__class__ is list else val,
+                child=child,
+                to_register=to_register,
             )
             for val in value
         ]
