@@ -189,14 +189,15 @@ def test_no_pk_in_model_definition():
 
 @typing.no_type_check
 def test_two_pks_in_model_definition():
-    with pytest.raises(ModelDefinitionError):
+    @typing.no_type_check
+    class ExampleModel2(Model):
+        ormar_config = base_ormar_config.copy(tablename="example3")
 
-        @typing.no_type_check
-        class ExampleModel2(Model):
-            ormar_config = base_ormar_config.copy(tablename="example3")
+        id: int = ormar.Integer(primary_key=True)
+        test_string: str = ormar.String(max_length=250, primary_key=True)
 
-            id: int = ormar.Integer(primary_key=True)
-            test_string: str = ormar.String(max_length=250, primary_key=True)
+    assert ExampleModel2.ormar_config.pk.is_composite
+    assert ExampleModel2.ormar_config.pk.fields == ("id", "test_string")
 
 
 @typing.no_type_check

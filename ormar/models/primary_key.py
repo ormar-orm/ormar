@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 
 import sqlalchemy
 
-import ormar
+from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.templates.slots import PK_SLOT
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -269,11 +269,121 @@ class SingleColumnKey(PrimaryKey):
         return {PK_SLOT: value}
 
 
+class CompositeKeyGetter:
+    """
+    Reads a composite key out of a mapping: a tuple of the parts, or ``None``
+    when any part is ``None``.
+    """
+
+    __slots__ = ("read",)
+
+    def __init__(self, *, keys: tuple[str, ...]) -> None:
+        """
+        :param keys: names under which the key parts are stored, in key order
+        :type keys: tuple[str, ...]
+        """
+        self.read = operator.itemgetter(*keys)
+
+    def __call__(self, data: Mapping[str, Any]) -> Any:
+        """
+        :param data: mapping holding the key parts
+        :type data: Mapping[str, Any]
+        :return: tuple of the parts, ``None`` when any part is ``None``
+        :rtype: Any
+        """
+        parts = self.read(data)
+        return None if None in parts else parts
+
+
+class CompositeKey(PrimaryKey):
+    """
+    Primary key spanning several columns, whose value is a tuple of the parts
+    in key order.
+    """
+
+    @property
+    def is_composite(self) -> bool:
+        """
+        :return: always ``True``
+        :rtype: bool
+        """
+        return True
+
+    def python_type(self) -> Any:
+        """
+        :return: ``tuple``
+        :rtype: Any
+        """
+        return tuple
+
+    def value(self, instance: "NewBaseModel") -> Any:
+        """
+        :param instance: model instance
+        :type instance: NewBaseModel
+        :return: tuple of the key parts, ``None`` when any part is not set
+        :rtype: Any
+        """
+        return self.value_from(instance.__dict__)
+
+    def value_from(self, data: Mapping[str, Any]) -> Any:
+        """
+        :param data: values by field name (e.g. a model dict)
+        :type data: Mapping[str, Any]
+        :return: tuple of the key parts, ``None`` when any part is not set
+        :rtype: Any
+        """
+        parts = tuple(data.get(field) for field in self.fields)
+        return None if None in parts else parts
+
+    def to_dict(self, value: Any) -> dict[str, Any]:
+        """
+        Split a key value given as a tuple/list in key order or as a dict of
+        exactly the key fields.
+
+        :raises QueryDefinitionError: if the value does not match the key
+        :param value: key value
+        :type value: Any
+        :return: key parts by field name
+        :rtype: dict[str, Any]
+        """
+        if isinstance(value, dict) and set(value) == set(self.fields):
+            return {field: value[field] for field in self.fields}
+        if isinstance(value, (tuple, list)) and len(value) == len(self.fields):
+            return dict(zip(self.fields, value))
+        raise QueryDefinitionError(
+            f"{self.owner.__name__} primary key has fields {self.fields}, got {value!r}"
+        )
+
+    def getter(self, keys: tuple[str, ...]) -> Callable[[Mapping[str, Any]], Any]:
+        """
+        :param keys: names under which the key parts are stored, in key order
+        :type keys: tuple[str, ...]
+        :return: reader returning the key tuple or ``None``
+        :rtype: Callable[[Mapping[str, Any]], Any]
+        """
+        return CompositeKeyGetter(keys=keys)
+
+    def bind_slots(self) -> tuple[str, ...]:
+        """
+        :return: ``ormar_pk_0``, ``ormar_pk_1``, ... one per key column
+        :rtype: tuple[str, ...]
+        """
+        return tuple(f"{PK_SLOT}_{index}" for index in range(len(self.fields)))
+
+    def bind_params(self, value: Any) -> dict[str, Any]:
+        """
+        :param value: key value
+        :type value: Any
+        :return: parameters binding the parts to ``bind_slots()``
+        :rtype: dict[str, Any]
+        """
+        return dict(zip(self.bind_slots(), self.to_dict(value).values()))
+
+
 def build_primary_key(*, owner: type["Model"], fields: tuple[str, ...]) -> PrimaryKey:
     """
     Create the primary key of a model from the fields marked as primary key.
 
-    :raises ModelDefinitionError: if more than one field is marked
     :param owner: model class the key belongs to
     :type owner: type[Model]
     :param fields: ormar field names marked as primary key, in declaration order
@@ -282,5 +392,5 @@ def build_primary_key(*, owner: type["Model"], fields: tuple[str, ...]) -> Prima
     :rtype: PrimaryKey
     """
     if len(fields) > 1:
-        raise ormar.ModelDefinitionError("Only one primary key column is allowed.")
+        return CompositeKey(owner=owner, fields=fields)
     return SingleColumnKey(owner=owner, fields=fields)
