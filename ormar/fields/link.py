@@ -174,9 +174,12 @@ class RelationLink:
     def key_of(self, model: "Model") -> Any:
         """
         Read the value a source model holds for this link. A related model on
-        the source side is replaced by its value of the target field::
+        the source side is replaced by the raw value stored for it: the target
+        field's value for the link's own foreign key, the key part's value for
+        a primary key part that is a relation (mirrored links)::
 
             Track.album link, track.album == Album(id=4) -> 4
+            Ledger.entries link, ledger.tenant == Tenant(id=4) -> (4, 1)
 
         :param model: instance of the source model
         :type model: Model
@@ -187,7 +190,12 @@ class RelationLink:
         for pair in self.pairs:
             value = getattr(model, pair.source_field)
             if isinstance(value, ormar.Model):
-                value = referenced_value(related=value, field=pair.target_field)
+                key = model.ormar_config.pk
+                value = (
+                    key.part_value(field=pair.source_field, value=value)
+                    if pair.source_field in key.relation_parts
+                    else referenced_value(related=value, field=pair.target_field)
+                )
             values.append(value)
         return key_value(parts=tuple(values))
 

@@ -15,14 +15,19 @@ class AliasMixin:
 
     _alias_to_field_map: dict[str, str]
     _field_to_alias_map: dict[str, str]
+    _column_to_field_map: dict[str, str]
+    _multi_column_fields: tuple[tuple[str, tuple[str, ...]], ...]
 
     @classmethod
     def _build_alias_cache(cls) -> None:
         """
         Build and cache alias mappings for this model class.
-        Builds two dicts:
+        Builds:
         - _field_to_alias_map: field_name -> db_alias
         - _alias_to_field_map: db_alias -> field_name (reverse)
+        - _column_to_field_map: every table column -> field storing it (the
+          columns of a foreign key stored in several columns map to it too)
+        - _multi_column_fields: (field_name, columns) of such foreign keys
         """
         field_to_alias = {}
         for field_name, field in cls.ormar_config.model_fields.items():
@@ -33,10 +38,68 @@ class AliasMixin:
         cls._alias_to_field_map = ormar_rust_utils.build_reverse_alias_map(
             field_to_alias
         )
+        column_to_field = dict(cls._alias_to_field_map)
+        multi_column_fields = []
         for field_name, field in cls.ormar_config.model_fields.items():
-            if field.is_relation and not field.virtual and not field.is_multi:
-                for column in field.column_aliases():
-                    cls._alias_to_field_map.setdefault(column, field_name)
+            if not field.is_relation or field.virtual or field.is_multi:
+                continue
+            columns = field.column_aliases()
+            if len(columns) > 1:
+                multi_column_fields.append((field_name, columns))
+                column_to_field.update(dict.fromkeys(columns, field_name))
+        cls._column_to_field_map = column_to_field
+        cls._multi_column_fields = tuple(multi_column_fields)
+
+    @classmethod
+    def reset_column_caches(cls) -> None:
+        """
+        Drop the cached column mappings of the model, e.g. after forward
+        references are resolved and a foreign key's columns are known.
+        """
+        for name in (
+            "_field_to_alias_map",
+            "_alias_to_field_map",
+            "_column_to_field_map",
+            "_multi_column_fields",
+            "_table_column_pairs",
+        ):
+            if name in cls.__dict__:
+                delattr(cls, name)
+
+    @classmethod
+    def get_field_name_of_column(cls, column: str) -> str:
+        """
+        Returns the ormar field storing a table column, also for the columns
+        of a foreign key stored in several columns.
+
+        :param column: column name in the database
+        :type column: str
+        :return: field name, the column itself if no field is aliased to it
+        :rtype: str
+        """
+        try:
+            return cls._column_to_field_map.get(column, column)
+        except AttributeError:
+            cls._build_alias_cache()
+            return cls._column_to_field_map.get(column, column)
+
+    @classmethod
+    def translate_row_to_fields(cls, row: dict) -> dict:
+        """
+        Translates a database row of the model's table into field values: the
+        columns of a foreign key stored in several columns become one tuple
+        (``None`` when any of them is null).
+
+        :param row: column values by column name
+        :type row: dict
+        :return: field values by field name
+        :rtype: dict
+        """
+        values = cls.translate_aliases_to_columns(row)
+        for field_name, columns in cls._multi_column_fields:
+            parts = tuple(values.pop(column, None) for column in columns)
+            values[field_name] = None if None in parts else parts
+        return values
 
     @classmethod
     def get_column_alias(cls, field_name: str) -> str:
