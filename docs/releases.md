@@ -6,305 +6,89 @@
 
 * **Query results share related models across rows**
 
-    A related model reached through the same relation with the same pk is now
-    one instance in the whole query result, the same way `prefetch_related`
-    already loads them. Previously each joined row got its own copy. With
-    `Chapter.objects.select_related("book").all()`:
+    A related model reached through the same relation with the same pk is now one instance in the whole query result, the same way `prefetch_related` already loads them. Previously each joined row got its own copy. With `Chapter.objects.select_related("book").all()`:
 
-    * `chapters[0].book is chapters[1].book` for chapters of the same book, so
-      changing one of them is visible through all of them.
-    * Reverse relations of a shared model list every loaded row:
-      `chapter.book.chapters` contains all loaded chapters of that book, not
-      only the one it was reached from, so code iterating those relations
-      sees all of them.
+    * `chapters[0].book is chapters[1].book` for chapters of the same book, so changing one of them is visible through all of them.
+    * Reverse relations of a shared model list every loaded row: `chapter.book.chapters` contains all loaded chapters of that book, not only the one it was reached from, so code iterating those relations sees all of them.
 
-    The same applies to pk-only models of relations that are not selected:
-    with `Chapter.objects.all()`, chapters of the same book share one `book`
-    instance with only its pk set, so loading it with `await chapter.book.load()`
-    fills it in for all of them.
+    The same applies to pk-only models of relations that are not selected: with `Chapter.objects.all()`, chapters of the same book share one `book` instance with only its pk set, so loading it with `await chapter.book.load()` fills it in for all of them.
 
-    Models reached through a many-to-many relation stay separate per parent, so
-    each keeps its own through model, and the same model on two different
-    relations (e.g. `author` and `editor`) stays two instances. Serialized
-    results (`model_dump()`, FastAPI responses) are unchanged. If you relied on
-    per-row copies, take an independent one with `model_copy()` before changing
-    it. [#1851](https://github.com/ormar-orm/ormar/pull/1851)
+    Models reached through a many-to-many relation stay separate per parent, so each keeps its own through model, and the same model on two different relations (e.g. `author` and `editor`) stays two instances. Serialized results (`model_dump()`, FastAPI responses) are unchanged. If you relied on per-row copies, take an independent one with `model_copy()` before changing it. [#1851](https://github.com/ormar-orm/ormar/pull/1851)
 
 ### ✨ Features
 
-* `DatabaseConnection.connect()` opens the whole connection pool up front, so
-  the first concurrent queries after startup don't pay for opening connections
-  (about 30 ms each on a local PostgreSQL). `min_connections=N` opens up to `N`
-  instead (at most `pool_size`), and `min_connections=0` keeps the lazy pool.
-  As a result `connect()` now raises when the database is unreachable, instead
-  of the first query; pass `min_connections=0` to keep connecting lazily, e.g.
-  when the application can start before its database. Listeners for
-  SQLAlchemy's `connect` event (pragmas, session settings) added to the engine
-  after `connect()` miss the connections opened up front, so register them on
-  the pool class beforehand or pass `min_connections=0`.
-
-* `asyncmy` is now the recommended MySQL driver (`mysql+asyncmy://...`) and
-  `pip install ormar[mysql]` installs it alongside `aiomysql` and `pymysql`.
-  On MySQL it is ~1.2× faster overall and up to 2.5× faster when fetching
-  larger result sets than `aiomysql`, which stays supported, so existing
-  `mysql+aiomysql://` URLs keep working.
-* Add `IndexColumns(..., case_insensitive=True)` to build a case-insensitive
-  unique index (each named column wrapped in `LOWER()`), so values that differ
-  only in case cannot both be stored. `IndexColumns` now also accepts SQLAlchemy
-  expressions for arbitrary functional indexes. On MySQL this needs 8.0.13+.
-  [#615](https://github.com/collerek/ormar/issues/615)
-* Add `flatten_fields` and `flatten_all` to `get_pydantic()`, matching
-  `model_dump()` and `QuerySet.flatten_fields()`. Flattened relations are
-  generated as the related model's pk type (a list of pks for many-to-many and
-  reverse relations) and accept a pk, dict or model, so one generated model
-  works for both requests and responses — thanks @iron3oxide for the initial
-  idea in #893 [#1850](https://github.com/ormar-orm/ormar/pull/1850)
+* `DatabaseConnection.connect()` opens the whole connection pool up front, so the first concurrent queries after startup don't pay for opening connections (about 30 ms each on a local PostgreSQL). `min_connections=N` opens up to `N` instead (at most `pool_size`), and `min_connections=0` keeps the lazy pool. As a result `connect()` now raises when the database is unreachable, instead of the first query; pass `min_connections=0` to keep connecting lazily, e.g. when the application can start before its database. Listeners for SQLAlchemy's `connect` event (pragmas, session settings) added to the engine after `connect()` miss the connections opened up front, so register them on the pool class beforehand or pass `min_connections=0`.
+* `asyncmy` is now the recommended MySQL driver (`mysql+asyncmy://...`) and `pip install ormar[mysql]` installs it alongside `aiomysql` and `pymysql`. On MySQL it is ~1.2× faster overall and up to 2.5× faster when fetching larger result sets than `aiomysql`, which stays supported, so existing `mysql+aiomysql://` URLs keep working.
+* Add `IndexColumns(..., case_insensitive=True)` to build a case-insensitive unique index (each named column wrapped in `LOWER()`), so values that differ only in case cannot both be stored. `IndexColumns` now also accepts SQLAlchemy expressions for arbitrary functional indexes. On MySQL this needs 8.0.13+. [#615](https://github.com/collerek/ormar/issues/615)
+* Add `flatten_fields` and `flatten_all` to `get_pydantic()`, matching `model_dump()` and `QuerySet.flatten_fields()`. Flattened relations are generated as the related model's pk type (a list of pks for many-to-many and reverse relations) and accept a pk, dict or model, so one generated model works for both requests and responses — thanks @iron3oxide for the initial idea in #893 [#1850](https://github.com/ormar-orm/ormar/pull/1850)
 
 ### ⚡ Performance
 
-* Rows of models without custom validators, encrypted or base64 fields are
-  turned into models directly from the already converted column values
-  instead of going through `__init__` and validation again (rows holding a
-  related model still go through `__init__`), queries of such models without
-  `select_related` skip the relation-aware row merging, and models without
-  relations skip relation bookkeeping during initialization. Loading many rows
-  is 1.4–2.2× faster in the orm-benchmarks suite (small filters 1.3–1.5×), the
-  most on wide models. For such models values stored in the database are no
-  longer re-validated on load (e.g. a string longer than `max_length` written
-  outside ormar loads as is); models with an overwritten pydantic type,
-  value-changing `model_config` (`use_enum_values`, string transformations,
-  `strict`) or a custom `__init__` keep full validation.
-* Rows of such models holding related models (a foreign key, `select_related`
-  or a reverse relation) are built the same way, with only the relations
-  registered on both sides, and the cached hash of a new instance no longer
-  goes through `__getattr__` on its first use. Loading rows with a foreign key
-  is about 1.4× faster, with `select_related` and reverse relations
-  1.25–1.35× faster.
-* The relation fields of a model are mapped by name once per model and shared
-  by every instance instead of being rebuilt for each one, which makes
-  building models 5–12% faster.
-* Whether rows can be built directly from their values is decided once per
-  query position instead of once per row, which makes loading many rows of a
-  model without relations about 9% faster.
-* Native execution builds each row in one step and runs only the columns that
-  have a result processor through it, instead of checking every column of
-  every row. On asyncpg, where most columns need no processor, building a row
-  of a wide model is about 30% faster.
-* JSON columns are serialized and deserialized with orjson by default instead
-  of the standard library `json` (`json_serializer` and `json_deserializer`
-  of `DatabaseConnection` still override it), which makes reading rows with
-  JSON columns about 7–17% faster. Stored JSON text is compact and keeps
-  non-ASCII characters unescaped. Values orjson rejects fall back to `json`;
-  integers over 64 bits stored in JSON are read back as floats, so pass
-  `json_deserializer=json.loads` if you store them.
-* `values()` and `values_list()` pick the returned columns of each row with
-  labels resolved once per query, and rows whose labels already are the
-  returned names are copied as a whole, which makes them 1.2–1.3× faster on
-  wide models.
-* `bulk_create()` of such models without relations copies field values
-  instead of calling `model_dump()`, batch parameters are bound by position
-  without per-row expansion, and on asyncpg a bulk insert of one column set
-  runs without an explicit transaction (asyncpg's `executemany` is atomic on
-  its own). Bulk inserts are about 1.6× faster on a warm connection pool.
-* Single statements whose values are all named bind parameters are bound by
-  position too, the driver connection of an established connection is read
-  without a greenlet switch, and signals without receivers return immediately:
-  inserts and updates inside a transaction are about 1.15× faster.
-* Writes (`save()`, `update()`, `delete()`, `load()`, `upsert()`,
-  `QuerySet.update()`/`delete()`, `bulk_create()` and `bulk_update()`) now reuse
-  one statement per write shape and only bind the values, like read queries.
-  `bulk_create()` runs a single-row insert once per row (`executemany`) inside
-  one transaction instead of building one multi-row statement per call, which
-  also removes the driver's bound-parameter limit on large batches. In the
-  orm-benchmarks suite on PostgreSQL, inserts are 1.1–4.8× and updates
-  1.4–2.9× faster, the most on wide models. `bulk_create()` of models with only
-  a primary key now inserts every row (it inserted a single row before).
-  Context-sensitive SQLAlchemy column defaults (`default=callable(context)`)
-  see the bound parameters of these statements under generated names.
-* Read queries (`get()`, `first()`, `all()`, `iterate()`, `values()`,
-  `count()`, `exists()` and aggregates) now cache the built SQLAlchemy
-  statement per query shape and only bind the new values on later calls,
-  instead of rebuilding the statement and its cache key every time. A
-  `get()` by primary key spends ~40% less CPU (about 7.8k instead of 4.8k
-  `get()` calls per second with 10 concurrent workers on PostgreSQL); in the
-  orm-benchmarks suite `get()` is 1.4–2× and small filters 1.2–1.3× faster.
-* With `asyncpg`, `asyncmy` and `aiosqlite`, queries now run directly on the
-  driver connection instead of through SQLAlchemy's async execution layer.
-  SQLAlchemy still builds and compiles statements, converts values with its
-  column types and manages the pool and transactions, so results and raised
-  `sqlalchemy.exc` exceptions are unchanged. On PostgreSQL this makes `get()`
-  ~1.2× faster, `values()`/`values_list()` up to 1.7× faster and the
-  orm-benchmarks suite 1.08–1.18× faster overall. SQLAlchemy engine events and
-  `echo=True` no longer see these statements; pass
-  `DatabaseConnection(url, native_execution=False)` to go back to SQLAlchemy's
-  execution layer. `aiopg` and `aiomysql` are unchanged. SQLAlchemy is now
-  pinned to `<2.1`, as native execution relies on its compiler internals.
+* Rows of models without custom validators, encrypted or base64 fields are turned into models directly from the already converted column values instead of going through `__init__` and validation again (rows holding a related model still go through `__init__`), queries of such models without `select_related` skip the relation-aware row merging, and models without relations skip relation bookkeeping during initialization. Loading many rows is 1.4–2.2× faster in the orm-benchmarks suite (small filters 1.3–1.5×), the most on wide models. For such models values stored in the database are no longer re-validated on load (e.g. a string longer than `max_length` written outside ormar loads as is); models with an overwritten pydantic type, value-changing `model_config` (`use_enum_values`, string transformations, `strict`) or a custom `__init__` keep full validation.
+* Rows of such models holding related models (a foreign key, `select_related` or a reverse relation) are built the same way, with only the relations registered on both sides, and the cached hash of a new instance no longer goes through `__getattr__` on its first use. Loading rows with a foreign key is about 1.4× faster, with `select_related` and reverse relations 1.25–1.35× faster.
+* The relation fields of a model are mapped by name once per model and shared by every instance instead of being rebuilt for each one, which makes building models 5–12% faster.
+* Whether rows can be built directly from their values is decided once per query position instead of once per row, which makes loading many rows of a model without relations about 9% faster.
+* Native execution builds each row in one step and runs only the columns that have a result processor through it, instead of checking every column of every row. On asyncpg, where most columns need no processor, building a row of a wide model is about 30% faster.
+* JSON columns are serialized and deserialized with orjson by default instead of the standard library `json` (`json_serializer` and `json_deserializer` of `DatabaseConnection` still override it), which makes reading rows with JSON columns about 7–17% faster. Stored JSON text is compact and keeps non-ASCII characters unescaped. Values orjson rejects fall back to `json`; integers over 64 bits stored in JSON are read back as floats, so pass `json_deserializer=json.loads` if you store them.
+* `values()` and `values_list()` pick the returned columns of each row with labels resolved once per query, and rows whose labels already are the returned names are copied as a whole, which makes them 1.2–1.3× faster on wide models.
+* `bulk_create()` of such models without relations copies field values instead of calling `model_dump()`, batch parameters are bound by position without per-row expansion, and on asyncpg a bulk insert of one column set runs without an explicit transaction (asyncpg's `executemany` is atomic on its own). Bulk inserts are about 1.6× faster on a warm connection pool.
+* Single statements whose values are all named bind parameters are bound by position too, the driver connection of an established connection is read without a greenlet switch, and signals without receivers return immediately: inserts and updates inside a transaction are about 1.15× faster.
+* Writes (`save()`, `update()`, `delete()`, `load()`, `upsert()`, `QuerySet.update()`/`delete()`, `bulk_create()` and `bulk_update()`) now reuse one statement per write shape and only bind the values, like read queries. `bulk_create()` runs a single-row insert once per row (`executemany`) inside one transaction instead of building one multi-row statement per call, which also removes the driver's bound-parameter limit on large batches. In the orm-benchmarks suite on PostgreSQL, inserts are 1.1–4.8× and updates 1.4–2.9× faster, the most on wide models. `bulk_create()` of models with only a primary key now inserts every row (it inserted a single row before). Context-sensitive SQLAlchemy column defaults (`default=callable(context)`) see the bound parameters of these statements under generated names.
+* Read queries (`get()`, `first()`, `all()`, `iterate()`, `values()`, `count()`, `exists()` and aggregates) now cache the built SQLAlchemy statement per query shape and only bind the new values on later calls, instead of rebuilding the statement and its cache key every time. A `get()` by primary key spends ~40% less CPU (about 7.8k instead of 4.8k `get()` calls per second with 10 concurrent workers on PostgreSQL); in the orm-benchmarks suite `get()` is 1.4–2× and small filters 1.2–1.3× faster.
+* With `asyncpg`, `asyncmy` and `aiosqlite`, queries now run directly on the driver connection instead of through SQLAlchemy's async execution layer. SQLAlchemy still builds and compiles statements, converts values with its column types and manages the pool and transactions, so results and raised `sqlalchemy.exc` exceptions are unchanged. On PostgreSQL this makes `get()` ~1.2× faster, `values()`/`values_list()` up to 1.7× faster and the orm-benchmarks suite 1.08–1.18× faster overall. SQLAlchemy engine events and `echo=True` no longer see these statements; pass `DatabaseConnection(url, native_execution=False)` to go back to SQLAlchemy's execution layer. `aiopg` and `aiomysql` are unchanged. SQLAlchemy is now pinned to `<2.1`, as native execution relies on its compiler internals.
 * The default connection pool size of `DatabaseConnection` is raised from 5 to
-  10. SQLAlchemy closes overflow connections on checkin, so with more than 5
-  concurrent queries every extra one opened a new database connection; with
-  10 concurrent `get()` calls on PostgreSQL this is 4–6× faster. Pass
-  `pool_size` to `DatabaseConnection` to size the pool for your concurrency.
-* Adding an already saved child to a reverse `ForeignKey` relation with
-  `add()` no longer queries the database to check that the child exists
-  first; the check now runs only for unsaved children (e.g. with a preset
-  pk), so `add()` of saved children is ~2× faster.
-* `select_related` queries now build each related model once per query result
-  instead of once per joined row, and reuse it in every row it appears in.
-  Queries over deep or fanned-out relations are 2–14× faster (e.g. 1000 rows
-  joined five levels deep with a many-to-many: 1.24s → 0.09s).
-  [#1851](https://github.com/ormar-orm/ormar/pull/1851)
-* Queries also build one pk-only model per related pk for foreign keys that are
-  not selected, instead of one per row, so e.g. loading 1000 books by 50
-  authors is 1.8× faster.
-* On SQLite the engine now runs in AUTOCOMMIT, like MySQL, instead of switching
-  every pooled connection into AUTOCOMMIT and back, which cost two hops to the
-  driver thread per query. Standalone queries (`get`, `create`, `save`,
-  `delete`, `count`, ...) are 25–45% faster; transactions keep using an
-  explicit `BEGIN`, so savepoints and rollbacks work as before. Postgres is
-  unchanged and a user-supplied `isolation_level` is respected.
-  [#1852](https://github.com/ormar-orm/ormar/pull/1852)
+  10. SQLAlchemy closes overflow connections on checkin, so with more than 5 concurrent queries every extra one opened a new database connection; with 10 concurrent `get()` calls on PostgreSQL this is 4–6× faster. Pass `pool_size` to `DatabaseConnection` to size the pool for your concurrency.
+* Adding an already saved child to a reverse `ForeignKey` relation with `add()` no longer queries the database to check that the child exists first; the check now runs only for unsaved children (e.g. with a preset pk), so `add()` of saved children is ~2× faster.
+* `select_related` queries now build each related model once per query result instead of once per joined row, and reuse it in every row it appears in. Queries over deep or fanned-out relations are 2–14× faster (e.g. 1000 rows joined five levels deep with a many-to-many: 1.24s → 0.09s). [#1851](https://github.com/ormar-orm/ormar/pull/1851)
+* Queries also build one pk-only model per related pk for foreign keys that are not selected, instead of one per row, so e.g. loading 1000 books by 50 authors is 1.8× faster.
+* On SQLite the engine now runs in AUTOCOMMIT, like MySQL, instead of switching every pooled connection into AUTOCOMMIT and back, which cost two hops to the driver thread per query. Standalone queries (`get`, `create`, `save`, `delete`, `count`, ...) are 25–45% faster; transactions keep using an explicit `BEGIN`, so savepoints and rollbacks work as before. Postgres is unchanged and a user-supplied `isolation_level` is respected. [#1852](https://github.com/ormar-orm/ormar/pull/1852)
 
 ### 🐛 Fixes
 
-* Fix JSON fields of related models turning into strings. Passing a model with
-  a JSON field to a relation (`Pet(owner=owner)`, `create(owner=owner)`) or
-  loading it through a forward `select_related` left its JSON values encoded
-  as strings, also in `model_dump()`; the related model now keeps its decoded
-  values. [#1885](https://github.com/ormar-orm/ormar/issues/1885)
-* Fix `QuerySet.update()` with relation, JSON and bytes values. Foreign keys
-  now accept the related model or a dictionary with its pk besides the pk
-  itself (self-referencing foreign keys rejected even the pk), JSON fields
-  accept a value to dump (a dict or list was rejected, and a JSON string was
-  stored encoded twice and read back as a string), and bytes fields accept
-  strings, like `create()` and `save()` do.
-* Fix `get()` after `exclude()` returning the last row instead of raising
-  `MultipleMatches` when several rows match. A queryset narrowed only by
-  `exclude()` was treated as unfiltered; code relying on `exclude(...).get()`
-  returning the last row should add a `filter()` or use `first()`/`last()`.
-  [#1858](https://github.com/ormar-orm/ormar/issues/1858)
-* Fix `bulk_update()` writing encrypted fields as plain text. The update now
-  runs as a SQLAlchemy statement, so column types process the values like in
-  `save()` and `update()`.
-  [#1866](https://github.com/ormar-orm/ormar/issues/1866)
-* Fix `bulk_update()` failing on a nullable `uuid` field that is `None`.
-  [#1854](https://github.com/ormar-orm/ormar/issues/1854)
-* Fix encrypted `Enum` fields storing a value that could not be read back,
-  they are now saved by member name and decrypted to the enum member
-  [#1855](https://github.com/ormar-orm/ormar/issues/1855)
-* Fix `get_pydantic()` cache being keyed by model class name, so same-named
-  models from different modules could get each other's generated models.
-
-* Support pydantic 2.14 (upper bound raised to `<2.15`). On 2.14 reverse
-  relation fields were dropped from the cached model schema, so they were
-  missing from FastAPI request/response models and OpenAPI docs.
-* Fix queries over two relation paths ending in the same relation (e.g.
-  `order.buyer.city` and `order.seller.city`): filters, `exclude()`,
-  `order_by()`, `fields()`, `exclude_fields()`, `values()` and
-  `prefetch_related()` could target the wrong table, produce cross joins or
-  load fields of the other path, depending on the order of the calls. Table
-  aliases are now derived from the relation path and stable between queries;
-  internally `AliasManager` and `OrmarConfig.alias_manager` were removed.
-* Fix chained `exclude()` calls applying only the last one; an empty
-  `exclude()` is now a no-op — thanks @moneebullah25 for the initial
-  implementation in #1826 [#1816](https://github.com/ormar-orm/ormar/issues/1816)
-* Fix `select_related()` crashing when a column alias (`name=`) on the related
-  model equals the relation name — thanks @moneebullah25 for the fix and tests
-  in #1829 [#1827](https://github.com/ormar-orm/ormar/issues/1827)
-* Fix `add()` on a reverse ForeignKey relation silently not inserting a child
-  that already had a primary key set (a `uuid` pk with a default or an explicit
-  id on a non-autoincrement pk) — thanks @moneebullah25 [#1819](https://github.com/ormar-orm/ormar/issues/1819)
-* Fix `clear()` on a self-referencing many-to-many relation deleting through
-  rows by the wrong column. It now removes only the rows of the side being
-  cleared (e.g. `person.friends.clear()` no longer touches `person.friend_of`),
-  and the relation is emptied only after the delete succeeds
-  — thanks @moneebullah25 [#1820](https://github.com/ormar-orm/ormar/issues/1820)
-* Fix `add()`, `remove()` and through model updates on the reverse side of a
-  self-referencing many-to-many relation storing the link in the wrong direction
-  (e.g. `member.followers.add(other)` added `other` to `member.follows`).
-  [#1836](https://github.com/ormar-orm/ormar/issues/1836)
-* Fix querying through a self-referencing many-to-many relation resolving the
-  wrong table alias - e.g. `member.followers.all()` / `.count()` returned every
-  row, and filters, `order_by()`, `values()` and default `orders_by` on such
-  relations failed or produced cross joins.
-  [#1837](https://github.com/ormar-orm/ormar/issues/1837)
-* Fix `add()` of an already linked child on a many-to-many relation inserting
-  a duplicate through row (it now updates the existing link with passed through
-  fields, if any), and `remove()` emptying the in-memory relation before the
-  through rows were deleted. `remove()` now deletes all matching through rows.
-  [#1821](https://github.com/ormar-orm/ormar/issues/1821)
-* Raise `QueryDefinitionError` when `update()` or `delete()` is called on a
-  queryset filtered or excluded by a related model's field (e.g.
-  `filter(category__name="x")`), instead of generating an invalid statement
-  that ignores or fails on the missing join
-  — thanks @moneebullah25 [#1817](https://github.com/ormar-orm/ormar/issues/1817)
-* Fix `bulk_create()` losing explicit values (a primary key or a field with a
-  `server_default`) when the objects in one call had different sets of values
-  set: the insert now runs once per distinct set of keys, so objects with
-  mixed key sets are not inserted in list order (documented in the
-  `bulk_create()` docs; split such objects into separate calls if you need
-  that order).
-  [#1859](https://github.com/ormar-orm/ormar/issues/1859)
+* Fix JSON fields of related models turning into strings. Passing a model with a JSON field to a relation (`Pet(owner=owner)`, `create(owner=owner)`) or loading it through a forward `select_related` left its JSON values encoded as strings, also in `model_dump()`; the related model now keeps its decoded values. [#1885](https://github.com/ormar-orm/ormar/issues/1885)
+* Fix `QuerySet.update()` with relation, JSON and bytes values. Foreign keys now accept the related model or a dictionary with its pk besides the pk itself (self-referencing foreign keys rejected even the pk), JSON fields accept a value to dump (a dict or list was rejected, and a JSON string was stored encoded twice and read back as a string), and bytes fields accept strings, like `create()` and `save()` do.
+* Fix `get()` after `exclude()` returning the last row instead of raising `MultipleMatches` when several rows match. A queryset narrowed only by `exclude()` was treated as unfiltered; code relying on `exclude(...).get()` returning the last row should add a `filter()` or use `first()`/`last()`. [#1858](https://github.com/ormar-orm/ormar/issues/1858)
+* Fix `bulk_update()` writing encrypted fields as plain text. The update now runs as a SQLAlchemy statement, so column types process the values like in `save()` and `update()`. [#1866](https://github.com/ormar-orm/ormar/issues/1866)
+* Fix `bulk_update()` failing on a nullable `uuid` field that is `None`. [#1854](https://github.com/ormar-orm/ormar/issues/1854)
+* Fix encrypted `Enum` fields storing a value that could not be read back, they are now saved by member name and decrypted to the enum member [#1855](https://github.com/ormar-orm/ormar/issues/1855)
+* Fix `get_pydantic()` cache being keyed by model class name, so same-named models from different modules could get each other's generated models.
+* Support pydantic 2.14 (upper bound raised to `<2.15`). On 2.14 reverse relation fields were dropped from the cached model schema, so they were missing from FastAPI request/response models and OpenAPI docs.
+* Fix queries over two relation paths ending in the same relation (e.g. `order.buyer.city` and `order.seller.city`): filters, `exclude()`, `order_by()`, `fields()`, `exclude_fields()`, `values()` and `prefetch_related()` could target the wrong table, produce cross joins or load fields of the other path, depending on the order of the calls. Table aliases are now derived from the relation path and stable between queries; internally `AliasManager` and `OrmarConfig.alias_manager` were removed.
+* Fix chained `exclude()` calls applying only the last one; an empty `exclude()` is now a no-op — thanks @moneebullah25 for the initial implementation in #1826 [#1816](https://github.com/ormar-orm/ormar/issues/1816)
+* Fix `select_related()` crashing when a column alias (`name=`) on the related model equals the relation name — thanks @moneebullah25 for the fix and tests in #1829 [#1827](https://github.com/ormar-orm/ormar/issues/1827)
+* Fix `add()` on a reverse ForeignKey relation silently not inserting a child that already had a primary key set (a `uuid` pk with a default or an explicit id on a non-autoincrement pk) — thanks @moneebullah25 [#1819](https://github.com/ormar-orm/ormar/issues/1819)
+* Fix `clear()` on a self-referencing many-to-many relation deleting through rows by the wrong column. It now removes only the rows of the side being cleared (e.g. `person.friends.clear()` no longer touches `person.friend_of`), and the relation is emptied only after the delete succeeds — thanks @moneebullah25 [#1820](https://github.com/ormar-orm/ormar/issues/1820)
+* Fix `add()`, `remove()` and through model updates on the reverse side of a self-referencing many-to-many relation storing the link in the wrong direction (e.g. `member.followers.add(other)` added `other` to `member.follows`). [#1836](https://github.com/ormar-orm/ormar/issues/1836)
+* Fix querying through a self-referencing many-to-many relation resolving the wrong table alias - e.g. `member.followers.all()` / `.count()` returned every row, and filters, `order_by()`, `values()` and default `orders_by` on such relations failed or produced cross joins. [#1837](https://github.com/ormar-orm/ormar/issues/1837)
+* Fix `add()` of an already linked child on a many-to-many relation inserting a duplicate through row (it now updates the existing link with passed through fields, if any), and `remove()` emptying the in-memory relation before the through rows were deleted. `remove()` now deletes all matching through rows. [#1821](https://github.com/ormar-orm/ormar/issues/1821)
+* Raise `QueryDefinitionError` when `update()` or `delete()` is called on a queryset filtered or excluded by a related model's field (e.g. `filter(category__name="x")`), instead of generating an invalid statement that ignores or fails on the missing join — thanks @moneebullah25 [#1817](https://github.com/ormar-orm/ormar/issues/1817)
+* Fix `bulk_create()` losing explicit values (a primary key or a field with a `server_default`) when the objects in one call had different sets of values set: the insert now runs once per distinct set of keys, so objects with mixed key sets are not inserted in list order (documented in the `bulk_create()` docs; split such objects into separate calls if you need that order). [#1859](https://github.com/ormar-orm/ormar/issues/1859)
 
 ## 0.26.0
 
 ### ✨ Features
 
-* Add `OrmarConfig(comment=...)` to attach a SQL `COMMENT ON TABLE` value to a
-  model — forwarded to the underlying SQLAlchemy `Table` and emitted by
-  `metadata.create_all()` on dialects that support table comments (PostgreSQL,
-  MySQL; SQLite ignores it). [#1240](https://github.com/collerek/ormar/issues/1240)
+* Add `OrmarConfig(comment=...)` to attach a SQL `COMMENT ON TABLE` value to a model — forwarded to the underlying SQLAlchemy `Table` and emitted by `metadata.create_all()` on dialects that support table comments (PostgreSQL, MySQL; SQLite ignores it). [#1240](https://github.com/collerek/ormar/issues/1240)
 
 ### 🐛 Fixes
 
-* Fix an unexpected cartesian product (cross join) when filtering on two
-  foreign keys that reach the same target table through the same relation
-  (e.g. `a_port__switch__name` and `z_port__switch__name`). The filter now
-  resolves complex join aliases in the same depth-first order as the join
-  builder, and ignores complex aliases left in the globally shared alias
-  manager by earlier queries, so a repeated query is no longer corrupted.
-  [#1706](https://github.com/collerek/ormar/issues/1706)
-* Require [`ormar-utils`](https://pypi.org/project/ormar-utils/) `>=0.2.0`,
-  which ships CPython stable-ABI (`abi3`) wheels. A single wheel now works on
-  Python 3.10+ — including 3.14 and future releases — so installing ormar no
-  longer fails for lack of a matching `ormar-utils` wheel on a new Python.
-  [#1702](https://github.com/collerek/ormar/issues/1702)
-* Fix race in `get_or_create` (and the m2m / reverse-fk variant) where
-  concurrent callers leaked `IntegrityError`. [#1016](https://github.com/collerek/ormar/issues/1016)
-* Fix `update_or_create` raising `NoMatch` instead of creating when called
-  with a pk that doesn't exist in the database.
-* Fix `values()` / `values_list()` leaking columns of related models that
-  were pulled in by a filter (e.g. `filter(project__id=...)`) or by a bare
-  `select_related()` but never named in `fields()`. Such relations - and
-  their through models for m2m - are now excluded from the projected
-  result, matching the columns the caller actually requested.
-  [#800](https://github.com/collerek/ormar/issues/800)
-* Fix `values()` / `values_list()` leaking main-model columns when
-  `fields()` named only nested fields (e.g.
-  `values_list("garage__owner", flatten=True)`). The flat projection now
-  drops every column from any model the caller never named - including
-  the parent FK column and any in-between models the path passes through
-  - so `flatten=True` returns the requested nested value instead of the
-  first leaked main-model column.
-  [#1060](https://github.com/collerek/ormar/issues/1060)
+* Fix an unexpected cartesian product (cross join) when filtering on two foreign keys that reach the same target table through the same relation (e.g. `a_port__switch__name` and `z_port__switch__name`). The filter now resolves complex join aliases in the same depth-first order as the join builder, and ignores complex aliases left in the globally shared alias manager by earlier queries, so a repeated query is no longer corrupted. [#1706](https://github.com/collerek/ormar/issues/1706)
+* Require [`ormar-utils`](https://pypi.org/project/ormar-utils/) `>=0.2.0`, which ships CPython stable-ABI (`abi3`) wheels. A single wheel now works on Python 3.10+ — including 3.14 and future releases — so installing ormar no longer fails for lack of a matching `ormar-utils` wheel on a new Python. [#1702](https://github.com/collerek/ormar/issues/1702)
+* Fix race in `get_or_create` (and the m2m / reverse-fk variant) where concurrent callers leaked `IntegrityError`. [#1016](https://github.com/collerek/ormar/issues/1016)
+* Fix `update_or_create` raising `NoMatch` instead of creating when called with a pk that doesn't exist in the database.
+* Fix `values()` / `values_list()` leaking columns of related models that were pulled in by a filter (e.g. `filter(project__id=...)`) or by a bare `select_related()` but never named in `fields()`. Such relations - and their through models for m2m - are now excluded from the projected result, matching the columns the caller actually requested. [#800](https://github.com/collerek/ormar/issues/800)
+* Fix `values()` / `values_list()` leaking main-model columns when `fields()` named only nested fields (e.g. `values_list("garage__owner", flatten=True)`). The flat projection now drops every column from any model the caller never named - including the parent FK column and any in-between models the path passes through
+  - so `flatten=True` returns the requested nested value instead of the first leaked main-model column. [#1060](https://github.com/collerek/ormar/issues/1060)
 
 ## 0.25.0
 
 ### ⚡ Performance
 
-A broad performance pass across model construction, row hydration, relation
-resolution, alias lookups, and result merging — combining per-class caching,
-lazy initialization of relation machinery, and porting the hottest helpers to
-Rust via the new required [`ormar-utils`](https://pypi.org/project/ormar-utils/)
-dependency. End-to-end speedups vs 0.24.0 range from ~12 % on `select_related`,
-through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of models, and up to x2.5 speedup in getting `all`.
+A broad performance pass across model construction, row hydration, relation resolution, alias lookups, and result merging — combining per-class caching, lazy initialization of relation machinery, and porting the hottest helpers to Rust via the new required [`ormar-utils`](https://pypi.org/project/ormar-utils/) dependency. End-to-end speedups vs 0.24.0 range from ~12 % on `select_related`, through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of models, and up to x2.5 speedup in getting `all`.
 
 ### ✨ Features
 
-* Add `flatten_fields()` queryset method and `model_dump(flatten_fields=...)` /
-  `model_dump(flatten_all=True)` arguments to render related models as their
-  primary key value instead of nested dicts — see
-  [docs](./queries/select-columns.md#flatten_fields)
-  [#1641](https://github.com/collerek/ormar/pull/1641)
+* Add `flatten_fields()` queryset method and `model_dump(flatten_fields=...)` / `model_dump(flatten_all=True)` arguments to render related models as their primary key value instead of nested dicts — see [docs](./queries/select-columns.md#flatten_fields) [#1641](https://github.com/collerek/ormar/pull/1641)
 
     ```python
     cars = await Car.objects.flatten_fields("manufacturer").all()
@@ -314,11 +98,7 @@ through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of model
     car.model_dump(flatten_fields={"manufacturer": ...})
     ```
 
-* Add **proxy model inheritance** (`OrmarConfig(proxy=True)`) — child class
-  shares the parent's table and only adds methods / computed fields / a custom
-  `queryset_class` — thanks @SepehrBazyar — see
-  [docs](./models/inheritance.md#proxy-models)
-  [#760](https://github.com/collerek/ormar/pull/760)
+* Add **proxy model inheritance** (`OrmarConfig(proxy=True)`) — child class shares the parent's table and only adds methods / computed fields / a custom `queryset_class` — thanks @SepehrBazyar — see [docs](./models/inheritance.md#proxy-models) [#760](https://github.com/collerek/ormar/pull/760)
 
     ```python
     class User(Human):
@@ -328,54 +108,20 @@ through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of model
             return f"{self.first_name} {self.last_name}"
     ```
 
-* Add per-table `schema=` support on `OrmarConfig` so models can live in
-  non-default database schemas (PostgreSQL full, MySQL with caveats, SQLite
-  not supported for cross-schema FKs) — thanks @hk3dva — see
-  [docs](./models/index.md#schemas)
-  [#1493](https://github.com/collerek/ormar/pull/1493)
-* Add Python-style indexing and slicing on `QuerySet` — `Track.objects[:10]`,
-  `Track.objects[-5:]`, `Track.objects[5]` — thanks @SepehrBazyar — see
-  [docs](./queries/pagination-and-rows-number.md#slicing-with-__getitem__)
-  [#765](https://github.com/collerek/ormar/pull/765)
-* Add `nulls_ordering` argument to `.asc()` / `.desc()` (`ormar.NullsOrdering.FIRST`
-  / `LAST`) with MySQL emulation — thanks @SepehrBazyar — see
-  [docs](./queries/filter-and-sort.md#controlling-null-placement-with-nulls_ordering)
-  [#769](https://github.com/collerek/ormar/pull/769)
-* Allow filtering by a foreign-key column directly (`Book.objects.filter(Book.author == 5)`
-  or with a model instance) without adding a JOIN — thanks @djalouehz — see
-  [docs](./queries/filter-and-sort.md#filtering-by-foreign-key-columns)
-  [#854](https://github.com/collerek/ormar/pull/854)
-* Add `through_relation_nullable` and `through_reverse_relation_nullable` to
-  `ormar.ManyToMany` to enforce `NOT NULL` on the through table's FK columns —
-  thanks @evadev-eva — see
-  [docs](./relations/many-to-many.md#making-through-relation-columns-non-nullable)
-  [#852](https://github.com/collerek/ormar/pull/852)
-* Add `last()` / `last_or_none()` on `QuerySet` and expose `first_or_none()` /
-  `last()` / `last_or_none()` on `QuerysetProxy` — see
-  [docs](./queries/pagination-and-rows-number.md)
-  [#765](https://github.com/collerek/ormar/pull/765)
-* Forward unrecognized `**kwargs` from `ormar.ForeignKey` / `ormar.ManyToMany`
-  to `BaseField` — fixes `comment=` (and other `BaseField` kwargs) being
-  silently dropped on relation fields — thanks @booqoffsky
-  [#1239](https://github.com/collerek/ormar/pull/1239)
+* Add per-table `schema=` support on `OrmarConfig` so models can live in non-default database schemas (PostgreSQL full, MySQL with caveats, SQLite not supported for cross-schema FKs) — thanks @hk3dva — see [docs](./models/index.md#schemas) [#1493](https://github.com/collerek/ormar/pull/1493)
+* Add Python-style indexing and slicing on `QuerySet` — `Track.objects[:10]`, `Track.objects[-5:]`, `Track.objects[5]` — thanks @SepehrBazyar — see [docs](./queries/pagination-and-rows-number.md#slicing-with-__getitem__) [#765](https://github.com/collerek/ormar/pull/765)
+* Add `nulls_ordering` argument to `.asc()` / `.desc()` (`ormar.NullsOrdering.FIRST` / `LAST`) with MySQL emulation — thanks @SepehrBazyar — see [docs](./queries/filter-and-sort.md#controlling-null-placement-with-nulls_ordering) [#769](https://github.com/collerek/ormar/pull/769)
+* Allow filtering by a foreign-key column directly (`Book.objects.filter(Book.author == 5)` or with a model instance) without adding a JOIN — thanks @djalouehz — see [docs](./queries/filter-and-sort.md#filtering-by-foreign-key-columns) [#854](https://github.com/collerek/ormar/pull/854)
+* Add `through_relation_nullable` and `through_reverse_relation_nullable` to `ormar.ManyToMany` to enforce `NOT NULL` on the through table's FK columns — thanks @evadev-eva — see [docs](./relations/many-to-many.md#making-through-relation-columns-non-nullable) [#852](https://github.com/collerek/ormar/pull/852)
+* Add `last()` / `last_or_none()` on `QuerySet` and expose `first_or_none()` / `last()` / `last_or_none()` on `QuerysetProxy` — see [docs](./queries/pagination-and-rows-number.md) [#765](https://github.com/collerek/ormar/pull/765)
+* Forward unrecognized `**kwargs` from `ormar.ForeignKey` / `ormar.ManyToMany` to `BaseField` — fixes `comment=` (and other `BaseField` kwargs) being silently dropped on relation fields — thanks @booqoffsky [#1239](https://github.com/collerek/ormar/pull/1239)
 
 ### 🐛 Fixes
 
-* Clearing a nullable `ForeignKey` with `instance.fk = None` now also clears the
-  in-memory relation, so subsequent reads return `None` without a reload —
-  originally @amit12297, rebased — see
-  [docs](./relations/foreign-key.md)
-  [#1230](https://github.com/collerek/ormar/pull/1230)
-* Drop the unnecessary post-`INSERT` pk reload in `save()`, and raise
-  `ModelPersistenceError` on backends that cannot return a generated pk
-  (Oracle MySQL with non-`AUTO_INCREMENT` server-default pk) instead of
-  silently assigning the row count to `Model.pk` — thanks @vnicolaichuk
-  [#919](https://github.com/collerek/ormar/pull/919)
-* `SelectAction` aggregate identifiers now go through `sqlalchemy.column()`
-  instead of string concatenation
-  [#1637](https://github.com/collerek/ormar/pull/1637)
-* Fix the `mkdocs` deployment workflow
-  [#1638](https://github.com/collerek/ormar/pull/1638)
+* Clearing a nullable `ForeignKey` with `instance.fk = None` now also clears the in-memory relation, so subsequent reads return `None` without a reload — originally @amit12297, rebased — see [docs](./relations/foreign-key.md) [#1230](https://github.com/collerek/ormar/pull/1230)
+* Drop the unnecessary post-`INSERT` pk reload in `save()`, and raise `ModelPersistenceError` on backends that cannot return a generated pk (Oracle MySQL with non-`AUTO_INCREMENT` server-default pk) instead of silently assigning the row count to `Model.pk` — thanks @vnicolaichuk [#919](https://github.com/collerek/ormar/pull/919)
+* `SelectAction` aggregate identifiers now go through `sqlalchemy.column()` instead of string concatenation [#1637](https://github.com/collerek/ormar/pull/1637)
+* Fix the `mkdocs` deployment workflow [#1638](https://github.com/collerek/ormar/pull/1638)
 
 ## 0.24.0
 
@@ -401,8 +147,7 @@ through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of model
 
 ### ‼️🚨 Critical vulnerability fixed – please upgrade ASAP
 
-* In this version of ormar the critical vulnerability (`CVE-2026-26198`) in aggregate functions was patched - thanks @AAtomical
- for reporting. The vulnerability was caused by the way ormar generated SQL queries for aggregate functions, allowing arbitrary SQL execution through user input.
+* In this version of ormar the critical vulnerability (`CVE-2026-26198`) in aggregate functions was patched - thanks @AAtomical for reporting. The vulnerability was caused by the way ormar generated SQL queries for aggregate functions, allowing arbitrary SQL execution through user input.
 * Affected versions:
   * `0.9.9 - 0.12.2`
   * `0.20.0b1 - 0.22.0 (latest)`
@@ -523,8 +268,7 @@ through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of model
 
 * **Enhanced testing support**
 
-    The `force_rollback` parameter for transactions makes testing easier.
-    Like in databases `force_rollback` can also be used with DatabaseConnection directly to use one global transaction.
+    The `force_rollback` parameter for transactions makes testing easier. Like in databases `force_rollback` can also be used with DatabaseConnection directly to use one global transaction.
 
     ```python
     async with database.transaction(force_rollback=True):
@@ -594,7 +338,7 @@ through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of model
 * Allow adding indexed on foreign keys by @cmflynn [#1276](https://github.com/collerek/ormar/pull/1276)
 
 ### 💬 Other
-*  Some docs fixes by @Chaoyingz, thanks!
+* Some docs fixes by @Chaoyingz, thanks!
 
 
 
@@ -603,29 +347,28 @@ through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of model
 ### ✨ Breaking changes
 * `ormar` Model configuration
 
-    Instead of defining a `Meta` class now each of the ormar models require an ormar_config parameter that is an instance of the `OrmarConfig` class.
-    Note that the attribute must be named `ormar_config` and be an instance of the config class.
-    
+    Instead of defining a `Meta` class now each of the ormar models require an ormar_config parameter that is an instance of the `OrmarConfig` class. Note that the attribute must be named `ormar_config` and be an instance of the config class.
+
     ```python
     import databases
     import ormar
     import sqlalchemy
-    
+
     database = databases.Database("sqlite:///db.sqlite")
     metadata = sqlalchemy.MetaData()
-    
+
     # ormar < 0.20
     class Album(ormar.Model):
         class Meta:
             database = database
             metadata = metadata
             tablename = "albums"
-        
-    
+
+
         id: int = ormar.Integer(primary_key=True)
         name: str = ormar.String(max_length=100)
         favorite: bool = ormar.Boolean(default=False)
-    
+
     # ormar >= 0.20
     class AlbumV20(ormar.Model):
         ormar_config = ormar.OrmarConfig(
@@ -633,17 +376,16 @@ through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of model
             metadata=metadata,
             tablename="albums_v20"
         )
-    
+
         id: int = ormar.Integer(primary_key=True)
         name: str = ormar.String(max_length=100)
         favorite: bool = ormar.Boolean(default=False)
     ```
 
 * `OrmarConfig` api/ parameters
-    
-    The `ormar_config` expose the same set of settings as `Meta` class used to provide.
-    That means that you can use any of the following parameters initializing the config:
-    
+
+    The `ormar_config` expose the same set of settings as `Meta` class used to provide. That means that you can use any of the following parameters initializing the config:
+
     ```python
     metadata: Optional[sqlalchemy.MetaData]
     database: Optional[databases.Database]
@@ -657,111 +399,108 @@ through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of model
     ```
 
 * `BaseMeta` equivalent - best practice
-    
-    Note that to reduce the duplication of code and ease of development it's still recommended to create a base config and provide each of the models with a copy.
-    OrmarConfig provides a convenient `copy` method for that purpose. 
-    
+
+    Note that to reduce the duplication of code and ease of development it's still recommended to create a base config and provide each of the models with a copy. OrmarConfig provides a convenient `copy` method for that purpose.
+
     The `copy` method accepts the same parameters as `OrmarConfig` init, so you can overwrite if needed, but by default it will return already existing attributes, except for: `tablename`, `order_by` and `constraints` which by default are cleared.
-    
+
     ```python hl_lines="5-8 11 20"
     import databases
     import ormar
     import sqlalchemy
-    
+
     base_ormar_config = ormar.OrmarConfig(
         database=databases.Database("sqlite:///db.sqlite"),
         metadata=sqlalchemy.MetaData()
     )
-    
+
     class AlbumV20(ormar.Model):
         ormar_config = base_ormar_config.copy(
             tablename="albums_v20"
         )
-    
+
         id: int = ormar.Integer(primary_key=True)
         name: str = ormar.String(max_length=100)
-    
-        
+
+
     class TrackV20(ormar.Model):
         ormar_config = base_ormar_config.copy(
             tablename="tracks_v20"
         )
-    
+
         id: int = ormar.Integer(primary_key=True)
         name: str = ormar.String(max_length=100)
     ```
 
 * `choices` Field parameter is no longer supported.
-    
-    Before version 0.20 you could provide `choices` parameter to any existing ormar Field to limit the accepted values.
-    This functionality was dropped, and you should use `ormar.Enum` field that was designed for this purpose. 
-    If you want to keep the database field type (i.e. an Integer field) you can always write a custom validator.
-    
+
+    Before version 0.20 you could provide `choices` parameter to any existing ormar Field to limit the accepted values. This functionality was dropped, and you should use `ormar.Enum` field that was designed for this purpose. If you want to keep the database field type (i.e. an Integer field) you can always write a custom validator.
+
     ```python
     import databases
     import ormar
     import sqlalchemy
-    
+
     database = databases.Database("sqlite:///db.sqlite")
     metadata = sqlalchemy.MetaData()
-    
+
     # ormar < 0.20
     class Artist(ormar.Model):
         class Meta:
             database = database
             metadata = metadata
-        
-    
+
+
         id: int = ormar.Integer(primary_key=True)
         name: str = ormar.String(max_length=100)
         country: str = ormar.String(default=False, max_length=50, choices=["UK", "US", "Vietnam", "Colombia"])
-    
+
     # ormar >= 0.20
     from enum import Enum
-    
+
     class Country(str, Enum):
         UK = "UK"
         US = "US"
         VIETNAM = "Vietnam"
         COLOMBIA = "Colombia"
-    
+
     class ArtistV20(ormar.Model):
         ormar_config = ormar.OrmarConfig(
             database=database,
             metadata=metadata,
             tablename="artists_v20"
         )
-    
+
         id: int = ormar.Integer(primary_key=True)
         name: str = ormar.String(max_length=100)
         country: Country = ormar.Enum(enum_class=Country)
     ```
-    
+
 
 * `pydantic_only` Field parameter is no longer supported
-    
+
     `pydantic_only` fields were already deprecated and are removed in v 0.20. Ormar allows defining pydantic fields as in ordinary pydantic model.
-    
+
     ```python
     import databases
     import ormar
     import sqlalchemy
-    
+
     database = databases.Database("sqlite:///db.sqlite")
     metadata = sqlalchemy.MetaData()
-    
+
     # ormar < 0.20
     class Dish(ormar.Model):
         class Meta:
             database = database
             metadata = metadata
             tablename = "dishes"
-        
-    
+
+
         id: int = ormar.Integer(primary_key=True)
         name: str = ormar.String(max_length=100)
         cook: str = ormar.String(max_length=40, pydantic_only=True, default="sam")
-    
+
     # ormar >= 0.20
     class DishV20(ormar.Model):
         ormar_config = ormar.OrmarConfig(
@@ -769,52 +508,51 @@ through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of model
             metadata=metadata,
             tablename="dishes_v20"
         )
-    
+
         id: int = ormar.Integer(primary_key=True)
         name: str = ormar.String(max_length=100)
         cook: str = "sam"  # this is normal pydantic field
     ```
 
 * `property_field` decorator is no longer supported
-    
-    `property_field` decorator was used to provide a way to pass calculated fields that were included in dictionary/ serialized json representation of the model.
-    Version 2.X of pydantic introduced such a possibility, so you should now switch to the one native to the pydantic.
-    
+
+    `property_field` decorator was used to provide a way to pass calculated fields that were included in dictionary/ serialized json representation of the model. Version 2.X of pydantic introduced such a possibility, so you should now switch to the one native to the pydantic.
+
     ```python
     import databases
     import ormar
     import sqlalchemy
     import pydantic
-    
+
     database = databases.Database("sqlite:///db.sqlite")
     metadata = sqlalchemy.MetaData()
-    
+
     # ormar < 0.20
     class Employee(ormar.Model):
         class Meta:
             database = database
             metadata = metadata
-        
-    
+
+
         id: int = ormar.Integer(primary_key=True)
         first_name: str = ormar.String(max_length=100)
         last_name: str = ormar.String(max_length=100)
-        
+
         @ormar.property_field()
         def full_name(self) -> str:
             return f"{self.first_name} {self.last_name}"
-    
+
     # ormar >= 0.20
     class EmployeeV20(ormar.Model):
         ormar_config = ormar.OrmarConfig(
             database=database,
             metadata=metadata,
         )
-    
+
         id: int = ormar.Integer(primary_key=True)
         first_name: str = ormar.String(max_length=100)
         last_name: str = ormar.String(max_length=100)
-    
+
         @pydantic.computed_field()
         def full_name(self) -> str:
             return f"{self.first_name} {self.last_name}"
@@ -825,101 +563,101 @@ through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of model
     All methods listed below are deprecated and will be removed in version 0.30 of `ormar`.
 
     * `dict()` becomes the `model_dump()`
-        
+
     ```python
     import databases
     import ormar
     import sqlalchemy
-    
+
     database = databases.Database("sqlite:///db.sqlite")
     metadata = sqlalchemy.MetaData()
-    
+
     class Album(ormar.Model):
         ormar_config = ormar.OrmarConfig(
             database=database,
             metadata=metadata,
             tablename="albums"
         )
-    
+
         id: int = ormar.Integer(primary_key=True)
         name: str = ormar.String(max_length=100)
         favorite: bool = ormar.Boolean(default=False)
-    
+
     album = Album(name="Dark Side of the Moon")
-        
+
     # ormar < 0.20
     album_dict = album.dict()
-    
+
     # ormar >= 0.20
-    new_album_dict = album.model_dump() 
+    new_album_dict = album.model_dump()
     ```
-    
+
     Note that parameters remain the same i.e. `include`, `exclude` etc.
 
     * `json()` becomes the `model_dump_json()`
-    
+
       ```python
       import databases
       import ormar
       import sqlalchemy
-    
+
       database = databases.Database("sqlite:///db.sqlite")
       metadata = sqlalchemy.MetaData()
-    
+
       class Album(ormar.Model):
           ormar_config = ormar.OrmarConfig(
               database=database,
               metadata=metadata,
               tablename="albums"
           )
-    
+
           id: int = ormar.Integer(primary_key=True)
           name: str = ormar.String(max_length=100)
           favorite: bool = ormar.Boolean(default=False)
-    
+
       album = Album(name="Dark Side of the Moon")
-        
+
       # ormar < 0.20
       album_json= album.json()
-    
+
       # ormar >= 0.20
-      new_album_dict = album.model_dump_json() 
+      new_album_dict = album.model_dump_json()
       ```
-    
+
       Note that parameters remain the same i.e. `include`, `exclude` etc.
 
     * `construct()` becomes the `model_construct()`
-    
+
     ```python
     import databases
     import ormar
     import sqlalchemy
-    
+
     database = databases.Database("sqlite:///db.sqlite")
     metadata = sqlalchemy.MetaData()
-    
+
     class Album(ormar.Model):
         ormar_config = ormar.OrmarConfig(
             database=database,
             metadata=metadata,
             tablename="albums"
         )
-    
+
         id: int = ormar.Integer(primary_key=True)
         name: str = ormar.String(max_length=100)
         favorite: bool = ormar.Boolean(default=False)
-        
+
     params = {
         "name": "Dark Side of the Moon",
         "favorite": True,
     }
     # ormar < 0.20
     album = Album.construct(**params)
-    
+
     # ormar >= 0.20
     album = Album.model_construct(**params)
     ```
-    
+
     To read more about construct please refer to `pydantic` documentation.
 
 
@@ -946,8 +684,7 @@ through ~30 % on `iterate` and `first`, to ~60 - 80 % on initialization of model
 * `Queryset.bulk_create` will now raise `ModelListEmptyError` on empty list of models (by @ponytailer - thanks!) [#853](https://github.com/collerek/ormar/pull/853)
 
 ###✨ Features
-* `Model.upsert()` now handles a flag `__force_save__`: `bool` that allow upserting the models regardless of the fact if they have primary key set or not. 
-Note that setting this flag will cause two queries for each upserted model -> `get` to check if model exists and later `update/insert` accordingly. [#889](https://github.com/collerek/ormar/pull/853)
+* `Model.upsert()` now handles a flag `__force_save__`: `bool` that allow upserting the models regardless of the fact if they have primary key set or not. Note that setting this flag will cause two queries for each upserted model -> `get` to check if model exists and later `update/insert` accordingly. [#889](https://github.com/collerek/ormar/pull/853)
 
 ###🐛 Fixes
 
@@ -969,7 +706,7 @@ Note that setting this flag will cause two queries for each upserted model -> `g
 
 ###💬 Other
 
-* Add dark mode to docs (by @SepehrBazyar - thanks!) [#717](https://github.com/collerek/ormar/pull/717) 
+* Add dark mode to docs (by @SepehrBazyar - thanks!) [#717](https://github.com/collerek/ormar/pull/717)
 * Update aiomysql dependency [#778](https://github.com/collerek/ormar/issues/778)
 
 
@@ -1032,7 +769,7 @@ Note that setting this flag will cause two queries for each upserted model -> `g
 
 ###💬 Other
 
-* Improve performance of `bulk_create` by bypassing `databases` `execute_many` suboptimal implementation. (by @Mng-dev-ai thanks!) [#520](https://github.com/collerek/ormar/pull/520) 
+* Improve performance of `bulk_create` by bypassing `databases` `execute_many` suboptimal implementation. (by @Mng-dev-ai thanks!) [#520](https://github.com/collerek/ormar/pull/520)
 * Bump min. required `databases` version to `>=5.4`.
 
 ##0.10.23
@@ -1071,7 +808,7 @@ Note that setting this flag will cause two queries for each upserted model -> `g
 ###🐛 Fixes
 
 * Allow `None` if field is nullable and have choices set [#354](https://github.com/collerek/ormar/issues/354)
-* Always set `primary_key` to `not null` regardless of `autoincrement` and explicit `nullable` setting to avoid problems with migrations [#348](https://github.com/collerek/ormar/issues/348) 
+* Always set `primary_key` to `not null` regardless of `autoincrement` and explicit `nullable` setting to avoid problems with migrations [#348](https://github.com/collerek/ormar/issues/348)
 
 ##0.10.19
 
@@ -1146,7 +883,7 @@ Note that setting this flag will cause two queries for each upserted model -> `g
 ###✨ Features
 
 * Allow passing field accessors in `select_related` and `prefetch_related` aka. python style `select_related` [#225](https://github.com/collerek/ormar/issues/225).
-  *  Previously: 
+  * Previously:
   ```python
     await Post.objects.select_related(["author", "categories"]).get()
     await Author.objects.prefetch_related("posts__categories").get()
@@ -1188,7 +925,7 @@ Note that setting this flag will cause two queries for each upserted model -> `g
 ###✨ Features
 
 * Add [`get_pydantic`](https://collerek.github.io/ormar/models/methods/#get_pydantic) flag that allows you to auto generate equivalent pydantic models tree from ormar.Model. This newly generated model tree can be used in requests and responses to exclude fields you do not want to include in the data.
-* Add [`exclude_parent_fields`](https://collerek.github.io/ormar/models/inheritance/#exclude_parent_fields) parameter to model Meta that allows you to exclude fields from parent models during inheritance. Note that best practice is to combine models and mixins but if you have many similar models and just one that differs it might be useful tool to achieve that. 
+* Add [`exclude_parent_fields`](https://collerek.github.io/ormar/models/inheritance/#exclude_parent_fields) parameter to model Meta that allows you to exclude fields from parent models during inheritance. Note that best practice is to combine models and mixins but if you have many similar models and just one that differs it might be useful tool to achieve that.
 
 ###🐛 Fixes
 
@@ -1199,16 +936,15 @@ Note that setting this flag will cause two queries for each upserted model -> `g
 ###💬 Other
 
 * Expand [fastapi](https://collerek.github.io/ormar/fastapi) part of the documentation to show samples of using ormar in requests and responses in fastapi.
-* Improve the docs in regard of `default`, `ForeignKey.add` etc. 
+* Improve the docs in regard of `default`, `ForeignKey.add` etc.
 
 ##0.10.9
 
 ###Important security fix
 
-*  Update pin for pydantic to fix security vulnerability [CVE-2021-29510](https://github.com/samuelcolvin/pydantic/security/advisories/GHSA-5jqp-qgf6-3pvh)
+* Update pin for pydantic to fix security vulnerability [CVE-2021-29510](https://github.com/samuelcolvin/pydantic/security/advisories/GHSA-5jqp-qgf6-3pvh)
 
-You are advised to update to version of pydantic that was patched. 
-In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies. 
+You are advised to update to version of pydantic that was patched. In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies.
 
 ###🐛 Fixes
 
@@ -1229,8 +965,7 @@ In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies.
 
 * Add `exclude_primary_keys: bool = False` flag to `dict()` method that allows to exclude all primary key columns in the resulting dictionaru. [#164](https://github.com/collerek/ormar/issues/164)
 * Add `exclude_through_models: bool = False` flag to `dict()` that allows excluding all through models from `ManyToMany` relations [#164](https://github.com/collerek/ormar/issues/164)
-* Add `represent_as_base64_str: bool = False` parameter that allows conversion of bytes `LargeBinary` field to base64 encoded string. String is returned in `dict()`, 
-  on access to attribute and string is converted to bytes on setting. Data in database is stored as bytes. [#187](https://github.com/collerek/ormar/issues/187)
+* Add `represent_as_base64_str: bool = False` parameter that allows conversion of bytes `LargeBinary` field to base64 encoded string. String is returned in `dict()`, on access to attribute and string is converted to bytes on setting. Data in database is stored as bytes. [#187](https://github.com/collerek/ormar/issues/187)
 * Add `pk` alias to allow field access by `Model.pk` in filters and order by clauses (python style)
 
 ###🐛 Fixes
@@ -1248,43 +983,33 @@ In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies.
 ###✨ Features
 
 * Add `LargeBinary(max_length)` field type [#166](https://github.com/collerek/ormar/issues/166)
-* Add support for normal pydantic fields (including Models) instead of `pydantic_only` 
-  attribute which is now deprecated [#160](https://github.com/collerek/ormar/issues/160).
-  Pydantic fields should be declared normally as in pydantic model next to ormar fields, 
-  note that (obviously) `ormar` does not save and load the value for this field in 
-  database that mean that **ONE** of the following has to be true:
-  
+* Add support for normal pydantic fields (including Models) instead of `pydantic_only` attribute which is now deprecated [#160](https://github.com/collerek/ormar/issues/160). Pydantic fields should be declared normally as in pydantic model next to ormar fields, note that (obviously) `ormar` does not save and load the value for this field in database that mean that **ONE** of the following has to be true:
+
     * pydantic field declared on ormar model has to be `Optional` (defaults to None)
     * pydantic field has to have a default value set
     * pydantic field has `default_factory` function set
     * ormar.Model with pydantic field has to overwrite `__init__()` and provide the value there
-    
-    If none of the above `ormar` (or rather pydantic) will fail during loading data from the database,
-    with missing required value for declared pydantic field.
-* Ormar provides now a meaningful examples in openapi schema, including nested models.
-  The same algorithm is used to iterate related models without looks 
-  as with `dict()` and `select/load_all`. Examples appear also in `fastapi`. [#157](https://github.com/collerek/ormar/issues/157)
+
+    If none of the above `ormar` (or rather pydantic) will fail during loading data from the database, with missing required value for declared pydantic field.
+* Ormar provides now a meaningful examples in openapi schema, including nested models. The same algorithm is used to iterate related models without looks as with `dict()` and `select/load_all`. Examples appear also in `fastapi`. [#157](https://github.com/collerek/ormar/issues/157)
 
 ###🐛 Fixes
 
-* By default `pydantic` is not validating fields during assignment, 
-  which is not a desirable setting for an ORM, now all `ormar.Models` 
-  have validation turned-on during assignment (like `model.column = 'value'`)
+* By default `pydantic` is not validating fields during assignment, which is not a desirable setting for an ORM, now all `ormar.Models` have validation turned-on during assignment (like `model.column = 'value'`)
 
 ###💬 Other
 
-*  Add connecting to the database in QuickStart in readme [#180](https://github.com/collerek/ormar/issues/180) 
-*  OpenAPI schema does no longer include `ormar.Model` docstring as description, 
-   instead just model name is provided if you do not provide your own docstring.
-*  Some performance improvements.
+* Add connecting to the database in QuickStart in readme [#180](https://github.com/collerek/ormar/issues/180)
+* OpenAPI schema does no longer include `ormar.Model` docstring as description, instead just model name is provided if you do not provide your own docstring.
+* Some performance improvements.
 
 ##0.10.5
 
 ###🐛 Fixes
 
-*  Fix bug in `fastapi-pagination` [#73](https://github.com/uriyyo/fastapi-pagination/issues/73)
-*  Remove unnecessary `Optional` in `List[Optional[T]]` in return value for `QuerySet.all()` and `Querysetproxy.all()` return values [#174](https://github.com/collerek/ormar/issues/174)
-*  Run tests coverage publish only on internal prs instead of all in github action.
+* Fix bug in `fastapi-pagination` [#73](https://github.com/uriyyo/fastapi-pagination/issues/73)
+* Remove unnecessary `Optional` in `List[Optional[T]]` in return value for `QuerySet.all()` and `Querysetproxy.all()` return values [#174](https://github.com/collerek/ormar/issues/174)
+* Run tests coverage publish only on internal prs instead of all in github action.
 
 ##0.10.4
 
@@ -1293,53 +1018,53 @@ In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies.
 * Add **Python style** to `filter` and `order_by` with field access instead of dunder separated strings. [#51](https://github.com/collerek/ormar/issues/51)
   * Accessing a field with attribute access (chain of dot notation) can be used to construct `FilterGroups` (`ormar.and_` and `ormar.or_`)
   * Field access overloads set of python operators and provide a set of functions to allow same functionality as with dunder separated param names in `**kwargs`, that means that querying from sample model `Track` related to model `Album` now you have more options:
-    *  exact - exact match to value, sql `column = <VALUE>` 
+    * exact - exact match to value, sql `column = <VALUE>`
        * OLD: `album__name__exact='Malibu'`
        * NEW: can be also written as `Track.album.name == 'Malibu`
-    *  iexact - exact match sql `column = <VALUE>` (case insensitive)
+    * iexact - exact match sql `column = <VALUE>` (case insensitive)
        * OLD: `album__name__iexact='malibu'`
        * NEW: can be also written as `Track.album.name.iexact('malibu')`
-    *  contains - sql `column LIKE '%<VALUE>%'`
+    * contains - sql `column LIKE '%<VALUE>%'`
        * OLD: `album__name__contains='Mal'`
        * NEW: can be also written as `Track.album.name % 'Mal')`
        * NEW: can be also written as `Track.album.name.contains('Mal')`
-    *  icontains - sql `column LIKE '%<VALUE>%'` (case insensitive)
+    * icontains - sql `column LIKE '%<VALUE>%'` (case insensitive)
        * OLD: `album__name__icontains='mal'`
        * NEW: can be also written as `Track.album.name.icontains('mal')`
-    *  in - sql ` column IN (<VALUE1>, <VALUE2>, ...)`
+    * in - sql ` column IN (<VALUE1>, <VALUE2>, ...)`
        * OLD: `album__name__in=['Malibu', 'Barclay']`
        * NEW: can be also written as `Track.album.name << ['Malibu', 'Barclay']`
        * NEW: can be also written as `Track.album.name.in_(['Malibu', 'Barclay'])`
-    *  isnull - sql `column IS NULL` (and sql `column IS NOT NULL`) 
+    * isnull - sql `column IS NULL` (and sql `column IS NOT NULL`)
        * OLD: `album__name__isnull=True` (isnotnull `album__name__isnull=False`)
        * NEW: can be also written as `Track.album.name >> None`
        * NEW: can be also written as `Track.album.name.isnull(True)`
        * NEW: not null can be also written as `Track.album.name.isnull(False)`
        * NEW: not null can be also written as `~(Track.album.name >> None)`
        * NEW: not null can be also written as `~(Track.album.name.isnull(True))`
-    *  gt - sql `column > <VALUE>` (greater than)
+    * gt - sql `column > <VALUE>` (greater than)
        * OLD: `position__gt=3`
        * NEW: can be also written as `Track.album.name > 3`
-    *  gte - sql `column >= <VALUE>` (greater or equal than)
+    * gte - sql `column >= <VALUE>` (greater or equal than)
        * OLD: `position__gte=3`
        * NEW: can be also written as `Track.album.name >= 3`
-    *  lt - sql `column < <VALUE>` (lower than)
+    * lt - sql `column < <VALUE>` (lower than)
        * OLD: `position__lt=3`
        * NEW: can be also written as `Track.album.name < 3`
-    *  lte - sql `column <= <VALUE>` (lower equal than)
-       * OLD: `position__lte=3` 
+    * lte - sql `column <= <VALUE>` (lower equal than)
+       * OLD: `position__lte=3`
        * NEW: can be also written as `Track.album.name <= 3`
-    *  startswith - sql `column LIKE '<VALUE>%'` (exact start match)
+    * startswith - sql `column LIKE '<VALUE>%'` (exact start match)
        * OLD: `album__name__startswith='Mal'`
        * NEW: can be also written as `Track.album.name.startswith('Mal')`
-    *  istartswith - sql `column LIKE '<VALUE>%'` (case insensitive)
+    * istartswith - sql `column LIKE '<VALUE>%'` (case insensitive)
        * OLD: `album__name__istartswith='mal'`
        * NEW: can be also written as `Track.album.name.istartswith('mal')`
-    *  endswith - sql `column LIKE '%<VALUE>'` (exact end match)
+    * endswith - sql `column LIKE '%<VALUE>'` (exact end match)
        * OLD: `album__name__endswith='ibu'`
        * NEW: can be also written as `Track.album.name.endswith('ibu')`
-    *  iendswith - sql `column LIKE '%<VALUE>'` (case insensitive)
-       * OLD: `album__name__iendswith='IBU'` 
+    * iendswith - sql `column LIKE '%<VALUE>'` (case insensitive)
+       * OLD: `album__name__iendswith='IBU'`
        * NEW: can be also written as `Track.album.name.iendswith('IBU')`
 * You can provide `FilterGroups` not only in `filter()` and `exclude()` but also in:
   * `get()`
@@ -1348,111 +1073,104 @@ In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies.
   * `first()`
   * `all()`
   * `delete()`
-* With `FilterGroups` (`ormar.and_` and `ormar.or_`) you can now use: 
-  *  `&` - as `and_` instead of next level of nesting
-  *  `|` - as `or_' instead of next level of nesting
-  *  `~` - as negation of the filter group
+* With `FilterGroups` (`ormar.and_` and `ormar.or_`) you can now use:
+  * `&` - as `and_` instead of next level of nesting
+  * `|` - as `or_' instead of next level of nesting
+  * `~` - as negation of the filter group
 * To combine groups of filters into one set of conditions use `&` (sql `AND`) and `|` (sql `OR`)
   ```python
   # Following queries are equivalent:
-  # sql: ( product.name = 'Test'  AND  product.rating >= 3.0 ) 
-  
+  # sql: ( product.name = 'Test'  AND  product.rating >= 3.0 )
+
   # ormar OPTION 1 - OLD one
   Product.objects.filter(name='Test', rating__gte=3.0).get()
-  
+
   # ormar OPTION 2 - OLD one
   Product.objects.filter(ormar.and_(name='Test', rating__gte=3.0)).get()
-  
+
   # ormar OPTION 3 - NEW one (field access)
   Product.objects.filter((Product.name == 'Test') & (Product.rating >=3.0)).get()
   ```
 * Same applies to nested complicated filters
   ```python
   # Following queries are equivalent:
-  # sql: ( product.name = 'Test' AND product.rating >= 3.0 ) 
+  # sql: ( product.name = 'Test' AND product.rating >= 3.0 )
   #       OR (categories.name IN ('Toys', 'Books'))
-  
+
   # ormar OPTION 1 - OLD one
   Product.objects.filter(ormar.or_(
-                            ormar.and_(name='Test', rating__gte=3.0), 
+                            ormar.and_(name='Test', rating__gte=3.0),
                             categories__name__in=['Toys', 'Books'])
                         ).get()
-  
+
   # ormar OPTION 2 - NEW one (instead of nested or use `|`)
   Product.objects.filter(
-                        ormar.and_(name='Test', rating__gte=3.0) | 
+                        ormar.and_(name='Test', rating__gte=3.0) |
                         ormar.and_(categories__name__in=['Toys', 'Books'])
                         ).get()
-  
+
   # ormar OPTION 3 - NEW one (field access)
   Product.objects.filter(
-                        ((Product.name='Test') & (Product.rating >= 3.0)) | 
+                        ((Product.name='Test') & (Product.rating >= 3.0)) |
                         (Product.categories.name << ['Toys', 'Books'])
                         ).get()
   ```
 * Now you can also use field access to provide OrderActions to `order_by()`
   * Order ascending:
     * OLD: `Product.objects.order_by("name").all()`
-    * NEW: `Product.objects.order_by(Product.name.asc()).all()`  
+    * NEW: `Product.objects.order_by(Product.name.asc()).all()`
   * Order descending:
     * OLD: `Product.objects.order_by("-name").all()`
     * NEW: `Product.objects.order_by(Product.name.desc()).all()`
-  * You can of course also combine different models and many order_bys:
-    `Product.objects.order_by([Product.category.name.asc(), Product.name.desc()]).all()`
+  * You can of course also combine different models and many order_bys: `Product.objects.order_by([Product.category.name.asc(), Product.name.desc()]).all()`
 
 ### 🐛 Fixes
 
-*  Not really a bug but rather inconsistency. Providing a filter with nested model i.e. `album__category__name = 'AA'` 
-   is checking if album and category models are included in `select_related()` and if not it's auto-adding them there.
-   The same functionality was not working for `FilterGroups` (`and_` and `or_`), now it works (also for python style filters which return `FilterGroups`).
+* Not really a bug but rather inconsistency. Providing a filter with nested model i.e. `album__category__name = 'AA'` is checking if album and category models are included in `select_related()` and if not it's auto-adding them there. The same functionality was not working for `FilterGroups` (`and_` and `or_`), now it works (also for python style filters which return `FilterGroups`).
 
 ## 0.10.3
 
 ### ✨ Features
 
-* `ForeignKey` and `ManyToMany` now support `skip_reverse: bool = False` flag [#118](https://github.com/collerek/ormar/issues/118).
-  If you set `skip_reverse` flag internally the field is still registered on the other 
-  side of the relationship so you can:
+* `ForeignKey` and `ManyToMany` now support `skip_reverse: bool = False` flag [#118](https://github.com/collerek/ormar/issues/118). If you set `skip_reverse` flag internally the field is still registered on the other side of the relationship so you can:
   * `filter` by related models fields from reverse model
-  * `order_by` by related models fields from reverse model 
-  
+  * `order_by` by related models fields from reverse model
+
   But you cannot:
   * access the related field from reverse model with `related_name`
   * even if you `select_related` from reverse side of the model the returned models won't be populated in reversed instance (the join is not prevented so you still can `filter` and `order_by`)
   * the relation won't be populated in `dict()` and `json()`
   * you cannot pass the nested related objects when populating from `dict()` or `json()` (also through `fastapi`). It will be either ignored or raise error depending on `extra` setting in pydantic `Config`.
-* `Model.save_related()` now can save whole data tree in once [#148](https://github.com/collerek/ormar/discussions/148)
-  meaning:
+* `Model.save_related()` now can save whole data tree in once [#148](https://github.com/collerek/ormar/discussions/148) meaning:
   * it knows if it should save main `Model` or related `Model` first to preserve the relation
-  * it saves main `Model` if 
+  * it saves main `Model` if
     * it's not `saved`,
-    * has no `pk` value 
-    * or `save_all=True` flag is set 
-  
+    * has no `pk` value
+    * or `save_all=True` flag is set
+
     in those cases you don't have to split save into two calls (`save()` and `save_related()`)
   * it supports also `ManyToMany` relations
   * it supports also optional `Through` model values for m2m relations
-*  Add possibility to customize `Through` model relation field names.
-  * By default `Through` model relation names default to related model name in lowercase.
-    So in example like this:
+* Add possibility to customize `Through` model relation field names.
+  * By default `Through` model relation names default to related model name in lowercase. So in example like this:
     ```python
     ... ## course declaration omitted
     class Student(ormar.Model):
         class Meta:
             database = database
             metadata = metadata
-    
+
         id: int = ormar.Integer(primary_key=True)
         name: str = ormar.String(max_length=100)
         courses = ormar.ManyToMany(Course)
-    
+
     ## will produce default Through model like follows (example simplified)
     class StudentCourse(ormar.Model):
         class Meta:
             database = database
             metadata = metadata
             tablename = "students_courses"
-    
+
         id: int = ormar.Integer(primary_key=True)
         student = ormar.ForeignKey(Student) ## default name
         course = ormar.ForeignKey(Course)  # default name
@@ -1460,7 +1178,7 @@ In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies.
   * To customize the names of fields/relation in Through model now you can use new parameters to `ManyToMany`:
     * `through_relation_name` - name of the field leading to the model in which `ManyToMany` is declared
     * `through_reverse_relation_name` - name of the field leading to the model to which `ManyToMany` leads to
-    
+
     Example:
     ```python
     ... # course declaration omitted
@@ -1468,36 +1186,36 @@ In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies.
         class Meta:
             database = database
             metadata = metadata
-    
+
         id: int = ormar.Integer(primary_key=True)
         name: str = ormar.String(max_length=100)
         courses = ormar.ManyToMany(Course,
                                    through_relation_name="student_id",
                                    through_reverse_relation_name="course_id")
-    
+
     # will produce default Through model like follows (example simplified)
     class StudentCourse(ormar.Model):
         class Meta:
             database = database
             metadata = metadata
             tablename = "students_courses"
-    
+
         id: int = ormar.Integer(primary_key=True)
         student_id = ormar.ForeignKey(Student) # set by through_relation_name
         course_id = ormar.ForeignKey(Course)  # set by through_reverse_relation_name
-    ```  
+    ```
 
 ### 🐛 Fixes
 
-*  Fix weakref `ReferenceError` error [#118](https://github.com/collerek/ormar/issues/118)
-*  Fix error raised by Through fields when pydantic `Config.extra="forbid"` is set
-*  Fix bug with `pydantic.PrivateAttr` not being initialized at `__init__` [#149](https://github.com/collerek/ormar/issues/149)
-*  Fix bug with pydantic-type `exclude` in `dict()` with `__all__` key not working
+* Fix weakref `ReferenceError` error [#118](https://github.com/collerek/ormar/issues/118)
+* Fix error raised by Through fields when pydantic `Config.extra="forbid"` is set
+* Fix bug with `pydantic.PrivateAttr` not being initialized at `__init__` [#149](https://github.com/collerek/ormar/issues/149)
+* Fix bug with pydantic-type `exclude` in `dict()` with `__all__` key not working
 
 ### 💬 Other
-*  Introduce link to `sqlalchemy-to-ormar` auto-translator for models
-*  Provide links to fastapi ecosystem libraries that support `ormar`
-*  Add transactions to docs (supported with `databases`)
+* Introduce link to `sqlalchemy-to-ormar` auto-translator for models
+* Provide links to fastapi ecosystem libraries that support `ormar`
+* Add transactions to docs (supported with `databases`)
 
 
 ## 0.10.2
@@ -1505,114 +1223,84 @@ In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies.
 ### ✨ Features
 
 * `Model.save_related(follow=False)` now accept also two additional arguments: `Model.save_related(follow=False, save_all=False, exclude=None)`.
-  *  `save_all:bool` -> By default (so with `save_all=False`) `ormar` only upserts models that are not saved (so new or updated ones), 
-  with `save_all=True` all related models are saved, regardless of `saved` status, which might be useful if updated
-  models comes from api call, so are not changed in the backend.
-  *  `exclude: Union[Set, Dict, None]` -> set/dict of relations to exclude from save, those relation won't be saved even with `follow=True` and `save_all=True`. 
-     To exclude nested relations pass a nested dictionary like: `exclude={"child":{"sub_child": {"exclude_sub_child_realtion"}}}`. The allowed values follow
-     the `fields/exclude_fields` (from `QuerySet`) methods schema so when in doubt you can refer to docs in queries -> selecting subset of fields -> fields.
-*  `Model.update()` method now accepts `_columns: List[str] = None` parameter, that accepts list of column names to update. If passed only those columns will be updated in database.
-   Note that `update()` does not refresh the instance of the Model, so if you change more columns than you pass in `_columns` list your Model instance will have different values than the database!
-*  `Model.model_dump()` method previously included only directly related models or nested models if they were not nullable and not virtual, 
-   now all related models not previously visited without loops are included in `dict()`. This should be not breaking
-   as just more data will be dumped to dict, but it should not be missing.
-*  `QuerySet.delete(each=False, **kwargs)` previously required that you either pass a `filter` (by `**kwargs` or as a separate `filter()` call) or set `each=True` now also accepts
-    `exclude()` calls that generates NOT filter. So either `each=True` needs to be set to delete whole table or at least one of `filter/exclude` clauses.
-*  Same thing applies to `QuerySet.update(each=False, **kwargs)` which also previously required that you either pass a `filter` (by `**kwargs` or as a separate `filter()` call) or set `each=True` now also accepts
-    `exclude()` calls that generates NOT filter. So either `each=True` needs to be set to update whole table or at least one of `filter/exclude` clauses.
-*  Same thing applies to `QuerysetProxy.update(each=False, **kwargs)` which also previously required that you either pass a `filter` (by `**kwargs` or as a separate `filter()` call) or set `each=True` now also accepts
-    `exclude()` calls that generates NOT filter. So either `each=True` needs to be set to update whole table or at least one of `filter/exclude` clauses.
+  * `save_all:bool` -> By default (so with `save_all=False`) `ormar` only upserts models that are not saved (so new or updated ones), with `save_all=True` all related models are saved, regardless of `saved` status, which might be useful if updated models comes from api call, so are not changed in the backend.
+  * `exclude: Union[Set, Dict, None]` -> set/dict of relations to exclude from save, those relation won't be saved even with `follow=True` and `save_all=True`. To exclude nested relations pass a nested dictionary like: `exclude={"child":{"sub_child": {"exclude_sub_child_realtion"}}}`. The allowed values follow the `fields/exclude_fields` (from `QuerySet`) methods schema so when in doubt you can refer to docs in queries -> selecting subset of fields -> fields.
+* `Model.update()` method now accepts `_columns: List[str] = None` parameter, that accepts list of column names to update. If passed only those columns will be updated in database. Note that `update()` does not refresh the instance of the Model, so if you change more columns than you pass in `_columns` list your Model instance will have different values than the database!
+* `Model.model_dump()` method previously included only directly related models or nested models if they were not nullable and not virtual, now all related models not previously visited without loops are included in `dict()`. This should be not breaking as just more data will be dumped to dict, but it should not be missing.
+* `QuerySet.delete(each=False, **kwargs)` previously required that you either pass a `filter` (by `**kwargs` or as a separate `filter()` call) or set `each=True` now also accepts `exclude()` calls that generates NOT filter. So either `each=True` needs to be set to delete whole table or at least one of `filter/exclude` clauses.
+* Same thing applies to `QuerySet.update(each=False, **kwargs)` which also previously required that you either pass a `filter` (by `**kwargs` or as a separate `filter()` call) or set `each=True` now also accepts `exclude()` calls that generates NOT filter. So either `each=True` needs to be set to update whole table or at least one of `filter/exclude` clauses.
+* Same thing applies to `QuerysetProxy.update(each=False, **kwargs)` which also previously required that you either pass a `filter` (by `**kwargs` or as a separate `filter()` call) or set `each=True` now also accepts `exclude()` calls that generates NOT filter. So either `each=True` needs to be set to update whole table or at least one of `filter/exclude` clauses.
 
 ### 🐛 Fixes
 
-*  Fix improper relation field resolution in `QuerysetProxy` if fk column has different database alias.
-*  Fix hitting recursion error with very complicated models structure with loops when calling `dict()`.
-*  Fix bug when two non-relation fields were merged (appended) in query result when they were not relation fields (i.e. JSON)
-*  Fix bug when during translation to dict from list the same relation name is used in chain but leads to different models
-*  Fix bug when bulk_create would try to save also `property_field` decorated methods and `pydantic` fields
-*  Fix wrong merging of deeply nested chain of reversed relations
+* Fix improper relation field resolution in `QuerysetProxy` if fk column has different database alias.
+* Fix hitting recursion error with very complicated models structure with loops when calling `dict()`.
+* Fix bug when two non-relation fields were merged (appended) in query result when they were not relation fields (i.e. JSON)
+* Fix bug when during translation to dict from list the same relation name is used in chain but leads to different models
+* Fix bug when bulk_create would try to save also `property_field` decorated methods and `pydantic` fields
+* Fix wrong merging of deeply nested chain of reversed relations
 
 ### 💬 Other
 
-*  Performance optimizations
-*  Split tests into packages based on tested area
+* Performance optimizations
+* Split tests into packages based on tested area
 
 ## 0.10.1
 
 ### Features
 
 * add `get_or_none(**kwargs)` method to `QuerySet` and `QuerysetProxy`. It is exact equivalent of `get(**kwargs)` but instead of raising `ormar.NoMatch` exception if there is no db record matching the criteria, `get_or_none` simply returns `None`.
-  
+
 ### Fixes
 
-*  Fix dialect dependent quoting of column and table names in order_by clauses not working
-   properly in postgres.
+* Fix dialect dependent quoting of column and table names in order_by clauses not working properly in postgres.
 
 ## 0.10.0
 
 ### Breaking
 
-*  Dropped supported for long deprecated notation of field definition in which you use ormar fields as type hints i.e. `test_field: ormar.Integger() = None`
-*  Improved type hints -> `mypy` can properly resolve related models fields (`ForeignKey` and `ManyToMany`) as well as return types of `QuerySet` methods. 
-   Those mentioned are now returning proper model (i.e. `Book`) instead or `ormar.Model` type. There is still problem with reverse sides of relation and `QuerysetProxy` methods, 
-   to ease type hints now those return `Any`. Partially fixes #112.
+* Dropped supported for long deprecated notation of field definition in which you use ormar fields as type hints i.e. `test_field: ormar.Integger() = None`
+* Improved type hints -> `mypy` can properly resolve related models fields (`ForeignKey` and `ManyToMany`) as well as return types of `QuerySet` methods. Those mentioned are now returning proper model (i.e. `Book`) instead or `ormar.Model` type. There is still problem with reverse sides of relation and `QuerysetProxy` methods, to ease type hints now those return `Any`. Partially fixes #112.
 
 ### Features
 
-* add `select_all(follow: bool = False)` method to `QuerySet` and `QuerysetProxy`. 
-  It is kind of equivalent of the Model's `load_all()` method but can be used directly in a query.
-  By default `select_all()` adds only directly related models, with `follow=True` also related models
-  of related models are added without loops in relations. Note that it's not and end `async` model
-  so you still have to issue `get()`, `all()` etc. as `select_all()` returns a QuerySet (or proxy)
-  like `fields()` or `order_by()`.
+* add `select_all(follow: bool = False)` method to `QuerySet` and `QuerysetProxy`. It is kind of equivalent of the Model's `load_all()` method but can be used directly in a query. By default `select_all()` adds only directly related models, with `follow=True` also related models of related models are added without loops in relations. Note that it's not and end `async` model so you still have to issue `get()`, `all()` etc. as `select_all()` returns a QuerySet (or proxy) like `fields()` or `order_by()`.
 
 ### Internals
 
-*  `ormar` fields are no longer stored as classes in `Meta.model_fields` dictionary 
-   but instead they are stored as instances.
+* `ormar` fields are no longer stored as classes in `Meta.model_fields` dictionary but instead they are stored as instances.
 
 ## 0.9.9
 
 ### Features
-*  Add possibility to change default ordering of relations and models.
+* Add possibility to change default ordering of relations and models.
     * To change model sorting pass `orders_by = [columns]` where `columns: List[str]` to model `Meta` class
     * To change relation order_by pass `orders_by = [columns]` where `columns: List[str]`
     * To change reverse relation order_by pass `related_orders_by = [columns]` where `columns: List[str]`
     * Arguments can be column names or `-{col_name}` to sort descending
-    * In relations you can sort only by directly related model columns 
-      or for `ManyToMany` columns also `Through` model columns `"{through_field_name}__{column_name}"`
+    * In relations you can sort only by directly related model columns or for `ManyToMany` columns also `Through` model columns `"{through_field_name}__{column_name}"`
     * Order in which order_by clauses are applied is as follows:
       * Explicitly passed `order_by()` calls in query
       * Relation passed `orders_by` if exists
       * Model `Meta` class `orders_by`
       * Model primary key column asc (fallback, used if none of above provided)
-*  Add 4 new aggregated functions -> `min`, `max`, `sum` and `avg` that are their 
-   corresponding sql equivalents. 
-    *  You can pass one or many column names including related columns.
-    *  As of now each column passed is aggregated separately (so `sum(col1+col2)` is not possible, 
-       you can have `sum(col1, col2)` and later add 2 returned sums in python)
-    *  You cannot `sum` and `avg` non numeric columns
-    *  If you aggregate on one column, the single value is directly returned as a result
-    *  If you aggregate on multiple columns a dictionary with column: result pairs is returned
-*  Add 4 new signals -> `pre_relation_add`, `post_relation_add`, `pre_relation_remove` and `post_relation_remove`
-    *  The newly added signals are emitted for `ManyToMany` relations (both sides) 
-       and reverse side of `ForeignKey` relation (same as `QuerysetProxy` is exposed).
-    *  Signals receive following args: `sender: Type[Model]` - sender class, 
-       `instance: Model` - instance to which related model is added, `child: Model` - model being added,
-       `relation_name: str` - name of the relation to which child is added, 
-       for add signals also `passed_kwargs: Dict` - dict of kwargs passed to `add()`
+* Add 4 new aggregated functions -> `min`, `max`, `sum` and `avg` that are their corresponding sql equivalents.
+    * You can pass one or many column names including related columns.
+    * As of now each column passed is aggregated separately (so `sum(col1+col2)` is not possible, you can have `sum(col1, col2)` and later add 2 returned sums in python)
+    * You cannot `sum` and `avg` non numeric columns
+    * If you aggregate on one column, the single value is directly returned as a result
+    * If you aggregate on multiple columns a dictionary with column: result pairs is returned
+* Add 4 new signals -> `pre_relation_add`, `post_relation_add`, `pre_relation_remove` and `post_relation_remove`
+    * The newly added signals are emitted for `ManyToMany` relations (both sides) and reverse side of `ForeignKey` relation (same as `QuerysetProxy` is exposed).
+    * Signals receive following args: `sender: Type[Model]` - sender class, `instance: Model` - instance to which related model is added, `child: Model` - model being added, `relation_name: str` - name of the relation to which child is added, for add signals also `passed_kwargs: Dict` - dict of kwargs passed to `add()`
 
 ### Changes
-* `Through` models for ManyToMany relations are now instantiated on creation, deletion and update, so you can provide not only
-  autoincrement int as a primary key but any column type with default function provided.
-* Since `Through` models are now instantiated you can also subscribe to `Through` model 
-  pre/post save/update/delete signals
-* `pre_update` signals receivers now get also passed_args argument which is a 
-  dict of values passed to update function if any (else empty dict)
-  
+* `Through` models for ManyToMany relations are now instantiated on creation, deletion and update, so you can provide not only autoincrement int as a primary key but any column type with default function provided.
+* Since `Through` models are now instantiated you can also subscribe to `Through` model pre/post save/update/delete signals
+* `pre_update` signals receivers now get also passed_args argument which is a dict of values passed to update function if any (else empty dict)
+
 ### Fixes
-* `pre_update` signal now is sent before the extraction of values so you can modify the passed
-  instance in place and modified fields values will be reflected in database
+* `pre_update` signal now is sent before the extraction of values so you can modify the passed instance in place and modified fields values will be reflected in database
 * `bulk_update` now works correctly also with `UUID` primary key column type
 
 
@@ -1637,14 +1325,12 @@ In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies.
 ## 0.9.7
 
 ### Features
-* Add `isnull` operator to filter and exclude methods. 
+* Add `isnull` operator to filter and exclude methods.
     ```python
     album__name__isnull=True #(sql: album.name is null)
     album__name__isnull=False #(sql: album.name is not null))
     ```
-* Add `ormar.or_` and `ormar.and_` functions that can be used to compose
-  complex queries with nested conditions. 
-  Sample query:
+* Add `ormar.or_` and `ormar.and_` functions that can be used to compose complex queries with nested conditions. Sample query:
   ```python
   books = (
       await Book.objects.select_related("author")
@@ -1665,36 +1351,23 @@ In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies.
 ## 0.9.6
 
 ##Important
-* `Through` model for `ManyToMany` relations now **becomes optional**. It's not a breaking change
-  since if you provide it everything works just fine as it used to. So if you don't want or need any additional 
-  fields on `Through` model you can skip it. Note that it's going to be created for you automatically and 
-  still has to be included in example in `alembic` migrations. 
-  If you want to delete existing one check the default naming convention to adjust your existing database structure.
+* `Through` model for `ManyToMany` relations now **becomes optional**. It's not a breaking change since if you provide it everything works just fine as it used to. So if you don't want or need any additional fields on `Through` model you can skip it. Note that it's going to be created for you automatically and still has to be included in example in `alembic` migrations. If you want to delete existing one check the default naming convention to adjust your existing database structure.
 
-  Note that you still need to provide it if you want to 
-  customize the `Through` model name or the database table name.
+  Note that you still need to provide it if you want to customize the `Through` model name or the database table name.
 
 ### Features
-* Add `update` method to `QuerysetProxy` so now it's possible to update related models directly from parent model
-  in `ManyToMany` relations and in reverse `ForeignKey` relations. Note that update like in `QuerySet` `update` returns number of
-  updated models and **does not update related models in place** on parent model. To get the refreshed data on parent model you need to refresh
-  the related models (i.e. `await model_instance.related.all()`)
-* Add `load_all(follow=False, exclude=None)` model method that allows to load current instance of the model
-  with all related models in one call. By default it loads only directly related models but setting
-  `follow=True` causes traversing the tree (avoiding loops). You can also pass `exclude` parameter
-  that works the same as `QuerySet.exclude_fields()` method.
+* Add `update` method to `QuerysetProxy` so now it's possible to update related models directly from parent model in `ManyToMany` relations and in reverse `ForeignKey` relations. Note that update like in `QuerySet` `update` returns number of updated models and **does not update related models in place** on parent model. To get the refreshed data on parent model you need to refresh the related models (i.e. `await model_instance.related.all()`)
+* Add `load_all(follow=False, exclude=None)` model method that allows to load current instance of the model with all related models in one call. By default it loads only directly related models but setting `follow=True` causes traversing the tree (avoiding loops). You can also pass `exclude` parameter that works the same as `QuerySet.exclude_fields()` method.
 * Added possibility to add more fields on `Through` model for `ManyToMany` relationships:
     * name of the through model field is the lowercase name of the Through class
     * you can pass additional fields when calling `add(child, **kwargs)` on relation (on `QuerysetProxy`)
-    * you can pass additional fields when calling `create(**kwargs)` on relation (on `QuerysetProxy`)
-        when one of the keyword arguments should be the through model name with a dict of values
+    * you can pass additional fields when calling `create(**kwargs)` on relation (on `QuerysetProxy`) when one of the keyword arguments should be the through model name with a dict of values
     * you can order by on through model fields
     * you can filter on through model fields
     * you can include and exclude fields on through models
     * through models are attached only to related models (i.e. if you query from A to B -> only on B)
-    * note that through models are explicitly loaded without relations -> relation is already populated in ManyToMany field. 
-    * note that just like before you cannot declare the relation fields on through model, they will be populated for you by `ormar`,
-      but now if you try to do so `ModelDefinitionError` will be thrown
+    * note that through models are explicitly loaded without relations -> relation is already populated in ManyToMany field.
+    * note that just like before you cannot declare the relation fields on through model, they will be populated for you by `ormar`, but now if you try to do so `ModelDefinitionError` will be thrown
     * check the updated ManyToMany relation docs for more information
 
 ## Other
@@ -1719,7 +1392,7 @@ In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies.
 
 ### Fixes
 * Fix `JSON` field being double escaped when setting value after initialization
-* Fix `JSON` field not respecting `nullable` field setting due to `pydantic` internals 
+* Fix `JSON` field not respecting `nullable` field setting due to `pydantic` internals
 * Fix `choices` verification for `JSON` field
 * Fix `choices` not being verified when setting the attribute after initialization
 * Fix `choices` not being verified during `update` call from `QuerySet`
@@ -1744,25 +1417,15 @@ In 0.10.9 ormar excludes versions with vulnerability in pinned dependencies.
 ## 0.9.0
 
 ### Important
-* **Braking Fix:** Version 0.8.0 introduced a bug that prevents generation of foreign_keys constraint in the database,
-both in alembic and during creation through sqlalchemy.engine, this is fixed now.
-* **THEREFORE IF YOU USE VERSION >=0.8.0 YOU ARE STRONGLY ADVISED TO UPDATE** cause despite
-that most of the `ormar` functions are working your database **CREATED with ormar (or ormar + alembic)** 
-  does not have relations and suffer from perspective of performance and data integrity.
-* If you were using `ormar` to connect to existing database your performance and integrity 
-  should be fine nevertheless you should update to reflect all future schema updates in your models.
+* **Braking Fix:** Version 0.8.0 introduced a bug that prevents generation of foreign_keys constraint in the database, both in alembic and during creation through sqlalchemy.engine, this is fixed now.
+* **THEREFORE IF YOU USE VERSION >=0.8.0 YOU ARE STRONGLY ADVISED TO UPDATE** cause despite that most of the `ormar` functions are working your database **CREATED with ormar (or ormar + alembic)** does not have relations and suffer from perspective of performance and data integrity.
+* If you were using `ormar` to connect to existing database your performance and integrity should be fine nevertheless you should update to reflect all future schema updates in your models.
 
 
 ### Breaking
-* **Breaking:** All foreign_keys and unique constraints now have a name so `alembic` 
-  can identify them in db and not depend on db
-* **Breaking:** During model construction if `Meta` class of the `Model` does not 
-  include `metadata` or `database` now `ModelDefinitionError` will be raised instead of generic `AttributeError`.
-* **Breaking:** `encode/databases` used for running the queries does not have a connection pool
-for sqlite backend, meaning that each query is run with a new connection and there is no way to 
-  enable enforcing ForeignKeys constraints as those are by default turned off on every connection.
-  This is changed in `ormar` since >=0.9.0 and by default each sqlite3 query has `"PRAGMA foreign_keys=1;"`
-  run so now each sqlite3 connection by default enforces ForeignKey constraints including cascades.
+* **Breaking:** All foreign_keys and unique constraints now have a name so `alembic` can identify them in db and not depend on db
+* **Breaking:** During model construction if `Meta` class of the `Model` does not include `metadata` or `database` now `ModelDefinitionError` will be raised instead of generic `AttributeError`.
+* **Breaking:** `encode/databases` used for running the queries does not have a connection pool for sqlite backend, meaning that each query is run with a new connection and there is no way to enable enforcing ForeignKeys constraints as those are by default turned off on every connection. This is changed in `ormar` since >=0.9.0 and by default each sqlite3 query has `"PRAGMA foreign_keys=1;"` run so now each sqlite3 connection by default enforces ForeignKey constraints including cascades.
 
 ### Other
 
@@ -1773,21 +1436,18 @@ for sqlite backend, meaning that each query is run with a new connection and the
 
 ### Features
 
-* Introduce processing of `ForwardRef` in relations. 
-  Now you can create self-referencing models - both `ForeignKey` and `ManyToMany` relations. 
-  `ForwardRef` can be used both for `to` and `through` `Models`.
+* Introduce processing of `ForwardRef` in relations. Now you can create self-referencing models - both `ForeignKey` and `ManyToMany` relations. `ForwardRef` can be used both for `to` and `through` `Models`.
 * Introduce the possibility to perform two **same relation** joins in one query, so to process complex relations like:
   ```
       B = X = Y
     //
-   A 
+   A
     \
       C = X = Y <= before you could link from X to Y only once in one query
-                   unless two different relation were used 
+                   unless two different relation were used
                    (two relation fields with different names)
   ```
-* Introduce the `paginate` method that allows to limit/offset by `page` and `page_size`. 
-  Available for `QuerySet` and `QuerysetProxy`.
+* Introduce the `paginate` method that allows to limit/offset by `page` and `page_size`. Available for `QuerySet` and `QuerysetProxy`.
 
 ### Other
 
@@ -1798,10 +1458,8 @@ for sqlite backend, meaning that each query is run with a new connection and the
 ## 0.8.0
 
 ### Breaking
-* **Breaking:** `remove()` parent from child side in reverse ForeignKey relation now requires passing a relation `name`,
-as the same model can be registered multiple times and `ormar` needs to know from which relation on the parent you want to remove the child.
-* **Breaking:** applying `limit` and `offset` with `select_related` is by default applied only on the main table before the join -> meaning that not the total
-  number of rows is limited but just number of main models (first one in the query, the one used to construct it). You can still limit all rows from db response with `limit_raw_sql=True` flag on either `limit` or `offset` (or both)
+* **Breaking:** `remove()` parent from child side in reverse ForeignKey relation now requires passing a relation `name`, as the same model can be registered multiple times and `ormar` needs to know from which relation on the parent you want to remove the child.
+* **Breaking:** applying `limit` and `offset` with `select_related` is by default applied only on the main table before the join -> meaning that not the total number of rows is limited but just number of main models (first one in the query, the one used to construct it). You can still limit all rows from db response with `limit_raw_sql=True` flag on either `limit` or `offset` (or both)
 * **Breaking:** issuing `first()` now fetches the first row ordered by the primary key asc (so first one inserted (can be different for non number primary keys - i.e. alphabetical order of string))
 * **Breaking:** issuing `get()` **without any filters** now fetches the first row ordered by the primary key desc (so should be last one inserted (can be different for non number primary keys - i.e. alphabetical order of string))
 * **Breaking (internal):** sqlalchemy columns kept at `Meta.columns` are no longer bind to table, so you cannot get the column straight from there
@@ -1816,14 +1474,14 @@ as the same model can be registered multiple times and `ormar` needs to know fro
 ### Fixes
 * Fix minor bug in `order_by` for primary model order bys
 * Fix in `prefetch_query` for multiple related_names for the same model.
-* Fix using same `related_name` on different models leading to the same related `Model` overwriting each other, now `ModelDefinitionError` is raised and you need to change the name. 
+* Fix using same `related_name` on different models leading to the same related `Model` overwriting each other, now `ModelDefinitionError` is raised and you need to change the name.
 * Fix `order_by` overwriting conditions when multiple joins to the same table applied.
 
 ### Docs
 * Split and cleanup in docs:
-    *  Divide models section into subsections
-    *  Divide relations section into subsections
-    *  Divide fields section into subsections
+    * Divide models section into subsections
+    * Divide relations section into subsections
+    * Divide fields section into subsections
 * Add model inheritance section
 * Add API (BETA) documentation
 
@@ -1853,61 +1511,56 @@ as the same model can be registered multiple times and `ormar` needs to know fro
 
 ## 0.7.0
 
-*  **Breaking:** QuerySet `bulk_update` method now raises `ModelPersistenceError` for unsaved models passed instead of `QueryDefinitionError`
-*  **Breaking:** Model initialization with unknown field name now raises `ModelError` instead of `KeyError`
-*  Added **Signals**, with pre-defined list signals and decorators: `post_delete`, `post_save`, `post_update`, `pre_delete`, 
-`pre_save`, `pre_update`
-*  Add `py.typed` and modify `setup.py` for mypy support 
-*  Performance optimization
-*  Updated docs
+* **Breaking:** QuerySet `bulk_update` method now raises `ModelPersistenceError` for unsaved models passed instead of `QueryDefinitionError`
+* **Breaking:** Model initialization with unknown field name now raises `ModelError` instead of `KeyError`
+* Added **Signals**, with pre-defined list signals and decorators: `post_delete`, `post_save`, `post_update`, `pre_delete`, `pre_save`, `pre_update`
+* Add `py.typed` and modify `setup.py` for mypy support
+* Performance optimization
+* Updated docs
 
 ## 0.6.2
 
-*  Performance optimization
-*  Fix for bug with `pydantic_only` fields being required
-*  Add `property_field` decorator that registers a function as a property that will 
-   be included in `Model.model_dump()` and in `fastapi` response
-*  Update docs
+* Performance optimization
+* Fix for bug with `pydantic_only` fields being required
+* Add `property_field` decorator that registers a function as a property that will be included in `Model.model_dump()` and in `fastapi` response
+* Update docs
 
 ## 0.6.1
 
-* Explicitly set None to excluded nullable fields to avoid pydantic setting a default value (fix [#60][#60]). 
+* Explicitly set None to excluded nullable fields to avoid pydantic setting a default value (fix [#60][#60]).
 
 ## 0.6.0
 
-*  **Breaking:** calling instance.load() when the instance row was deleted from db now raises `NoMatch` instead of `ValueError`
-*  **Breaking:** calling add and remove on ReverseForeignKey relation now updates the child model in db setting/removing fk column
-*  **Breaking:** ReverseForeignKey relation now exposes QuerySetProxy API like ManyToMany relation
-*  **Breaking:** querying related models from ManyToMany cleans list of related models loaded on parent model:
-    *  Example: `post.categories.first()` will set post.categories to list of 1 related model -> the one returned by first()
-    *  Example 2: if post has 4 categories so `len(post.categories) == 4` calling `post.categories.limit(2).all()` -> will load only 2 children and now `assert len(post.categories) == 2`
-*  Added `get_or_create`, `update_or_create`, `fields`, `exclude_fields`, `exclude`, `prefetch_related` and `order_by` to QuerySetProxy 
-so now you can use those methods directly from relation  
-*  Update docs
+* **Breaking:** calling instance.load() when the instance row was deleted from db now raises `NoMatch` instead of `ValueError`
+* **Breaking:** calling add and remove on ReverseForeignKey relation now updates the child model in db setting/removing fk column
+* **Breaking:** ReverseForeignKey relation now exposes QuerySetProxy API like ManyToMany relation
+* **Breaking:** querying related models from ManyToMany cleans list of related models loaded on parent model:
+    * Example: `post.categories.first()` will set post.categories to list of 1 related model -> the one returned by first()
+    * Example 2: if post has 4 categories so `len(post.categories) == 4` calling `post.categories.limit(2).all()` -> will load only 2 children and now `assert len(post.categories) == 2`
+* Added `get_or_create`, `update_or_create`, `fields`, `exclude_fields`, `exclude`, `prefetch_related` and `order_by` to QuerySetProxy so now you can use those methods directly from relation
+* Update docs
 
 ## 0.5.5
 
-*  Fix for alembic autogenaration of migration `UUID` columns. It should just produce sqlalchemy `CHAR(32)` or `CHAR(36)`
-*  In order for this to work you have to set user_module_prefix='sa.' (must be equal to sqlalchemy_module_prefix option (default 'sa.'))
+* Fix for alembic autogenaration of migration `UUID` columns. It should just produce sqlalchemy `CHAR(32)` or `CHAR(36)`
+* In order for this to work you have to set user_module_prefix='sa.' (must be equal to sqlalchemy_module_prefix option (default 'sa.'))
 
 ## 0.5.4
 
-*  Allow to pass `uuid_format` (allowed 'hex'(default) or 'string') to `UUID` field to change the format in which it's saved.
-   By default field is saved in hex format (trimmed to 32 chars (without dashes)), but you can pass 
-   format='string' to use 36 (with dashes) instead to adjust to existing db or other libraries.
-   
+* Allow to pass `uuid_format` (allowed 'hex'(default) or 'string') to `UUID` field to change the format in which it's saved. By default field is saved in hex format (trimmed to 32 chars (without dashes)), but you can pass format='string' to use 36 (with dashes) instead to adjust to existing db or other libraries.
+
    Sample:
-   *  hex value = c616ab438cce49dbbf4380d109251dce
-   *  string value = c616ab43-8cce-49db-bf43-80d109251dce
+   * hex value = c616ab438cce49dbbf4380d109251dce
+   * string value = c616ab43-8cce-49db-bf43-80d109251dce
 
 ## 0.5.3
 
-*  Fixed bug in `Model.model_dump()` method that was ignoring exclude parameter and not include dictionary argument.
+* Fixed bug in `Model.model_dump()` method that was ignoring exclude parameter and not include dictionary argument.
 
 ## 0.5.2
 
-*  Added `prefetch_related` method to load subsequent models in separate queries.
-*  Update docs
+* Added `prefetch_related` method to load subsequent models in separate queries.
+* Update docs
 
 ## 0.5.1
 
@@ -1917,56 +1570,56 @@ so now you can use those methods directly from relation
 ## 0.5.0
 
 * Added save status -> you can check if model is saved with `ModelInstance.saved` property
-    *  Model is saved after `save/update/load/upsert` method on model
-    *  Model is saved after `create/get/first/all/get_or_create/update_or_create` method
-    *  Model is saved when passed to `bulk_update` and `bulk_create`
-    *  Model is saved after adding/removing `ManyToMany` related objects (through model instance auto saved/deleted)
-    *  Model is **not** saved after change of any own field (including pk as `Model.pk` alias)
-    *  Model is **not** saved after adding/removing `ForeignKey` related object (fk column not saved)
-    *  Model is **not** saved after instantiation with `__init__` (w/o `QuerySet.create` or before calling `save`)
-*  Added `Model.upsert(**kwargs)` that performs `save()` if pk not set otherwise `update(**kwargs)`
-*  Added `Model.save_related(follow=False)` that iterates all related objects in all relations and checks if they are saved. If not it calls `upsert()` on each of them.
-*  **Breaking:** added raising exceptions if `add`-ing/`remove`-ing not saved (pk is None) models to `ManyToMany` relation
-*  Allow passing dictionaries and sets to fields and exclude_fields
-*  Auto translate str and lists to dicts for fields and exclude_fields
-*  **Breaking:** passing nested models to fields and exclude_fields is now by related ForeignKey name and not by target model name 
-*  Performance optimizations - in modelproxy, newbasemodel - > less queries, some properties are cached on models
-*  Cleanup of unused relations code
-*  Optional performance dependency orjson added (**strongly recommended**)
-*  Updated docs
+    * Model is saved after `save/update/load/upsert` method on model
+    * Model is saved after `create/get/first/all/get_or_create/update_or_create` method
+    * Model is saved when passed to `bulk_update` and `bulk_create`
+    * Model is saved after adding/removing `ManyToMany` related objects (through model instance auto saved/deleted)
+    * Model is **not** saved after change of any own field (including pk as `Model.pk` alias)
+    * Model is **not** saved after adding/removing `ForeignKey` related object (fk column not saved)
+    * Model is **not** saved after instantiation with `__init__` (w/o `QuerySet.create` or before calling `save`)
+* Added `Model.upsert(**kwargs)` that performs `save()` if pk not set otherwise `update(**kwargs)`
+* Added `Model.save_related(follow=False)` that iterates all related objects in all relations and checks if they are saved. If not it calls `upsert()` on each of them.
+* **Breaking:** added raising exceptions if `add`-ing/`remove`-ing not saved (pk is None) models to `ManyToMany` relation
+* Allow passing dictionaries and sets to fields and exclude_fields
+* Auto translate str and lists to dicts for fields and exclude_fields
+* **Breaking:** passing nested models to fields and exclude_fields is now by related ForeignKey name and not by target model name
+* Performance optimizations - in modelproxy, newbasemodel - > less queries, some properties are cached on models
+* Cleanup of unused relations code
+* Optional performance dependency orjson added (**strongly recommended**)
+* Updated docs
 
 ## 0.4.4
 
-*  add exclude_fields() method to exclude fields from sql
-*  refactor column names setting (aliases)
-*  fix ordering by for column with aliases
-*  additional tests for fields and exclude_fields
-*  update docs
+* add exclude_fields() method to exclude fields from sql
+* refactor column names setting (aliases)
+* fix ordering by for column with aliases
+* additional tests for fields and exclude_fields
+* update docs
 
 ## 0.4.3
 
-*  include properties in models.model_dump() and model.model_dump_json()
+* include properties in models.model_dump() and model.model_dump_json()
 
 ## 0.4.2
 
-*  modify creation of pydantic models to allow returning related models with only pk populated
+* modify creation of pydantic models to allow returning related models with only pk populated
 
 ## 0.4.1
 
-*  add order_by method to queryset to allow sorting
-*  update docs
+* add order_by method to queryset to allow sorting
+* update docs
 
 ## 0.4.0
 
-*  Changed notation in Model definition -> now use name = ormar.Field() not name: ormar.Field()
+* Changed notation in Model definition -> now use name = ormar.Field() not name: ormar.Field()
     * Note that old notation is still supported but deprecated and will not play nice with static checkers like mypy and pydantic pycharm plugin
-*  Type hint docs and test
-*  Use mypy for tests also not, only ormar package
-*  Fix scale and precision translation with max_digits and decimal_places pydantic Decimal field
-*  Update docs - add best practices for dependencies
-*  Refactor metaclass and model_fields to play nice with type hints
-*  Add mypy and pydantic plugin to docs 
-*  Expand the docs on ManyToMany relation
+* Type hint docs and test
+* Use mypy for tests also not, only ormar package
+* Fix scale and precision translation with max_digits and decimal_places pydantic Decimal field
+* Update docs - add best practices for dependencies
+* Refactor metaclass and model_fields to play nice with type hints
+* Add mypy and pydantic plugin to docs
+* Expand the docs on ManyToMany relation
 
 ## 0.3.11
 
@@ -1978,52 +1631,52 @@ so now you can use those methods directly from relation
 
 ## 0.3.9
 
-*  Fix json schema generation as of [#19][#19]
-*  Fix for not initialized ManyToMany relations in fastapi copies of ormar.Models
-*  Update docs in regard of fastapi use
-*  Add tests to verify fastapi/docs proper generation
+* Fix json schema generation as of [#19][#19]
+* Fix for not initialized ManyToMany relations in fastapi copies of ormar.Models
+* Update docs in regard of fastapi use
+* Add tests to verify fastapi/docs proper generation
 
 ## 0.3.8
 
-*  Added possibility to provide alternative database column names with name parameter to all fields.
-*  Fix bug with selecting related ManyToMany fields with `fields()` if they are empty.
-*  Updated documentation
+* Added possibility to provide alternative database column names with name parameter to all fields.
+* Fix bug with selecting related ManyToMany fields with `fields()` if they are empty.
+* Updated documentation
 
 ## 0.3.7
 
-*  Publish documentation and update readme
+* Publish documentation and update readme
 
 ## 0.3.6
 
-*  Add fields() method to limit the selected columns from database - only nullable columns can be excluded.
-*  Added UniqueColumns and constraints list in model Meta to build unique constraints on list of columns.
-*  Added UUID field type based on Char(32) column type.
+* Add fields() method to limit the selected columns from database - only nullable columns can be excluded.
+* Added UniqueColumns and constraints list in model Meta to build unique constraints on list of columns.
+* Added UUID field type based on Char(32) column type.
 
 ## 0.3.5
 
-*  Added bulk_create and bulk_update for operations on multiple objects.
+* Added bulk_create and bulk_update for operations on multiple objects.
 
 ## 0.3.4
 
 Add queryset level methods
-*  delete
-*  update
-*  get_or_create
-*  update_or_create
+* delete
+* update
+* get_or_create
+* update_or_create
 
 ## 0.3.3
 
-*  Add additional filters - startswith and endswith
+* Add additional filters - startswith and endswith
 
 ## 0.3.2
 
-*  Add choices parameter to all fields - limiting the accepted values to ones provided
+* Add choices parameter to all fields - limiting the accepted values to ones provided
 
 ## 0.3.1
 
-*  Added exclude to filter where not conditions.
-*  Added tests for mysql and postgres with fixes for postgres.
-*  Rafactors and cleanup.
+* Added exclude to filter where not conditions.
+* Added tests for mysql and postgres with fixes for postgres.
+* Rafactors and cleanup.
 
 ## 0.3.0
 
