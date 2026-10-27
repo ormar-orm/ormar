@@ -795,7 +795,12 @@ class QuerySet(Generic[T]):
         querysets = dict(self._prefetch_querysets)
         for item in related:
             if isinstance(item, Prefetch):
-                querysets[item.relation] = item.queryset
+                if not isinstance(item.queryset, QuerySet):
+                    raise QueryDefinitionError(
+                        f"Prefetch queryset must be a QuerySet, got {item.queryset!r}."
+                    )
+                (path,) = extract_access_chains([item.relation])
+                querysets[path] = item.queryset
         related = [
             item.relation if isinstance(item, Prefetch) else item for item in related
         ]

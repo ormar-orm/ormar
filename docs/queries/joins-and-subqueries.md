@@ -358,9 +358,18 @@ await Author.objects.prefetch_related(
 * The queryset must be of the related model. It can't use `limit()`, `offset()`,
   `paginate()` or `prefetch_related()`; prefetch nested relations with their own
   paths (plain strings or `Prefetch`).
-* For many-to-many relations the queryset can filter and order only by fields of the
-  related model itself.
-* `Prefetch` works in `QuerysetProxy.prefetch_related()` too.
+* Filters and ordering of the queryset may go through relations of the related model
+  (`Book.objects.filter(author__name="Ann")`); those relations are joined only to
+  filter and order, they are not loaded onto the prefetched models (prefetch them
+  with their own path for that). For many-to-many relations the queryset can filter
+  and order only by fields of the related model itself.
+* A relation can't be both `select_related` and prefetched with a queryset.
+* Ordering of the main queryset on the relation (`order_by("books__title")`) comes
+  first, the queryset's ordering after it. `fields()` / `exclude_fields()` of the main
+  queryset for the relation and of the `Prefetch` queryset are combined.
+* Passing several `Prefetch` objects for the same relation keeps the last one.
+* `Prefetch` works in `QuerysetProxy.prefetch_related()` too, and the relation can be
+  given as a string or a field accessor (`Prefetch(Author.books, queryset=...)`).
 
 ## select_related vs prefetch_related
 

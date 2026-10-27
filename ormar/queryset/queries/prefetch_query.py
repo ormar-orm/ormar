@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Optional, Sequence, Union, cast
 
 import ormar_rust_utils
 
+import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.query import Query
@@ -298,13 +299,16 @@ class LoadNode(Node):
         exclude_clauses = copy.deepcopy(queryset.exclude_clauses)
         order_bys = [copy.copy(order) for order in queryset.order_bys]
         for order in order_bys:
-            order.is_source_model_order = True
+            order.is_source_model_order = not order.related_str
         if not self.relation_field.is_multi:
             return PrefetchQuerysetParts(
                 filter_clauses=filter_clauses,
                 exclude_clauses=exclude_clauses,
                 order_bys=order_bys,
-                select_related=list(queryset._select_related),
+                select_related=[
+                    *queryset._select_related,
+                    *(order.related_str for order in order_bys if order.related_str),
+                ],
             )
         actions = [
             *iter_filter_actions(clauses=filter_clauses),
@@ -553,7 +557,8 @@ class PrefetchQuery:
     ) -> None:
         self.model = model_cls
         self.prefetch_querysets = prefetch_querysets or {}
-        self.excludable = excludable
+        # nodes add their own includes/excludes, keep the queryset's untouched
+        self.excludable = ormar.ExcludableItems.from_excludable(excludable)
         self.select_dict = translate_list_to_dict(select_related, default={})
         self.prefetch_dict = translate_list_to_dict(prefetch_related, default={})
         self.orders_by = orders_by
@@ -615,6 +620,11 @@ class PrefetchQuery:
                 "ForeignKeyField", model.ormar_config.model_fields[related]
             )
             if related in select_dict:
+                if relation_path in self.prefetch_querysets:
+                    raise QueryDefinitionError(
+                        f"Prefetch of {relation_path} cannot be combined with "
+                        "select_related of the same relation."
+                    )
                 task: Node = AlreadyLoadedNode(
                     relation_field=relation_field, parent=parent
                 )
