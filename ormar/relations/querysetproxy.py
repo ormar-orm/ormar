@@ -568,6 +568,7 @@ class QuerysetProxy(Generic[T]):
         :return: created model
         :rtype: Model
         """
+        self.to.verify_writable()
         through_kwargs = kwargs.pop(self.through_model_name, {})
         if self.type_ == ormar.RelationType.REVERSE:
             kwargs[self.related_field_name] = self._owner

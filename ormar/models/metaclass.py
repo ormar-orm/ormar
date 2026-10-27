@@ -214,7 +214,13 @@ def update_attrs_from_base_config(  # noqa: CCR001
     :type model_fields: dict[str, BaseField]
     """
 
-    params_to_update = ["metadata", "database", "constraints", "property_fields"]
+    params_to_update = [
+        "metadata",
+        "database",
+        "constraints",
+        "property_fields",
+        "view",
+    ]
     for param in params_to_update:
         current_value = attrs.get("ormar_config", {}).__dict__.get(
             param, ormar.Undefined
@@ -305,6 +311,7 @@ def copy_and_replace_m2m_through_model(  # noqa: CFQ002
         extra=through_class.ormar_config.extra,
         constraints=through_class.ormar_config.constraints,
         order_by=through_class.ormar_config.orders_by,
+        view=through_class.ormar_config.view,
     )
     # a set table keeps the copy from registering one in metadata on creation
     new_config.table = through_class.ormar_config.table
@@ -595,6 +602,7 @@ def wire_proxy_from_parent(new_model: type["Model"]) -> None:
     cfg.table = parent_cfg.table
     cfg.tablename = parent_cfg.tablename
     cfg.pk = parent_cfg.pk.rebind(owner=new_model)
+    cfg.view = parent_cfg.view
     cfg.columns = parent_cfg.columns
     cfg.model_fields = parent_cfg.model_fields
     cfg.metadata = parent_cfg.metadata

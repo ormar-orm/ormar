@@ -6,7 +6,6 @@ from sqlalchemy import Executable
 import ormar.queryset  # noqa I100
 from ormar.exceptions import ModelPersistenceError, NoMatch
 from ormar.models import NewBaseModel  # noqa I100
-from ormar.models.helpers.models import verify_writable
 from ormar.models.model_row import ModelRow
 from ormar.queryset.templates import (
     delete_template,
@@ -111,7 +110,7 @@ class Model(ModelRow):
         :return: saved Model
         :rtype: Model
         """
-        verify_writable(model_cls=type(self))
+        self.verify_writable()
         kwargs.pop("__force_save__", None)
         if self.persisted:
             return await self.update(**kwargs)
@@ -173,7 +172,7 @@ class Model(ModelRow):
         :return: saved Model
         :rtype: Model
         """
-        verify_writable(model_cls=type(self))
+        self.verify_writable()
         await self._emit_signal("pre_save", instance=self)
         self_fields = self._extract_model_db_fields()
 
@@ -279,6 +278,7 @@ class Model(ModelRow):
         :return: number of updated/saved models
         :rtype: int
         """
+        self.verify_writable()
         relation_map = (
             relation_map
             if relation_map is not None
@@ -355,7 +355,7 @@ class Model(ModelRow):
         :return: updated Model
         :rtype: Model
         """
-        verify_writable(model_cls=type(self))
+        self.verify_writable()
         explicit_fields = self.__setattr_fields__ | kwargs.keys()
         values = self.populate_onupdate_value(
             dict(kwargs), explicit_fields=explicit_fields
@@ -411,7 +411,7 @@ class Model(ModelRow):
         :return: number of deleted rows (for some backends)
         :rtype: int
         """
-        verify_writable(model_cls=type(self))
+        self.verify_writable()
         await self._emit_signal("pre_delete", instance=self)
         template = delete_template(model_cls=type(self), pk=self.persisted_key)
         result = await self._execute_query(
