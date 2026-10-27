@@ -151,7 +151,11 @@ def extract_pk_value(value: Any, fields: tuple[str, ...]) -> Any:
         if isinstance(value, pydantic.BaseModel):
             return {field: getattr(value, field, None) for field in fields}
         if isinstance(value, dict):
-            return {field: value.get(field) for field in fields}
+            return {field: value[field] for field in fields if field in value}
+        if not isinstance(value, (tuple, list)) or len(value) != len(fields):
+            raise ValueError(
+                f"Expected a key of {len(fields)} values {list(fields)}, got {value!r}."
+            )
         return dict(zip(fields, value))
     (pkname,) = fields
     if isinstance(value, dict):

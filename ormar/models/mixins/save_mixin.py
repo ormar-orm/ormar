@@ -8,7 +8,7 @@ from pydantic.plugin._schema_validator import (
 from pydantic_core import CoreSchema, SchemaValidator
 
 import ormar  # noqa: I100, I202
-from ormar.exceptions import ModelPersistenceError
+from ormar.exceptions import ModelPersistenceError, QueryDefinitionError
 from ormar.fields.parsers import encode_json
 from ormar.models.excludable import skip_ellipsis
 from ormar.models.mixins import AliasMixin
@@ -120,7 +120,9 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         """
         for field in cls.extract_related_names():
             field_value = model_dict.get(field, None)
-            if field_value is not None:
+            if field_value is None and field in model_dict:
+                cls._expand_missing_relation(model_dict=model_dict, field_name=field)
+            elif field_value is not None:
                 target_field = cast(
                     "ForeignKeyField", cls.ormar_config.model_fields[field]
                 )
@@ -144,6 +146,28 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
                 else:
                     model_dict.pop(field, None)
         return model_dict
+
+    @classmethod
+    def _expand_missing_relation(cls, model_dict: dict, field_name: str) -> None:
+        """
+        A missing foreign key stored in several columns sets all its columns
+        to ``None`` (single-column foreign keys keep their ``None`` value), a
+        missing reverse relation (one-to-one) is dropped, as it has no
+        column.
+
+        :param model_dict: dictionary of the model that is about to be saved
+        :type model_dict: dict
+        :param field_name: name of the relation field holding ``None``
+        :type field_name: str
+        """
+        field = cls.ormar_config.model_fields[field_name]
+        if field.virtual or field.is_multi:
+            model_dict.pop(field_name)
+            return
+        link = cast("ForeignKeyField", field).link
+        if len(link.pairs) > 1:
+            model_dict.pop(field_name)
+            model_dict.update(link.values_for(related=None))
 
     @classmethod
     def reconvert_str_to_bytes(cls, model_dict: dict) -> dict:
@@ -340,6 +364,12 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
             raise ModelPersistenceError(
                 f"You cannot update {field_name} with {target.get_name()} "
                 f"model without pk set!"
+            )
+        parts = tuple(values.values())
+        if len(parts) > 1 and None in parts and any(part is not None for part in parts):
+            raise QueryDefinitionError(
+                f"{field_name} needs a value for each of its columns "
+                f"{list(values)} (or None), got {value!r}."
             )
         if len(values) == 1:
             ((key, single),) = values.items()

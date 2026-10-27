@@ -195,7 +195,9 @@ class FilterAction(QueryAction):
             if binder is not None and self.binds_slot():
                 filter_value = binder.bind(action=self, value=value)
         if self.table_prefix:
-            aliased_table = prefixed_table(self.table_prefix, self.column.table)
+            aliased_table = prefixed_table(
+                alias=self.table_prefix, table=self.column.table
+            )
             aliased_column = getattr(aliased_table.c, self.column.name)
         else:
             aliased_column = self.column
@@ -274,7 +276,7 @@ class KeyInFilterAction(FilterAction):
         )
         table: Any = self.table
         if self.table_prefix:
-            table = prefixed_table(self.table_prefix, table)
+            table = prefixed_table(alias=self.table_prefix, table=table)
         return [table.c[name] for name in names]
 
     def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
@@ -297,11 +299,11 @@ class KeyInFilterAction(FilterAction):
 
 class KeyNullFilterAction(KeyInFilterAction):
     """
-    ``isnull`` filter on a foreign key stored in several columns: a missing
-    relation has every column null::
+    ``isnull`` filter on a foreign key stored in several columns: a relation
+    with any column null references no row, so it counts as missing::
 
         filter(order__isnull=True)
-        # -> WHERE lines.ord_tenant IS NULL AND lines.ord_no IS NULL
+        # -> WHERE lines.ord_tenant IS NULL OR lines.ord_no IS NULL
     """
 
     @staticmethod
@@ -323,8 +325,8 @@ class KeyNullFilterAction(KeyInFilterAction):
         columns = self.key_columns()
         if self.filter_value:
             return cast(
-                TextClause, sqlalchemy.and_(*(column.is_(None) for column in columns))
+                TextClause, sqlalchemy.or_(*(column.is_(None) for column in columns))
             )
         return cast(
-            TextClause, sqlalchemy.or_(*(column.isnot(None) for column in columns))
+            TextClause, sqlalchemy.and_(*(column.isnot(None) for column in columns))
         )

@@ -287,7 +287,32 @@ def _process_fields(
             pk_fields.append(field_name)
         if _is_db_field(field):
             columns.extend(field.get_columns())
+    validate_unique_column_names(model=new_model, columns=columns)
     return tuple(pk_fields), columns
+
+
+def validate_unique_column_names(
+    model: Union[type["Model"], type["NewBaseModel"]], columns: list[sqlalchemy.Column]
+) -> None:
+    """
+    Check that no two fields of a model store the same database column, e.g.
+    a field named like a generated column of a foreign key stored in several
+    columns (``order_tenant_id``).
+
+    :raises ModelDefinitionError: if a column name is used twice
+    :param model: model the columns belong to
+    :type model: Union[type[Model], type[NewBaseModel]]
+    :param columns: columns of the model
+    :type columns: list[sqlalchemy.Column]
+    """
+    seen: set[str] = set()
+    for column in columns:
+        if column.name in seen:
+            raise ormar.ModelDefinitionError(
+                f"Column {column.name} of {model.__name__} is used by two fields, "
+                "rename one of them (name= / columns=)."
+            )
+        seen.add(column.name)
 
 
 def _is_through_model_not_set(field: "BaseField") -> bool:
@@ -501,4 +526,5 @@ def update_column_definition(
     for ind, column in enumerate(columns):
         if column.name == field.get_alias():
             columns[ind : ind + 1] = field.get_columns()
+            validate_unique_column_names(model=model, columns=columns)
             break

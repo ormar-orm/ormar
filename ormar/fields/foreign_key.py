@@ -18,7 +18,11 @@ from pydantic import BaseModel
 import ormar  # noqa I101
 from ormar.exceptions import ModelDefinitionError, RelationshipInstanceError
 from ormar.fields.base import BaseField
-from ormar.fields.key_only import key_only_instance, key_only_model_type
+from ormar.fields.key_only import (
+    key_dict_type,
+    key_only_instance,
+    key_only_model_type,
+)
 from ormar.fields.link import (
     ColumnPair,
     RelationLink,
@@ -142,6 +146,11 @@ def validate_link_columns(
         raise ModelDefinitionError(
             f"columns= must map every referenced column of {to.__name__} "
             f"({sorted(referenced)}) to a column name, got {sorted(columns)}."
+        )
+    if len(referenced) == 1 and columns is not None:
+        raise ModelDefinitionError(
+            f"columns= is for foreign keys to several columns of {to.__name__}, "
+            "use name= to name the column."
         )
     if len(names) > 1 and name is not None:
         raise ModelDefinitionError(
@@ -475,7 +484,9 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         self.ondelete: str = kwargs.pop("ondelete", None)
         self.onupdate: str = kwargs.pop("onupdate", None)
         self.foreign_key_name: Optional[str] = kwargs.pop("foreign_key_name", None)
-        self.to_field: Union[str, list[str], None] = kwargs.pop("to_field", None)
+        self.to_field: Union[str, list[str], tuple[str, ...], None] = kwargs.pop(
+            "to_field", None
+        )
         self.columns: Optional[dict[str, str]] = kwargs.pop("columns", None)
         self.db_constraint: bool = kwargs.pop("db_constraint", True)
         super().__init__(**kwargs)
@@ -627,14 +638,12 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         pairs = self.link.pairs
         if len(pairs) == 1:
             return [self.get_column(pairs[0].source_column)]
-        target_columns = self.to.ormar_config.table.c
+        target_fields = self.to.ormar_config.model_fields
         return [
             sqlalchemy.Column(
-                pair.source_column,
-                target_columns[pair.target_column].type,
+                name=pair.source_column,
+                type_=cast(Any, target_fields[pair.target_field].column_type),
                 nullable=self.sql_nullable,
-                index=self.index,
-                unique=False,
             )
             for pair in pairs
         ]
@@ -650,14 +659,15 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
 
     def construct_table_constraints(self) -> list:
         """
-        :return: the table-level ``FOREIGN KEY (a, b) REFERENCES t (x, y)`` of
-            a foreign key of several columns, empty otherwise
+        :return: the table-level items of a foreign key of several columns:
+            its ``FOREIGN KEY (a, b) REFERENCES t (x, y)``, and a composite
+            unique constraint / index when the field is unique / indexed;
+            empty for other fields
         :rtype: list
         """
         if (
             self.virtual
             or self.is_multi
-            or not self.db_constraint
             or self.has_unresolved_forward_refs()
             or self.owner.ormar_config.view
         ):
@@ -665,23 +675,35 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         pairs = self.link.pairs
         if len(pairs) == 1:
             return []
+        columns = [pair.source_column for pair in pairs]
         owner_table = self.owner.ormar_config.tablename
         target_table = self.to.ormar_config.tablename
-        return [
-            sqlalchemy.ForeignKeyConstraint(
-                [pair.source_column for pair in pairs],
-                [
-                    qualified_fk_reference(
-                        target=self.to, column_alias=pair.target_column
-                    )
-                    for pair in pairs
-                ],
-                ondelete=self.ondelete,
-                onupdate=self.onupdate,
-                name=self.foreign_key_name
-                or f"fk_{owner_table}_{target_table}_{self.name}",
+        items: list = []
+        if self.db_constraint:
+            items.append(
+                sqlalchemy.ForeignKeyConstraint(
+                    columns=columns,
+                    refcolumns=[
+                        qualified_fk_reference(
+                            target=self.to, column_alias=pair.target_column
+                        )
+                        for pair in pairs
+                    ],
+                    ondelete=self.ondelete,
+                    onupdate=self.onupdate,
+                    name=self.foreign_key_name
+                    or f"fk_{owner_table}_{target_table}_{self.name}",
+                )
             )
-        ]
+        if self.unique:
+            items.append(
+                sqlalchemy.UniqueConstraint(
+                    *columns, name=f"uc_{owner_table}_{self.name}"
+                )
+            )
+        if self.index:
+            items.append(sqlalchemy.Index(f"ix_{owner_table}_{self.name}", *columns))
+        return items
 
     def _evaluate_forward_ref(
         self, globalns: Any, localns: Any, is_through: bool = False
@@ -888,7 +910,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         """
         fields = self.flat_fields()
         if len(fields) > 1:
-            return dict[str, Any]
+            return key_dict_type(target=self.to, fields=fields)
         if self.virtual or self.is_multi:
             return self.to.ormar_config.model_fields[fields[0]].__type__
         return self.target_value_type()
@@ -993,6 +1015,9 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
             if to_register:
                 self.register_relation(model=value, child=cast("Model", child))
             return value
+        if value.__class__ is list and not self.virtual and not self.is_multi:
+            # a key of several columns given as a JSON list
+            value = tuple(value)
         return self._constructor_dispatch.get(
             value.__class__.__name__, self._construct_model_from_pk
         )(value, child, to_register)

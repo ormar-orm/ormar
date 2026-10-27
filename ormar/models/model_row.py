@@ -71,8 +71,8 @@ def read_multi_column_keys(
 ) -> None:
     """
     Set the values of foreign keys stored in several columns as tuples of
-    their column values, ``None`` when every column is null. Keys already in
-    ``item`` are kept.
+    their column values, ``None`` when any column is null (a partial key
+    references no row). Keys already in ``item`` are kept.
 
     :param plan: row extraction plan of the model
     :type plan: RowExtractionPlan
@@ -85,7 +85,7 @@ def read_multi_column_keys(
         if field_name in item:
             continue
         parts = tuple(row[column] for column in columns)
-        item[field_name] = None if all(part is None for part in parts) else parts
+        item[field_name] = None if None in parts else parts
 
 
 PlanCache = dict[tuple[type, str, int], RowExtractionPlan]

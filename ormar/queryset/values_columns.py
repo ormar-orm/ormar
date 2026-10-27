@@ -56,7 +56,7 @@ def resolve_column(
     :return: the field the column stores, ``None`` if it isn't returned
     :rtype: Optional[ReturnedColumn]
     """
-    field_name = model_cls.get_column_name_from_alias(alias=column)
+    field_name = model_cls.get_field_name_of_column(column=column)
     if field_name not in allowed:
         return None
     field = model_cls.ormar_config.model_fields.get(field_name)
@@ -231,7 +231,7 @@ def extract_values(rows: list[Any], columns: ValuesColumns, as_dict: bool) -> li
 
     A foreign key stored in several columns is one value: a dict of its
     target fields (``{"tenant_id": 1, "number": 7}``) or, in tuples, a tuple
-    (``(1, 7)``), ``None`` when every column is null.
+    (``(1, 7)``), ``None`` when any of its columns is null.
 
     Rows of a query whose labels are already the returned names, with no
     column skipped, are copied as a whole.
@@ -307,7 +307,7 @@ def group_value(
     if labels[0] not in columns.key_parts:
         return row[labels[0]]
     parts = tuple(row[label] for label in labels)
-    if all(part is None for part in parts):
+    if None in parts:
         return None
     if as_dict:
         return {columns.key_parts[label]: part for label, part in zip(labels, parts)}

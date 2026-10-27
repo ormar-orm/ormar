@@ -944,6 +944,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 expand_reverse_relationship(model_field=field)
                 update_column_definition(model=cls, field=field)
         populate_config_sqlalchemy_table_if_required(config=cls.ormar_config)
+        cls.reset_column_caches()
         # super().update_forward_refs(**localns)
         cls.model_rebuild(
             force=True,

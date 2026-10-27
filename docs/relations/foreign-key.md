@@ -358,9 +358,18 @@ await OrderLine.objects.values_list(["id", "order"])  # [(1, (1, 7))]
 line.model_dump(flatten_fields={"order"})["order"]  # {"tenant_id": 1, "number": 7}
 ```
 
-Only `=`, `__in` and `__isnull` lookups work on the relation itself; filter other
-conditions through the related fields. A foreign key to several columns can't be part
-of a primary key yet.
+* Only `=`, `__in` and `__isnull` lookups work on the relation itself; filter other
+  conditions through the related fields. A key with a missing part
+  (`filter(order={"tenant_id": 1})`) raises `QueryDefinitionError`.
+* `order_by("order")` / `order_by("-order")` sorts by all its columns, in key order.
+* A row with any of the columns `NULL` references no row: the relation reads as
+  `None` and matches `order__isnull=True`.
+* `unique=True` (and `OneToOne`) adds a unique constraint over all the columns,
+  `index=True` one index over them.
+* A key can also be given as a list (`[1, 7]`, as JSON has no tuples). In
+  `get_pydantic(flatten_fields=...)` the relation is a typed dict of the referenced
+  fields, validated per field.
+* A foreign key to several columns can't be part of a primary key yet.
 
 ## Relation Setup
 

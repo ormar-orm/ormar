@@ -380,6 +380,11 @@ def multi_column_filter_actions(
     values = [
         tuple(relation_field.link.values_for(related=item).values()) for item in items
     ]
+    if any(None in key for key in values):
+        raise QueryDefinitionError(
+            f"Filter {name} needs a value for each column of the relation, "
+            f"got {value!r}."
+        )
     return [
         KeyInFilterAction(
             prefix=prefix,

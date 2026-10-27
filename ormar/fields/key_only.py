@@ -5,10 +5,12 @@ but the related model itself was not selected.
 """
 
 import string
+from functools import lru_cache
 from random import choices
 from typing import TYPE_CHECKING, Any, cast
 
 from pydantic import BaseModel, create_model
+from typing_extensions import TypedDict
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.models import Model
@@ -66,3 +68,30 @@ def key_only_instance(*, target: type["Model"], values: dict[str, Any]) -> "Mode
     return cast(
         "Model", target._internal_construct(_pk_only=True, _excluded=None, **init_dict)
     )
+
+
+@lru_cache(maxsize=1024)
+def key_dict_type(target: type["Model"], fields: tuple[str, ...]) -> Any:
+    """
+    Build the ``TypedDict`` of a key of several fields of the target, used as
+    the type of flattened relations (``{"tenant_id": 1, "number": 7}``) so
+    requests are validated per field and OpenAPI lists the fields.
+
+    :param target: model the key belongs to
+    :type target: type[Model]
+    :param fields: fields of the key
+    :type fields: tuple[str, ...]
+    :return: the typed dict class
+    :rtype: Any
+    """
+    key = target.ormar_config.pk
+    model_fields = target.ormar_config.model_fields
+    annotations = {
+        field: (
+            key.part_type(field=field)
+            if field in key.fields
+            else model_fields[field].__type__
+        )
+        for field in fields
+    }
+    return cast(Any, TypedDict)(f"{target.__name__}Key", annotations)

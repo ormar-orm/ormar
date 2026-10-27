@@ -252,7 +252,7 @@ class SqlJoin:
         on_clause = self._on_clause(
             link=relation_field.link, previous_alias=self.own_alias
         )
-        target_table = prefixed_table(self.next_alias, self.to_table)
+        target_table = prefixed_table(alias=self.next_alias, table=self.to_table)
         self.select_from = sqlalchemy.sql.outerjoin(
             self.select_from,  # type: ignore
             target_table,
