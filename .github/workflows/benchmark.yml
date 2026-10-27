@@ -21,7 +21,7 @@ on:
   # performance analysis in order to generate initial data.
   workflow_dispatch:
 
-# Macro runner minutes are limited, so a new push to a PR cancels its previous run.
+# A new push to a PR cancels its previous run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -42,7 +42,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    runs-on: codspeed-macro
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -66,5 +66,5 @@ jobs:
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v5.6.0
         with:
-          mode: walltime
+          mode: simulation
           run: poetry run pytest benchmarks/ --codspeed
