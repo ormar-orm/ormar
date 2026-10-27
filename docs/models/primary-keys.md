@@ -55,10 +55,12 @@ order.pk = (1, 8)  # sets tenant_id and number
 * No part of a composite key autoincrements. Integer parts don't get the default
   autoincrement, and passing `autoincrement=True` raises `ModelDefinitionError`.
   All parts must be set before `save()` (a server default on a part counts as set).
-* Foreign keys and many-to-many relations **to** models with a composite key, and
-  relation fields inside a primary key, are not supported yet and raise
-  `ModelDefinitionError`. A model with a composite key may have foreign keys to
-  models with a single column key, including their reverse relations.
+* Foreign keys can be part of the key (`ForeignKey(..., primary_key=True)`, see
+  [foreign keys in the primary key](../relations/foreign-key.md#foreign-keys-in-the-primary-key)).
+* Foreign keys and many-to-many relations **to** models with a composite key are not
+  supported yet and raise `ModelDefinitionError`. A model with a composite key may
+  have foreign keys to models with a single column key, including their reverse
+  relations.
 
 ## Querying by primary key
 

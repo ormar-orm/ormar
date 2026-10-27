@@ -247,6 +247,75 @@ class Book(ormar.Model):
 When used on an abstract base class, each subclass suffixes the name with its
 own tablename to avoid constraint name collisions across sibling tables.
 
+## Referencing a unique column (`to_field`)
+
+By default a foreign key stores the related model's primary key. Legacy schemas often
+reference another unique column instead; pass its field name as `to_field`. The field
+must be the primary key, have `unique=True`, or be the only column of a
+`UniqueColumns` constraint.
+
+```python
+class Country(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="countries")
+
+    id: int = ormar.Integer(primary_key=True)
+    iso_code: str = ormar.String(max_length=2, unique=True)
+
+
+class Address(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="addresses")
+
+    id: int = ormar.Integer(primary_key=True)
+    country: Optional[Country] = ormar.ForeignKey(
+        Country, to_field="iso_code", name="country_iso"
+    )
+
+
+await Address.objects.create(country="PL")  # by the iso_code value
+address = await Address.objects.get()
+address.country.iso_code  # "PL" - not loaded yet, pk unknown
+await address.country.load()  # loads the country by iso_code
+```
+
+## Relations without a database constraint (`db_constraint`)
+
+`db_constraint=False` creates the column without a `FOREIGN KEY` constraint (for
+tables in another database, partitioned tables or schemas that don't declare their
+foreign keys). Joins, filters and prefetching work the same. `ondelete`/`onupdate`
+need a constraint, so they can't be combined with it.
+
+```python
+class Event(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="events")
+
+    id: int = ormar.Integer(primary_key=True)
+    user: Optional[User] = ormar.ForeignKey(User, db_constraint=False)
+```
+
+## Foreign keys in the primary key
+
+A foreign key can be (part of) the primary key: link tables keyed by their foreign
+keys, or a table sharing its primary key with another one. The key value holds the
+referenced values, not the related models.
+
+```python
+class Enrollment(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="student_course")
+
+    student: Student = ormar.ForeignKey(Student, primary_key=True, name="student_id")
+    course: Course = ormar.ForeignKey(Course, primary_key=True, name="course_id")
+    grade: Optional[int] = ormar.Integer(nullable=True)
+
+
+enrollment = await Enrollment.objects.create(student=ann, course=math)
+enrollment.pk  # (ann.id, math.id)
+await Enrollment.objects.get(pk=(ann.id, math.id))
+await Enrollment.objects.get(student=ann, course=math)  # the same row
+```
+
+Foreign keys in the primary key are not nullable. They can point only at models with
+a single column primary key (or a `to_field`) for now.
+
 ## Relation Setup
 
 You have several ways to set-up a relationship connection.
