@@ -233,20 +233,6 @@ class SlotBinder:
         )
 
 
-def primary_key_bind(column: sqlalchemy.Column) -> BindParameter:
-    """
-    Return the named bind parameter of a primary key filter
-    (``WHERE authors.id = :ormar_pk``), typed like the column so the key gets
-    the column's bind processing (e.g. UUID).
-
-    :param column: primary key column
-    :type column: sqlalchemy.Column
-    :return: named bind parameter
-    :rtype: BindParameter
-    """
-    return sqlalchemy.bindparam(key=PK_SLOT, type_=column.type)
-
-
 def value_binds(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Dict[Any, Any]:
     """
     Return named bind parameters for the written columns, ``ormar_v{i}`` in

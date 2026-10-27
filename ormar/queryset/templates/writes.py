@@ -9,8 +9,8 @@ Each runs one cached statement per model and set of written columns::
     #    {"ormar_v0": "a", "ormar_v1": 1}
 """
 
-import weakref
 from typing import (
+    TYPE_CHECKING,
     Any,
     Mapping,
     Tuple,
@@ -21,35 +21,10 @@ import sqlalchemy
 from sqlalchemy.sql import Executable
 
 from ormar.queryset.templates.cache import StatementTemplate, cached_statement
-from ormar.queryset.templates.slots import (
-    PK_SLOT,
-    primary_key_bind,
-    value_binds,
-    value_params,
-)
+from ormar.queryset.templates.slots import value_binds, value_params
 
-# primary key column per model class, looked up on the first write
-PK_COLUMNS: "weakref.WeakKeyDictionary[type, sqlalchemy.Column]" = (
-    weakref.WeakKeyDictionary()
-)
-
-
-def primary_key_column(model_cls: Type[Any]) -> sqlalchemy.Column:
-    """
-    Return the primary key column of a model's table, resolved once per model,
-    so a write does not look up the column alias of the primary key field
-    every time.
-
-    :param model_cls: model class
-    :type model_cls: Type[Any]
-    :return: primary key column
-    :rtype: sqlalchemy.Column
-    """
-    column = PK_COLUMNS.get(model_cls)
-    if column is None:
-        alias = model_cls.get_column_alias(field_name=model_cls.ormar_config.pkname)
-        column = PK_COLUMNS.setdefault(model_cls, model_cls.ormar_config.table.c[alias])
-    return column
+if TYPE_CHECKING:  # pragma: no cover
+    from ormar.models.primary_key import PrimaryKey
 
 
 def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:
@@ -72,7 +47,7 @@ def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:
 
 
 def build_update(
-    table: sqlalchemy.Table, names: Tuple[str, ...], pk_column: sqlalchemy.Column
+    table: sqlalchemy.Table, names: Tuple[str, ...], primary_key: "PrimaryKey"
 ) -> Executable:
     """
     Build an update of the given columns of one row, by primary key::
@@ -84,19 +59,19 @@ def build_update(
     :type table: sqlalchemy.Table
     :param names: updated column names, sorted
     :type names: Tuple[str, ...]
-    :param pk_column: primary key column
-    :type pk_column: sqlalchemy.Column
+    :param primary_key: primary key of the written model
+    :type primary_key: PrimaryKey
     :return: update statement
     :rtype: Executable
     """
     return (
         table.update()
         .values(value_binds(table=table, names=names))
-        .where(pk_column == primary_key_bind(column=pk_column))
+        .where(primary_key.where_clause(slots=primary_key.bind_slots()))
     )
 
 
-def build_delete(table: sqlalchemy.Table, pk_column: sqlalchemy.Column) -> Executable:
+def build_delete(table: sqlalchemy.Table, primary_key: "PrimaryKey") -> Executable:
     """
     Build a delete of one row, by primary key::
 
@@ -104,17 +79,17 @@ def build_delete(table: sqlalchemy.Table, pk_column: sqlalchemy.Column) -> Execu
 
     :param table: written table
     :type table: sqlalchemy.Table
-    :param pk_column: primary key column
-    :type pk_column: sqlalchemy.Column
+    :param primary_key: primary key of the written model
+    :type primary_key: PrimaryKey
     :return: delete statement
     :rtype: Executable
     """
-    return table.delete().where(pk_column == primary_key_bind(column=pk_column))
+    return table.delete().where(
+        primary_key.where_clause(slots=primary_key.bind_slots())
+    )
 
 
-def build_pk_select(
-    table: sqlalchemy.Table, pk_column: sqlalchemy.Column
-) -> Executable:
+def build_pk_select(table: sqlalchemy.Table, primary_key: "PrimaryKey") -> Executable:
     """
     Build a select of all columns of one row, by primary key::
 
@@ -123,16 +98,18 @@ def build_pk_select(
 
     :param table: queried table
     :type table: sqlalchemy.Table
-    :param pk_column: primary key column
-    :type pk_column: sqlalchemy.Column
+    :param primary_key: primary key of the queried model
+    :type primary_key: PrimaryKey
     :return: select statement
     :rtype: Executable
     """
-    return table.select().where(pk_column == primary_key_bind(column=pk_column))
+    return table.select().where(
+        primary_key.where_clause(slots=primary_key.bind_slots())
+    )
 
 
 def build_bulk_update(
-    table: sqlalchemy.Table, pk_column: sqlalchemy.Column, columns: Tuple[str, ...]
+    table: sqlalchemy.Table, primary_key: "PrimaryKey", columns: Tuple[str, ...]
 ) -> Executable:
     """
     Build the per-row update used by ``bulk_update``: values and the primary
@@ -144,16 +121,17 @@ def build_bulk_update(
 
     :param table: updated table
     :type table: sqlalchemy.Table
-    :param pk_column: primary key column
-    :type pk_column: sqlalchemy.Column
+    :param primary_key: primary key of the updated model
+    :type primary_key: PrimaryKey
     :param columns: updated column names
     :type columns: Tuple[str, ...]
     :return: update statement
     :rtype: Executable
     """
+    slots = tuple("new_" + alias for alias in primary_key.column_aliases())
     return (
         table.update()
-        .where(pk_column == sqlalchemy.bindparam(key="new_" + pk_column.name))
+        .where(primary_key.where_clause(slots=slots, typed=False))
         .values({name: sqlalchemy.bindparam(key="new_" + name) for name in columns})
     )
 
@@ -231,16 +209,16 @@ def update_template(
     """
     names = tuple(sorted(values))
     table = model_cls.ormar_config.table
-    pk_column = primary_key_column(model_cls=model_cls)
+    primary_key = model_cls.ormar_config.pk
     statement = cached_statement(
         model_cls=model_cls,
         key=("update", names),
         builder=build_update,
         table=table,
         names=names,
-        pk_column=pk_column,
+        primary_key=primary_key,
     )
-    params = {**value_params(names=names, values=values), PK_SLOT: pk}
+    params = {**value_params(names=names, values=values), **primary_key.bind_params(pk)}
     return StatementTemplate(statement=statement, params=params)
 
 
@@ -259,15 +237,15 @@ def delete_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
     :rtype: StatementTemplate
     """
     table = model_cls.ormar_config.table
-    pk_column = primary_key_column(model_cls=model_cls)
+    primary_key = model_cls.ormar_config.pk
     statement = cached_statement(
         model_cls=model_cls,
         key=("delete",),
         builder=build_delete,
         table=table,
-        pk_column=pk_column,
+        primary_key=primary_key,
     )
-    params = {PK_SLOT: pk}
+    params = primary_key.bind_params(pk)
     return StatementTemplate(statement=statement, params=params)
 
 
@@ -287,13 +265,13 @@ def pk_select_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
     :rtype: StatementTemplate
     """
     table = model_cls.ormar_config.table
-    pk_column = primary_key_column(model_cls=model_cls)
+    primary_key = model_cls.ormar_config.pk
     statement = cached_statement(
         model_cls=model_cls,
         key=("select_pk",),
         builder=build_pk_select,
         table=table,
-        pk_column=pk_column,
+        primary_key=primary_key,
     )
-    params = {PK_SLOT: pk}
+    params = primary_key.bind_params(pk)
     return StatementTemplate(statement=statement, params=params)

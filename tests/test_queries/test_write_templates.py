@@ -183,7 +183,7 @@ async def test_write_cross_check_detects_mismatch(connected, monkeypatch):
     monkeypatch.setattr(cross_check, "ENABLED", True)
     template_cache_for(Item).clear()
     table = Item.ormar_config.table
-    wrong = build_pk_select(table, table.c.id)
+    wrong = build_pk_select(table=table, primary_key=Item.ormar_config.pk)
     template_cache_for(Item).put(("delete",), wrong)
     with pytest.raises(AssertionError, match="template mismatch"):
         delete_template(Item, 1)

@@ -670,13 +670,13 @@ class QuerysetProxy(Generic[T]):
         :return: updated or created model
         :rtype: Model
         """
-        pk_name = self.queryset.model_config.pkname
-        if "pk" in kwargs:
-            kwargs[pk_name] = kwargs.pop("pk")
-        if pk_name not in kwargs or kwargs.get(pk_name) is None:
+        key = self.queryset.model_config.pk
+        kwargs = key.expand_pk_kwarg(kwargs)
+        lookup = key.lookup(kwargs)
+        if lookup is None:
             return await self.create(**kwargs)
         try:
-            model = await self.queryset.get(pk=kwargs[pk_name])
+            model = await self.queryset.get(**lookup)
         except NoMatch:
             return await self.create(**kwargs)
         return await model.update(**kwargs)

@@ -99,12 +99,12 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         :return: dictionary of model that is about to be saved
         :rtype: dict[str, str]
         """
-        pkname = cls.ormar_config.pkname
-        pk = cls.ormar_config.model_fields[pkname]
-        if new_kwargs.get(pkname, ormar.Undefined) is None and (
-            pk.nullable or pk.autoincrement
-        ):
-            del new_kwargs[pkname]
+        for field_name in cls.ormar_config.pk.fields:
+            field = cls.ormar_config.model_fields[field_name]
+            if new_kwargs.get(field_name, ormar.Undefined) is None and (
+                field.nullable or field.autoincrement
+            ):
+                del new_kwargs[field_name]
         return new_kwargs
 
     @classmethod

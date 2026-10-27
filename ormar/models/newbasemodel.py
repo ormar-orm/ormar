@@ -244,7 +244,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             finally:
                 instance.restore_nested_models_json_fields(decoded=decoded)
         else:
-            fields_set = {instance.ormar_config.pkname}
+            fields_set = set(instance.ormar_config.pk.fields)
             object.__setattr__(instance, "__dict__", new_kwargs)
             object.__setattr__(instance, "__pydantic_fields_set__", fields_set)
 
@@ -489,7 +489,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             self.__setattr_fields__.add(name)
 
         # In this case, the hash could have changed, so update it
-        if name == self.ormar_config.pkname or self.pk is None:
+        if name in self.ormar_config.pk.fields or self.pk is None:
             object.__setattr__(self, "__cached_hash__", None)
             new_hash = hash(self)
 
@@ -617,7 +617,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             kwargs.pop(prop_field, None)
 
         if "pk" in kwargs:
-            kwargs[config.pkname] = kwargs.pop("pk")
+            kwargs = config.pk.expand_pk_kwarg(kwargs)
 
         # extract through fields
         through_tmp_dict = {
@@ -1581,7 +1581,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         }
         for field in self._extract_db_related_names():
             relation_field = self.ormar_config.model_fields[field]
-            target_pk_name = relation_field.to.ormar_config.pkname
+            target_pk_name = relation_field.to.ormar_config.pk.fields[0]
             target_field = getattr(self, field)
             self_fields[field] = getattr(target_field, target_pk_name, None)
             if not relation_field.nullable and not self_fields[field]:

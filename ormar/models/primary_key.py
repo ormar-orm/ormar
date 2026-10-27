@@ -9,7 +9,7 @@ primary key field name, so the same code serves single-column keys and
 
 import abc
 import operator
-from typing import TYPE_CHECKING, Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional
 
 import sqlalchemy
 
@@ -110,6 +110,35 @@ class PrimaryKey(abc.ABC):
             for column, slot in zip(self.columns(), slots)
         ]
         return sqlalchemy.and_(*comparisons)
+
+    def expand_pk_kwarg(self, kwargs: dict[str, Any]) -> dict[str, Any]:
+        """
+        Replace a ``pk`` keyword with the key fields it stands for::
+
+            {"pk": 4, "title": "a"} -> {"id": 4, "title": "a"}
+
+        :param kwargs: keyword arguments, possibly holding ``pk``
+        :type kwargs: dict[str, Any]
+        :return: new keyword arguments without ``pk``
+        :rtype: dict[str, Any]
+        """
+        if "pk" not in kwargs:
+            return dict(kwargs)
+        expanded = {name: value for name, value in kwargs.items() if name != "pk"}
+        expanded.update(self.to_dict(kwargs["pk"]))
+        return expanded
+
+    def lookup(self, kwargs: dict[str, Any]) -> Optional[dict[str, Any]]:
+        """
+        :param kwargs: keyword arguments by field name
+        :type kwargs: dict[str, Any]
+        :return: the key fields and their values, ``None`` when any key field
+            is missing or ``None``
+        :rtype: Optional[dict[str, Any]]
+        """
+        if any(kwargs.get(field) is None for field in self.fields):
+            return None
+        return {field: kwargs[field] for field in self.fields}
 
     def rebind(self, *, owner: type["Model"]) -> "PrimaryKey":
         """

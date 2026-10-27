@@ -58,3 +58,12 @@ def test_rebind_changes_owner_only():
     assert rebound is not key
     assert rebound.fields == key.fields
     assert rebound.owner is Book
+
+
+def test_expand_pk_kwarg_and_lookup():
+    key = build_primary_key(owner=Book, fields=("id",))
+    assert key.expand_pk_kwarg({"pk": 4, "title": "a"}) == {"id": 4, "title": "a"}
+    assert key.expand_pk_kwarg({"title": "a"}) == {"title": "a"}
+    assert key.lookup({"id": 4, "title": "a"}) == {"id": 4}
+    assert key.lookup({"id": None, "title": "a"}) is None
+    assert key.lookup({"title": "a"}) is None

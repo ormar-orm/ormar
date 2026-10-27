@@ -1612,13 +1612,13 @@ class QuerySet(Generic[T]):
         :return: updated or created model
         :rtype: Model
         """
-        pk_name = self.model_config.pkname
-        if "pk" in kwargs:
-            kwargs[pk_name] = kwargs.pop("pk")
-        if pk_name not in kwargs or kwargs.get(pk_name) is None:
+        key = self.model_config.pk
+        kwargs = key.expand_pk_kwarg(kwargs)
+        lookup = key.lookup(kwargs)
+        if lookup is None:
             return await self.create(**kwargs)
         try:
-            model = await self.get(pk=kwargs[pk_name])
+            model = await self.get(**lookup)
         except NoMatch:
             return await self.create(**kwargs)
         return await model.update(**kwargs)
@@ -1805,7 +1805,7 @@ class QuerySet(Generic[T]):
             raise ModelListEmptyError("Bulk update objects are empty!")
 
         ready_objects = []
-        pk_name = self.model_config.pkname
+        key = self.model_config.pk
         if not columns:
             columns = list(
                 self.model.extract_db_own_fields().union(
@@ -1813,8 +1813,9 @@ class QuerySet(Generic[T]):
                 )
             )
 
-        if pk_name not in columns:
-            columns.append(pk_name)
+        for field in key.fields:
+            if field not in columns:
+                columns.append(field)
 
         onupdate_fields = self.model._onupdate_fields
         for field_name in onupdate_fields:
@@ -1826,10 +1827,11 @@ class QuerySet(Generic[T]):
         for i, obj in enumerate(objects):
             explicit_fields = obj.__setattr_fields__
             new_kwargs = obj.model_dump()
-            if new_kwargs.get(pk_name) is None:
+            if any(new_kwargs.get(field) is None for field in key.fields):
                 raise ModelPersistenceError(
                     "You cannot update unsaved objects. "
-                    f"{self.model.__name__} has to have {pk_name} filled."
+                    f"{self.model.__name__} has to have {', '.join(key.fields)} "
+                    "filled."
                 )
             new_kwargs = obj.populate_onupdate_value(
                 new_kwargs, explicit_fields=explicit_fields
@@ -1847,20 +1849,17 @@ class QuerySet(Generic[T]):
             if i % 100 == 99:  # pragma: no cover
                 await asyncio.sleep(0)
 
-        pk_column: sqlalchemy.Column = self.model_config.table.c[
-            self.model.get_column_alias(pk_name)
-        ]
-        pk_column_name = self.model.get_column_alias(pk_name)
+        pk_column_names = key.column_aliases()
         table_columns = [c.name for c in self.model_config.table.c]
         updated = tuple(
-            k for k in columns if k != pk_column_name and k in table_columns
+            k for k in columns if k not in pk_column_names and k in table_columns
         )
         expr = cached_statement(
             model_cls=self.model,
             key=("bulk_update", updated),
             builder=build_bulk_update,
             table=self.table,
-            pk_column=pk_column,
+            primary_key=key,
             columns=updated,
         )
         # Multi-row execute_many: run in an explicit transaction so all rows
