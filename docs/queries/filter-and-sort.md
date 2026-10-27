@@ -206,6 +206,10 @@ conditions.
 
 `exclude(name='John', age>=35)` will become `where not (name='John' and age>=35)`
 
+Each chained `exclude()` call adds its own condition, so all of them apply.
+
+`exclude(name='John').exclude(age>=35)` will become `where not name='John' and not age>=35`
+
 ```python
 class Album(ormar.Model):
     ormar_config = base_ormar_config.copy()

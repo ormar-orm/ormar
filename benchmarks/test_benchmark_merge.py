@@ -1,21 +1,17 @@
-"""Benchmark for nested-join row merging in ``_process_query_result_rows``.
+"""Benchmark for materializing joined rows in ``_process_query_result_rows``.
 
-The workload below targets the path optimized by the in-place index
-assignment in ``_merge_items_lists``: a parent that fans out across many
-joined rows so the matched branch fires repeatedly during
-``_recursive_add``, with both halves of late-round merges accumulating
-overlapping child PKs.
+Rows of the same model reached through the same relation path are built once
+per query result (``RowRegistry``) and reused by every row they appear in;
+repeated rows only attach their new reverse / many-to-many children.
 
 Shape:
 
     Project (1) -> Task (N, FK) -> Tag (M, m2m, shared across tasks)
 
 A single ``Project`` produces ``N * M`` result rows on
-``select_related(["tasks", "tasks__tags"]).all()``. The pairwise
-``_recursive_add`` consolidates the duplicates, and in the deeper rounds
-both sides hold overlapping ``Task`` PKs (because every adjacent row
-carries the same task with a different tag); inside each task the tag
-lists also accumulate and overlap across recursion halves.
+``select_related(["tasks", "tasks__tags"]).all()``, so the main model repeats
+in every row and each task repeats once per tag. Queried from the ``Task``
+side the same shape repeats the parent ``Project`` in every row.
 """
 
 import pytest
@@ -61,10 +57,7 @@ async def test_select_related_nested_merge(
     """Project -> Tasks (FK) -> Tags (m2m) workload.
 
     Result row count is ``num_tasks * tags_per_task`` for one project; every
-    row materializes a duplicate Project with one Task (with one Tag).
-    The merge path consolidates duplicates pairwise via ``_recursive_add``
-    — covers ``_merge_items_lists`` end-to-end through the full join /
-    materialize / merge pipeline.
+    row resolves to the same Project and adds one Task / Tag pair to it.
     """
     project = await BenchProject(name="P").save()
     tags = [await BenchTag(name=f"t{i}").save() for i in range(tags_per_task)]
@@ -84,35 +77,31 @@ async def test_select_related_nested_merge(
         assert len(task.tags) == tags_per_task
 
 
-@pytest.mark.parametrize("list_size", [10, 50, 100])
-def test_merge_items_lists_pk_overlap(benchmark, list_size: int):
-    """Microbenchmark for ``_merge_items_lists`` with full PK overlap.
+@pytest.mark.parametrize(
+    ("num_tasks", "tags_per_task"),
+    [(5, 5), (10, 10), (20, 10)],
+)
+async def test_select_related_shared_parent(
+    aio_benchmark, num_tasks: int, tags_per_task: int
+):
+    """Task -> Project (FK) + Tags (m2m) workload.
 
-    Constructs two equally sized lists of saved tasks where every entry
-    in ``current_field`` matches an entry in ``other_value`` by PK. This
-    is the worst case the per-pair list rebuild used to be O(N) on — K
-    matches, each filtering an N-element ``value_to_set``. With
-    ``other_idx`` driving in-place writes the cost drops from O(K·N) to
-    O(K).
-
-    The benchmark calls the merge classmethod directly so the SA query /
-    row materialization overhead is excluded — the signal we want is the
-    inner loop only. Every task is fully populated (no relations to
-    recurse into) so ``merge_two_instances`` is light and the
-    ``_merge_items_lists`` body itself dominates.
+    Result row count is ``num_tasks * tags_per_task``; every row carries the
+    same Project, which is built once and shared by all returned tasks.
     """
-    project = BenchProject(id=1, name="p")
-    current_field = [
-        BenchTask(id=i, project=project, title=f"T{i}") for i in range(list_size)
-    ]
-    other_value = [
-        BenchTask(id=i, project=project, title=f"T{i}") for i in range(list_size)
-    ]
+    project = await BenchProject(name="P").save()
+    tags = [await BenchTag(name=f"t{i}").save() for i in range(tags_per_task)]
+    for i in range(num_tasks):
+        task = await BenchTask(project=project, title=f"T{i}").save()
+        for tag in tags:
+            await task.tags.add(tag)
 
-    benchmark(
-        BenchTask._merge_items_lists,
-        field_name="tasks",
-        current_field=current_field,
-        other_value=other_value,
-        relation_map={"tasks": ...},
-    )
+    @aio_benchmark
+    async def query():
+        return await BenchTask.objects.select_related(["project", "tags"]).all()
+
+    result = query()
+    assert len(result) == num_tasks
+    assert all(task.project is result[0].project for task in result)
+    for task in result:
+        assert len(task.tags) == tags_per_task

@@ -2,6 +2,7 @@
 import base64
 import datetime
 import decimal
+import enum
 import hashlib
 import uuid
 from typing import Any, Optional
@@ -18,6 +19,11 @@ base_ormar_config = create_config()
 default_fernet = dict(
     encrypt_secret="asd123", encrypt_backend=ormar.EncryptBackends.FERNET
 )
+
+
+class Color(enum.Enum):
+    RED = 1
+    BLUE = "blue"
 
 
 class DummyBackend(ormar.fields.EncryptBackend):
@@ -89,6 +95,13 @@ class Filter(ormar.Model):
     id: int = ormar.Integer(primary_key=True)
     name: str = ormar.String(max_length=100, **default_fernet)
     hash = ormar.ForeignKey(Hash)
+
+
+class Paint(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="paints")
+
+    id: int = ormar.Integer(primary_key=True)
+    color = ormar.Enum(enum_class=Color, nullable=True, **default_fernet)
 
 
 class Report(ormar.Model):
@@ -256,3 +269,28 @@ async def test_related_model_fields_properly_decrypted():
         report2 = await Report.objects.select_related("filters__hash").get()
         assert report2.filters[0].name == "test1"
         assert report2.filters[0].hash.name == hashed_test1
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_encrypts_values():
+    async with base_ormar_config.database:
+        item = await Filter(name="before").save()
+        item.name = "after"
+        await Filter.objects.bulk_update([item])
+        assert (await Filter.objects.get(id=item.id)).name == "after"
+
+
+@pytest.mark.asyncio
+async def test_encrypted_enum_round_trip():
+    async with base_ormar_config.database:
+        red = await Paint.objects.create(color=Color.RED)
+        empty = await Paint.objects.create(color=None)
+        assert (await Paint.objects.get(id=red.id)).color == Color.RED
+        assert (await Paint.objects.get(id=empty.id)).color is None
+
+        red.color = Color.BLUE
+        await red.update()
+        assert (await Paint.objects.get(id=red.id)).color == Color.BLUE
+
+        await Paint.objects.filter(id=red.id).update(color=Color.RED)
+        assert (await Paint.objects.get(id=red.id)).color == Color.RED

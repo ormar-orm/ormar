@@ -27,14 +27,13 @@ from ormar.exceptions import ModelError, ModelPersistenceError, QueryDefinitionE
 from ormar.fields.foreign_key import ForeignKeyField
 from ormar.fields.parsers import decode_bytes, encode_json
 from ormar.models.excludable import (
-    ExcludableItems,
     FlattenMap,
     convert_all,
     filter_not_excluded_fields,
     normalize_to_dict,
+    resolve_flatten_map,
     skip_ellipsis,
 )
-from ormar.models.helpers import register_relation_in_alias_manager
 from ormar.models.helpers.relations import expand_reverse_relationship
 from ormar.models.helpers.sqlalchemy import (
     populate_config_sqlalchemy_table_if_required,
@@ -44,11 +43,21 @@ from ormar.models.metaclass import ModelMetaclass
 from ormar.models.modelproxy import ModelTableProxy
 from ormar.models.utils import Extra
 from ormar.queryset.field_accessor import FieldAccessor
-from ormar.queryset.utils import extract_access_chains, translate_list_to_dict
-from ormar.relations.alias_manager import AliasManager
+from ormar.queryset.utils import translate_list_to_dict
 from ormar.relations.relation import Relation
 from ormar.relations.relation_manager import RelationsManager
 from ormar.warnings import OrmarDeprecatedSince020
+
+# pydantic model config keys that make validation change a value the column
+# type already converted, so rows of such models must go through ``__init__``
+VALUE_CHANGING_CONFIG = (
+    "use_enum_values",
+    "str_strip_whitespace",
+    "str_to_lower",
+    "str_to_upper",
+    "coerce_numbers_to_str",
+    "strict",
+)
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar.models import Model, OrmarConfig
@@ -120,7 +129,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         __relation_map__: Optional[list[str]]
         __cached_hash__: Optional[int]
         __setattr_fields__: set[str]
-        _orm_relationship_manager: AliasManager
         _orm: RelationsManager
         _orm_id: int
         _orm_saved: bool
@@ -136,6 +144,10 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         _extra_is_ignore: Optional[bool]
         _allowed_kwarg_names: Optional[frozenset[str]]
         _relation_field_names: Optional[frozenset[str]]
+        _required_row_fields: frozenset[str]
+        _row_relation_names: tuple[str, ...]
+        _row_field_order: tuple[str, ...]
+        _trusted_rows: Optional[bool]
         ormar_config: OrmarConfig
 
     # noinspection PyMissingConstructor
@@ -171,11 +183,18 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
 
         new_kwargs, through_tmp_dict = self._process_kwargs(kwargs)
 
-        new_kwargs = self.serialize_nested_models_json_fields(new_kwargs)
-        self.__pydantic_validator__.validate_python(
-            new_kwargs,
-            self_instance=self,  # type: ignore
+        decoded = (
+            self.serialize_nested_models_json_fields(kwargs=new_kwargs)
+            if self.extract_related_fields()
+            else []
         )
+        try:
+            self.__pydantic_validator__.validate_python(
+                new_kwargs,
+                self_instance=self,  # type: ignore
+            )
+        finally:
+            self.restore_nested_models_json_fields(decoded=decoded)
         self._register_related_models(new_kwargs, through_tmp_dict)
 
     @classmethod
@@ -212,11 +231,18 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 new_kwargs[field_to_nullify] = None
 
         if not _pk_only:
-            new_kwargs = instance.serialize_nested_models_json_fields(new_kwargs)
-            instance.__pydantic_validator__.validate_python(
-                new_kwargs,
-                self_instance=instance,  # type: ignore
+            decoded = (
+                instance.serialize_nested_models_json_fields(kwargs=new_kwargs)
+                if instance.extract_related_fields()
+                else []
             )
+            try:
+                instance.__pydantic_validator__.validate_python(
+                    new_kwargs,
+                    self_instance=instance,  # type: ignore
+                )
+            finally:
+                instance.restore_nested_models_json_fields(decoded=decoded)
         else:
             fields_set = {instance.ormar_config.pkname}
             object.__setattr__(instance, "__dict__", new_kwargs)
@@ -237,11 +263,176 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         :type through_tmp_dict: dict[str, Any]
         """
         new_kwargs.update(through_tmp_dict)
-        model_fields = object.__getattribute__(self, "ormar_config").model_fields
-        for related in self.extract_related_names().union(self.extract_through_names()):
-            model_fields[related].expand_relationship(
-                new_kwargs.get(related), self, to_register=True
+        for field in self.extract_related_fields():
+            field.expand_relationship(
+                value=new_kwargs.get(field.name), child=self, to_register=True
             )
+
+    @classmethod
+    def trusted_row_construction(cls) -> bool:
+        """
+        Return whether rows of this model can be turned into instances without
+        running ``__init__``.
+
+        A database row is already converted by the column types (an Integer
+        column returns ``int``, a DateTime one ``datetime``), so pydantic's
+        validation would hand back the same values. Skipping it is only safe
+        when nothing on the model could change a value or has side effects,
+        so the model must have none of:
+
+        - through fields or a custom ``__init__``
+        - validators of any kind, private attributes or ``model_post_init``
+        - extra fields (``extra="allow"``)
+        - fields whose pydantic type differs from the column type, encrypted
+          fields or fields represented as base64 strings
+        - value-changing model config (``VALUE_CHANGING_CONFIG``: enum values,
+          string transformations, number coercion, strict mode)
+
+        Computed once per class, together with the per-class lookups the
+        trusted path uses (required fields, relation names and field order).
+        Defining a related model later resets it (see
+        ``reset_relation_caches``)::
+
+            class Author(ormar.Model):
+                ormar_config = base_ormar_config.copy(tablename="authors")
+
+                id: int = ormar.Integer(primary_key=True)
+                name: str = ormar.String(max_length=100)
+
+
+            Author.trusted_row_construction()  # -> True
+
+        :return: True when database rows can be trusted as field values
+        :rtype: bool
+        """
+        cached = cls.__dict__.get("_trusted_rows")
+        if cached is not None:
+            return cast(bool, cached)
+        decorators = cls.__pydantic_decorators__
+        model_fields = cls.ormar_config.model_fields
+        trusted = (
+            cls.__init__ is NewBaseModel.__init__
+            and not cls.extract_through_names()
+            and set(cls.model_fields) == set(model_fields)
+            and all(
+                (field.is_relation or field.__pydantic_type__ is field.__type__)
+                and not field.encrypt_secret
+                and not field.represent_as_base64_str
+                for field in model_fields.values()
+            )
+            and not (
+                decorators.validators
+                or decorators.field_validators
+                or decorators.root_validators
+                or decorators.model_validators
+            )
+            and not cls.__private_attributes__
+            and cls.__pydantic_post_init__ is None
+            and cls.model_config.get("extra") != "allow"
+            and not any(cls.model_config.get(key) for key in VALUE_CHANGING_CONFIG)
+        )
+        type.__setattr__(
+            cls,
+            "_required_row_fields",
+            frozenset(
+                name for name, info in cls.model_fields.items() if info.is_required()
+            ),
+        )
+        type.__setattr__(cls, "_row_relation_names", tuple(cls.extract_related_names()))
+        type.__setattr__(cls, "_row_field_order", tuple(cls.model_fields))
+        type.__setattr__(cls, "_trusted_rows", trusted)
+        return trusted
+
+    @classmethod
+    def flat_row_model(cls) -> bool:
+        """
+        Return whether the model has ``trusted_row_construction()``, no
+        relations at all and no custom serialization (serializers or an
+        overridden ``model_dump``), so its rows and its ``model_dump()`` hold
+        plain column values only.
+
+        For such models ``bulk_create`` copies each instance's ``__dict__``
+        instead of calling ``model_dump()`` (see ``dump_for_save``).
+
+        :return: True for trusted models without relations
+        :rtype: bool
+        """
+        decorators = cls.__pydantic_decorators__
+        return (
+            cls.trusted_row_construction()
+            and not cls._row_relation_names
+            and not decorators.field_serializers
+            and not decorators.model_serializers
+            and cls.model_dump is NewBaseModel.model_dump
+        )
+
+    @classmethod
+    def _construct_from_row(
+        cls, excluded: AbstractSet[str], values: dict[str, Any]
+    ) -> typing_extensions.Self:
+        """
+        Build an instance straight from database row values, which the column
+        types already converted, skipping ``__init__`` and validation. Only for
+        models with ``trusted_row_construction()`` and rows holding every
+        required field.
+
+        The instance gets the state ``__init__`` would leave behind: internal
+        ormar attributes, the values as pydantic's ``__dict__`` and the row's
+        fields as ``model_fields_set``. Fields missing from the row or
+        excluded are None, like after ``_construct_with_excluded``. When the
+        row holds every field in field order, the row dict itself becomes the
+        ``__dict__`` without a copy.
+
+        Relation values (a related model, or the raw pk of a foreign key) are
+        expanded to models and registered on both sides, like ``__init__``
+        does after validation. An empty reverse relation becomes ``[]``::
+
+            book = Book._construct_from_row(
+                excluded=frozenset(), values={"id": 1, "title": "t", "author": 2}
+            )
+            book.author  # -> pk-only Author(id=2), with book in author.books
+
+        :param excluded: field names excluded from the query
+        :type excluded: AbstractSet[str]
+        :param values: field values of the row, used as the instance's
+            ``__dict__`` when it holds every field in field order; relation
+            values are replaced with their expanded models
+        :type values: dict[str, Any]
+        :return: model instance
+        :rtype: Self
+        """
+        instance = cls.__new__(cls)
+        instance._initialize_internal_attributes()
+        object.__setattr__(instance, "__pk_only__", False)
+        object.__setattr__(instance, "__ormar_excludable__", None)
+        relation_fields = cls.ormar_config.model_fields
+        related = {
+            name: relation_fields[name].expand_relationship(
+                value=values[name], child=instance, to_register=False
+            )
+            for name in cls._row_relation_names
+            if name in values
+        }
+        if related:
+            values.update(related)
+        field_order = cls._row_field_order
+        if not excluded and tuple(values) == field_order:
+            data = values
+        else:
+            data = {
+                name: None if name in excluded else values.get(name)
+                for name in field_order
+            }
+        object.__setattr__(instance, "__dict__", data)
+        object.__setattr__(instance, "__pydantic_fields_set__", set(values))
+        object.__setattr__(instance, "__pydantic_extra__", None)
+        object.__setattr__(instance, "__pydantic_private__", None)
+        for name, model in related.items():
+            if model is not None and not isinstance(model, list):
+                relation_fields[name].expand_relationship(
+                    value=model, child=instance, to_register=True
+                )
+        return instance
 
     @classmethod
     def _construct_with_excluded(
@@ -505,12 +696,14 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         # object.__setattr__(self, "_orm_id", uuid.uuid4().hex)
         object.__setattr__(self, "_orm_saved", False)
         object.__setattr__(self, "_pk_column", None)
+        object.__setattr__(self, "__cached_hash__", None)
         object.__setattr__(self, "__setattr_fields__", set())
         object.__setattr__(
             self,
             "_orm",
             RelationsManager(
-                related_fields=self.extract_related_fields(), owner=cast("Model", self)
+                field_map=self.extract_related_field_map(),
+                owner=self,  # type: ignore[arg-type]
             ),
         )
 
@@ -671,7 +864,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                     field = cast(ormar.ManyToManyField, field)
                     field.create_default_through_model()
                 expand_reverse_relationship(model_field=field)
-                register_relation_in_alias_manager(field=field)
                 update_column_definition(model=cls, field=field)
         populate_config_sqlalchemy_table_if_required(config=cls.ormar_config)
         # super().update_forward_refs(**localns)
@@ -1148,26 +1340,14 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         :return: resolved FlattenMap, or None when nothing should flatten
         :rtype: Optional[FlattenMap]
         """
-        if flatten_all:
-            return FlattenMap(flatten_all=True)
-
-        if flatten_fields is None:
+        if flatten_fields is None and not flatten_all:
             excludable = getattr(self, "__ormar_excludable__", None)
             return excludable.flatten_map() if excludable is not None else None
-
-        if isinstance(flatten_fields, FlattenMap):
-            return flatten_fields
-
-        if isinstance(flatten_fields, builtins.dict):
-            return FlattenMap(data=flatten_fields)
-
-        excludable = ExcludableItems()
-        excludable.build(
-            items=extract_access_chains(flatten_fields),
+        return resolve_flatten_map(
             model_cls=cast(type["Model"], type(self)),
-            slot="flatten",
+            flatten_fields=flatten_fields,
+            flatten_all=flatten_all,
         )
-        return excludable.flatten_map()
 
     @typing_extensions.deprecated(
         "The `json` method is deprecated; use `model_dump_json` instead.",

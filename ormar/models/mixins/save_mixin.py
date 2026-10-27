@@ -1,7 +1,5 @@
 import base64
-import uuid
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Collection, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Collection, Optional, Union, cast
 
 from pydantic.plugin._schema_validator import (
     PluggableSchemaValidator,
@@ -66,19 +64,9 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         :return: dictionary of model that is about to be updated
         :rtype: dict[str, str]
         """
-        new_kwargs = cls.parse_non_db_fields(new_kwargs)
         new_kwargs = cls.substitute_models_with_pks(new_kwargs)
         new_kwargs = cls.reconvert_str_to_bytes(new_kwargs)
-        new_kwargs = cls.dump_all_json_fields_to_str(new_kwargs)
         new_kwargs = cls.translate_columns_to_aliases(new_kwargs)
-        new_kwargs = cls.translate_enum_columns(new_kwargs)
-        return new_kwargs
-
-    @classmethod
-    def translate_enum_columns(cls, new_kwargs: dict) -> dict:
-        for key, value in new_kwargs.items():
-            if isinstance(value, Enum):
-                new_kwargs[key] = value.name
         return new_kwargs
 
     @classmethod
@@ -118,25 +106,6 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         ):
             del new_kwargs[pkname]
         return new_kwargs
-
-    @classmethod
-    def parse_non_db_fields(cls, model_dict: dict) -> dict:
-        """
-        Receives dictionary of model that is about to be saved and changes uuid fields
-        to strings in bulk_update.
-
-        :param model_dict: dictionary of model that is about to be saved
-        :type model_dict: dict
-        :return: dictionary of model that is about to be saved
-        :rtype: dict
-        """
-        for name, field in cls.ormar_config.model_fields.items():
-            if field.__type__ == uuid.UUID and name in model_dict:
-                parsers = {"string": lambda x: str(x), "hex": lambda x: "%.32x" % x.int}
-                uuid_format = field.column_type.uuid_format
-                parser: Callable[..., Any] = parsers.get(uuid_format, lambda x: x)
-                model_dict[name] = parser(model_dict[name])
-        return model_dict
 
     @classmethod
     def substitute_models_with_pks(cls, model_dict: dict) -> dict:  # noqa  CCR001
@@ -215,24 +184,51 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         return model_dict
 
     @classmethod
-    def serialize_nested_models_json_fields(cls, kwargs: dict) -> dict:
+    def serialize_nested_models_json_fields(
+        cls, kwargs: dict
+    ) -> list[tuple["Model", dict[str, Any]]]:
         """
-        Serializes JSON fields in nested model instances to strings.
-        This ensures that when models with JSON fields are nested in other models,
-        the JSON values are properly serialized as strings for Pydantic validation.
+        Serializes JSON fields of related model instances passed in kwargs to
+        strings, as pydantic validation of the model validates them again
+        against their JSON fields, which only accept strings.
 
-        Needed as sqlalchemy auto parses the JSON fields.
+        The related models keep the serialized values only for the validation:
+        the decoded values are returned, so they can be restored with
+        ``restore_nested_models_json_fields`` afterwards.
 
         :param kwargs: dictionary of keyword arguments
-        :type kwargs: Dict
-        :return: modified kwargs with serialized JSON fields in nested models
-        :rtype: Dict
+        :type kwargs: dict
+        :return: related models with their decoded JSON field values
+        :rtype: list[tuple[Model, dict[str, Any]]]
         """
-        for key, value in kwargs.items():
-            # hasattr first, as isinstance on pydantic model metaclass is slow
-            if hasattr(value, "_json_fields") and isinstance(value, ormar.Model):
-                value.dump_all_json_fields_to_str(value.__dict__)
-        return kwargs
+        decoded = []
+        for value in kwargs.values():
+            # getattr first, as isinstance on pydantic model metaclass is slow
+            json_fields = getattr(value, "_json_fields", None)
+            if json_fields and isinstance(value, ormar.Model):
+                values = value.__dict__
+                decoded.append(
+                    (
+                        value,
+                        {name: values[name] for name in json_fields if name in values},
+                    )
+                )
+                value.dump_all_json_fields_to_str(values)
+        return decoded
+
+    @staticmethod
+    def restore_nested_models_json_fields(
+        decoded: list[tuple["Model", dict[str, Any]]],
+    ) -> None:
+        """
+        Restores decoded JSON field values of related models serialized by
+        ``serialize_nested_models_json_fields``.
+
+        :param decoded: related models with their decoded JSON field values
+        :type decoded: list[tuple[Model, dict[str, Any]]]
+        """
+        for model, values in decoded:
+            model.__dict__.update(values)
 
     @classmethod
     def populate_default_values(cls, new_kwargs: dict) -> dict:
@@ -286,21 +282,66 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         return new_kwargs
 
     @classmethod
-    def validate_enums(cls, new_kwargs: dict) -> dict:
+    def validate_update_values(cls, new_kwargs: dict) -> dict:
         """
-        Receives dictionary of model that is about to be saved and validates the
-        fields with choices set to see if the value is allowed.
+        Receives dictionary of values about to be set by a queryset update,
+        validates them and converts them into column values, the same way
+        initializing a model would:
 
-        :param new_kwargs: dictionary of model that is about to be saved
+        * foreign keys accept the related model, a dictionary with its pk or the
+          pk itself and are replaced with the validated pk value
+        * json fields accept a json string or a value to be dumped and are
+          replaced with the parsed value
+        * other fields are validated with their own validators
+
+        :param new_kwargs: dictionary of values about to be used for the update
         :type new_kwargs: dict
-        :return: dictionary of model that is about to be saved
+        :return: dictionary of column values about to be used for the update
         :rtype: dict
         """
         validators = cls._build_individual_schema_validator()
+        foreign_keys = cls._extract_db_related_names()
         for key, value in new_kwargs.items():
-            if key in validators:
+            if key in foreign_keys:
+                new_kwargs[key] = cls._related_pk_for_update(
+                    field_name=key, value=value
+                )
+            elif key in cls._json_fields:
+                new_kwargs[key] = validators[key].validate_python(encode_json(value))
+            elif key in validators:
                 validators[key].validate_python(value)
         return new_kwargs
+
+    @classmethod
+    def _related_pk_for_update(cls, field_name: str, value: Any) -> Any:
+        """
+        Returns the validated pk value of a related model passed to a queryset
+        update as a model, a dictionary with its pk or the pk itself.
+
+        :param field_name: name of the foreign key field
+        :type field_name: str
+        :param value: related model, dictionary or pk value (None clears it)
+        :type value: Any
+        :raises ModelPersistenceError: if the related model has no pk set
+        :return: pk value of the related model
+        :rtype: Any
+        """
+        target = cls.ormar_config.model_fields[field_name].to
+        pkname = target.ormar_config.pkname
+        if isinstance(value, ormar.Model):
+            value = getattr(value, pkname)
+            if value is None:
+                raise ModelPersistenceError(
+                    f"You cannot update {field_name} with {target.get_name()} "
+                    f"model without pk set!"
+                )
+        elif isinstance(value, dict):
+            value = value.get(pkname)
+        if value is None:
+            return None
+        return target._build_individual_schema_validator()[pkname].validate_python(
+            value
+        )
 
     @classmethod
     def _build_individual_schema_validator(cls) -> Any:

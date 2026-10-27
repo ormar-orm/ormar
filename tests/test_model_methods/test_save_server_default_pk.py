@@ -13,12 +13,15 @@ Covers two closely related concerns:
    then mistook for the pk).
 """
 
+import functools
+import uuid
 from typing import Any, List
 
 import pytest
-from sqlalchemy import event, text
+from sqlalchemy import text
 
 import ormar
+from ormar.databases.query_executor import QueryExecutor
 from ormar.exceptions import ModelPersistenceError
 from tests.lifespan import init_tests
 from tests.settings import create_config
@@ -55,35 +58,55 @@ class ServerDefaultPkAndNonPk(ormar.Model):
     company: str = ormar.String(max_length=100, server_default="Acme")
 
 
+SERVER_UUID = uuid.UUID("00000000-0000-0000-0000-000000000042")
+
+
+class ServerDefaultUuidPk(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="server_default_uuid_pk")
+
+    id: uuid.UUID = ormar.UUID(
+        primary_key=True,
+        uuid_format="string",
+        server_default=text(f"'{SERVER_UUID}'"),
+    )
+    name: str = ormar.String(max_length=100)
+
+
 create_test_database = init_tests(base_ormar_config)
 
 
+class _RecordingMethod:
+    """Replaces a ``QueryExecutor`` method, recording each executed statement."""
+
+    def __init__(self, counter: "_StatementCounter", original: Any) -> None:
+        self.counter = counter
+        self.original = original
+
+    def __get__(self, instance: Any, owner: Any) -> Any:
+        return functools.partial(self.call, instance)
+
+    async def call(self, executor: Any, query: Any, *args: Any, **kwargs: Any) -> Any:
+        self.counter.statements.append(str(query))
+        return await self.original(executor, query, *args, **kwargs)
+
+
 class _StatementCounter:
-    """Records every statement executed on the sqlalchemy engine."""
+    """Records every statement ormar executes, on either execution path."""
+
+    METHODS = ("fetch_all", "fetch_one", "fetch_val", "execute")
 
     def __init__(self) -> None:
         self.statements: List[str] = []
 
     def __enter__(self) -> "_StatementCounter":
-        sync_engine = base_ormar_config.database.engine.sync_engine
-
-        def before_cursor_execute(
-            conn: Any,
-            cursor: Any,
-            statement: str,
-            parameters: Any,
-            context: Any,
-            executemany: bool,
-        ) -> None:
-            self.statements.append(statement)
-
-        self._listener = before_cursor_execute
-        self._sync_engine = sync_engine
-        event.listen(sync_engine, "before_cursor_execute", self._listener)
+        self._originals = {name: getattr(QueryExecutor, name) for name in self.METHODS}
+        for name, original in self._originals.items():
+            setattr(QueryExecutor, name, _RecordingMethod(self, original))
         return self
 
     def __exit__(self, *exc: Any) -> None:
-        event.remove(self._sync_engine, "before_cursor_execute", self._listener)
+        for name, original in self._originals.items():
+            setattr(QueryExecutor, name, original)
 
 
 def _table_selects(statements: List[str], tablename: str) -> List[str]:
@@ -177,3 +200,18 @@ async def test_save_raises_when_server_default_pk_cannot_be_recovered():  # noqa
             with pytest.raises(ModelPersistenceError, match="primary key"):
                 await instance.save()
             assert instance.pk is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    _IS_MYSQL,
+    reason="Oracle MySQL has no RETURNING clause to recover a server default pk.",
+)
+async def test_save_returns_typed_uuid_pk_from_server_default():  # noqa: E501  # pragma: no cover
+    """The pk returned by RETURNING goes through the column type, like on
+    SQLAlchemy's execution path: a UUID column yields a ``uuid.UUID``."""
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            instance = await ServerDefaultUuidPk(name="first").save()
+            assert instance.pk == SERVER_UUID
+            assert isinstance(instance.pk, uuid.UUID)

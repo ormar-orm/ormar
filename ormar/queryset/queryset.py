@@ -1,8 +1,10 @@
 import asyncio
+import functools
 from typing import (
     TYPE_CHECKING,
     Any,
     AsyncGenerator,
+    Callable,
     Generic,
     Iterable,
     Optional,
@@ -13,7 +15,6 @@ from typing import (
 )
 
 import sqlalchemy
-from sqlalchemy import bindparam
 
 import ormar  # noqa I100
 from ormar import MultipleMatches, NoMatch
@@ -22,17 +23,61 @@ from ormar.exceptions import (
     ModelPersistenceError,
     QueryDefinitionError,
 )
+from ormar.models.row_registry import RowRegistry
 from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
 from ormar.queryset.actions.order_action import OrderAction
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
-from ormar.queryset.reverse_alias_resolver import ReverseAliasResolver
+from ormar.queryset.templates import (
+    SlotBinder,
+    StatementTemplate,
+    aggregate_statement,
+    build_bulk_update,
+    cached_statement,
+    canonical_actions,
+    clauses_cache_key,
+    count_statement,
+    excludable_cache_key,
+    exists_statement,
+    insert_statement,
+    insert_template,
+    order_cache_key,
+    release_values,
+    template_cache_for,
+    template_params,
+    value_binds,
+    value_params,
+)
 from ormar.queryset.utils import (
     extract_access_chains,
     get_relationship_alias_model_and_str,
     normalize_slice,
 )
+from ormar.queryset.values_columns import extract_values, values_column_map
+
+# rows built between yields to the event loop when materializing flat rows
+FLAT_ROWS_CHUNK = 500
+
+
+def dump_for_save(obj: "Model") -> dict:
+    """
+    Return the field values of a model with ``flat_row_model()`` for
+    ``bulk_create``.
+
+    Without relations, converted fields or custom serializers, pydantic's
+    ``model_dump()`` returns the same values as a copy of the ``__dict__``,
+    at a fraction of the cost::
+
+        dump_for_save(obj=Author(id=1, name="a"))  # -> {"id": 1, "name": "a"}
+
+    :param obj: model to save
+    :type obj: Model
+    :return: field values
+    :rtype: dict
+    """
+    return dict(obj.__dict__)
+
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
@@ -187,6 +232,9 @@ class QuerySet(Generic[T]):
         """
         if plan_cache is None:
             plan_cache = {}
+        if not self._select_related and self.model.trusted_row_construction():
+            return await self._process_flat_rows(rows=rows, plan_cache=plan_cache)
+        registry = RowRegistry()
         result_rows = []
         for i, row in enumerate(rows):
             result_rows.append(
@@ -197,6 +245,7 @@ class QuerySet(Generic[T]):
                     source_model=self.model,
                     proxy_source_model=self.proxy_source_model,
                     plan_cache=plan_cache,
+                    registry=registry,
                 )
             )
             if i % 100 == 99:  # pragma: no cover
@@ -208,6 +257,41 @@ class QuerySet(Generic[T]):
                 excludable=self._excludable,
             )
         return cast(list["T"], result_rows)
+
+    async def _process_flat_rows(self, rows: list, plan_cache: dict) -> list["T"]:
+        """
+        Build models of rows without joined relations of models with
+        ``trusted_row_construction()`` (see ``ModelRow.from_flat_rows``).
+
+        The rows are built in chunks of ``FLAT_ROWS_CHUNK`` with a yield to the
+        event loop in between, so a large result does not block other tasks
+        for the whole time it takes to build.
+
+        :param rows: list of database rows from query result
+        :type rows: list
+        :param plan_cache: row-extraction plan cache
+        :type plan_cache: dict
+        :return: list of models
+        :rtype: list[Model]
+        """
+        result: list["T"] = []
+        registry = RowRegistry()
+        for start in range(0, len(rows), FLAT_ROWS_CHUNK):
+            if start:
+                await asyncio.sleep(0)
+            chunk = rows[start : start + FLAT_ROWS_CHUNK]
+            result.extend(
+                cast(
+                    list["T"],
+                    self.model.from_flat_rows(
+                        rows=chunk,
+                        excludable=self._excludable,
+                        plan_cache=plan_cache,
+                        registry=registry,
+                    ),
+                )
+            )
+        return result
 
     def _resolve_filter_groups(
         self, groups: Any
@@ -268,6 +352,7 @@ class QuerySet(Generic[T]):
         limit: Optional[int] = None,
         offset: Optional[int] = None,
         order_bys: Optional[list] = None,
+        binder: Optional[SlotBinder] = None,
     ) -> sqlalchemy.sql.Select:
         """
         Constructs the actual database query used in the QuerySet.
@@ -279,6 +364,8 @@ class QuerySet(Generic[T]):
         :type offset: int
         :param order_bys: list of order-by fields names
         :type order_bys: list
+        :param binder: names per-call values for statement templates, if given
+        :type binder: Optional[SlotBinder]
         :return: built sqlalchemy select expression
         :rtype: sqlalchemy.sql.selectable.Select
         """
@@ -292,10 +379,257 @@ class QuerySet(Generic[T]):
             order_bys=order_bys or self.order_bys,
             limit_raw_sql=self.limit_sql_raw,
             limit_count=limit if limit is not None else self.limit_count,
+            binder=binder,
         )
         exp = qry.build_select_expression()
         # print("\n", exp.compile(compile_kwargs={"literal_binds": True}))
         return exp
+
+    def build_select_template(
+        self,
+        variant: tuple = (),
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
+        order_bys: Optional[list] = None,
+        wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]] = None,
+    ) -> StatementTemplate:
+        """
+        Return the read statement for this queryset from the model's template
+        cache (building and caching it on the first call of a cache key) together
+        with the values to bind for this call::
+
+            Author.objects.filter(name="a").build_select_template()
+            # -> StatementTemplate(statement=SELECT ... WHERE name = :ormar_p0,
+            #                      params={"ormar_p0": "a"})
+
+        Every read that runs a select (``all``, ``get``, ``first``,
+        ``iterate``, ``values``, ``exists``, ``count`` and the aggregates)
+        goes through here instead of ``build_select_expression``. A statement
+        that is not a plain select passes ``wrap`` to build the executed
+        statement around the select and ``variant`` to keep its cache key apart
+        from the plain select's, e.g. ``count()`` passes
+        ``variant=("count", distinct)`` and ``wrap=count_statement``.
+
+        On a cache hit nothing is built: only the cache key and the values are
+        collected from the queryset.
+
+        :param variant: how the select is used (plain, count, aggregate, ...)
+        :type variant: tuple
+        :param limit: number to limit the query
+        :type limit: Optional[int]
+        :param offset: number to offset by
+        :type offset: Optional[int]
+        :param order_bys: list of order actions
+        :type order_bys: Optional[list]
+        :param wrap: turns the built select into the executed statement
+        :type wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]]
+        :return: statement and values to bind
+        :rtype: StatementTemplate
+        """
+        actions = canonical_actions(
+            filter_clauses=self.filter_clauses, exclude_clauses=self.exclude_clauses
+        )
+        params = template_params(
+            actions=actions,
+            limit=limit if limit is not None else self.limit_count,
+            offset=offset or self.query_offset,
+        )
+        key = self.select_cache_key(
+            variant=variant, limit=limit, offset=offset, order_bys=order_bys
+        )
+        cache = template_cache_for(model_cls=self.model)
+        statement = cache.get(key)
+        if statement is None:
+            statement = self.build_template_statement(
+                actions=actions,
+                limit=limit,
+                offset=offset,
+                order_bys=order_bys,
+                wrap=wrap,
+            )
+            cache.put(key=key, statement=statement)
+        return StatementTemplate(statement=statement, params=params)
+
+    def build_template_statement(
+        self,
+        actions: list,
+        limit: Optional[int],
+        offset: Optional[int],
+        order_bys: Optional[list],
+        wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]],
+    ) -> Any:
+        """
+        Build the read statement of a new cache key with named value slots, the
+        statement that is then cached.
+
+        The select is built by ``build_select_expression`` as usual, but with a
+        ``SlotBinder`` that turns every filter value, the limit and the offset
+        into a named bind parameter. ``wrap`` then builds the executed statement
+        around it, and the values of this first call are cleared from the
+        result (see ``release_values``).
+
+        :param actions: filter actions in canonical order
+        :type actions: list
+        :param limit: number to limit the query
+        :type limit: Optional[int]
+        :param offset: number to offset by
+        :type offset: Optional[int]
+        :param order_bys: list of order actions
+        :type order_bys: Optional[list]
+        :param wrap: turns the built select into the executed statement
+        :type wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]]
+        :return: statement to execute
+        :rtype: Any
+        """
+        binder = SlotBinder(actions=actions)
+        select = self.build_select_expression(
+            limit=limit, offset=offset, order_bys=order_bys, binder=binder
+        )
+        statement = wrap(select) if wrap is not None else select
+        release_values(statement=statement)
+        return statement
+
+    def build_write_template(self, kind: str, values: dict) -> StatementTemplate:
+        """
+        Return the filtered update (``kind="update"``) or delete of this
+        queryset from the model's template cache, with the values to bind::
+
+            Author.objects.filter(score__lt=5).build_write_template(
+                kind="update", values={"name": "x"}
+            )
+            # -> UPDATE authors SET name=:ormar_v0 WHERE authors.score < :ormar_p0
+            #    {"ormar_p0": 5, "ormar_v0": "x"}
+
+        The cache key is the kind, the filter and exclude clauses (see
+        ``templates.clauses_cache_key``) and the updated column names. Updates and
+        deletes take no joins, ordering or limit, so nothing else changes their
+        SQL. Filter values are named by ``SlotBinder`` like in reads, updated
+        values like in single-row writes (``ormar_v{i}``).
+
+        :param kind: ``"update"`` or ``"delete"``
+        :type kind: str
+        :param values: updated values by column name (empty for delete)
+        :type values: dict
+        :return: statement and values to bind
+        :rtype: StatementTemplate
+        """
+        actions = canonical_actions(
+            filter_clauses=self.filter_clauses, exclude_clauses=self.exclude_clauses
+        )
+        names = tuple(sorted(values))
+        params = {
+            **template_params(actions=actions, limit=None, offset=None),
+            **value_params(names=names, values=values),
+        }
+        key = (
+            kind,
+            clauses_cache_key(clauses=self.filter_clauses),
+            clauses_cache_key(clauses=self.exclude_clauses),
+            names,
+        )
+        cache = template_cache_for(model_cls=self.model)
+        statement = cache.get(key)
+        if statement is None:
+            statement = self.build_write_statement(
+                kind=kind, names=names, binder=SlotBinder(actions=actions)
+            )
+            release_values(statement=statement)
+            cache.put(key=key, statement=statement)
+        return StatementTemplate(statement=statement, params=params)
+
+    def build_write_statement(self, kind: str, names: tuple, binder: SlotBinder) -> Any:
+        """
+        Build the filtered update or delete with named slots for the updated
+        values and the filter values.
+
+        :param kind: ``"update"`` or ``"delete"``
+        :type kind: str
+        :param names: updated column names, sorted
+        :type names: tuple
+        :param binder: names filter values for templates
+        :type binder: SlotBinder
+        :return: statement to execute
+        :rtype: Any
+        """
+        table = self.table
+        expr: Any
+        if kind == "update":
+            expr = table.update().values(value_binds(table=table, names=names))
+        else:
+            expr = table.delete()
+        expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
+            expr=expr
+        )
+        return FilterQuery(
+            filter_clauses=self.exclude_clauses, exclude=True, binder=binder
+        ).apply(expr=expr)
+
+    def limit_cache_key(self, limit: Optional[int]) -> tuple:
+        """
+        Return how the effective limit changes the SQL: whether a LIMIT is
+        applied at all, and whether it is non-zero (only a non-zero limit with
+        ``select_related`` builds the pagination subquery). The limit value
+        itself is bound, so ``limit(5)`` and ``limit(10)`` share a statement::
+
+            limit(None) -> (False, False)
+            limit(0)    -> (True, False)
+            limit(10)   -> (True, True)
+
+        :param limit: limit passed to ``build_select_expression``
+        :type limit: Optional[int]
+        :return: limit presence and truthiness
+        :rtype: tuple
+        """
+        effective = limit if limit is not None else self.limit_count
+        return effective is not None, bool(effective)
+
+    def select_cache_key(
+        self,
+        variant: tuple,
+        limit: Optional[int],
+        offset: Optional[int],
+        order_bys: Optional[list],
+    ) -> tuple:
+        """
+        Return the cache key of the statement ``build_select_expression`` would build
+        with the given arguments: everything that changes its SQL text and none
+        of the bound values. Two querysets with the same key must build the
+        same SQL, or one would run the other's statement, so each part covers
+        one input of the build:
+
+        * ``variant`` - plain select, exists, count or aggregate
+        * filter and exclude clauses - see ``clauses_cache_key``
+        * ``select_related`` - the joins
+        * selected fields - see ``excludable_cache_key``
+        * ordering - see ``order_cache_key``
+        * limit and offset presence - see ``limit_cache_key``
+        * ``limit_raw_sql`` - limit on raw rows instead of main models
+
+        Any new queryset option that changes the built SQL has to be added
+        here; the cross check of the test suite fails when one is missing.
+
+        :param variant: how the select is used (plain, count, aggregate, ...)
+        :type variant: tuple
+        :param limit: limit passed to ``build_select_expression``
+        :type limit: Optional[int]
+        :param offset: offset passed to ``build_select_expression``
+        :type offset: Optional[int]
+        :param order_bys: order actions passed to ``build_select_expression``
+        :type order_bys: Optional[list]
+        :return: hashable cache key of the statement
+        :rtype: tuple
+        """
+        return (
+            variant,
+            clauses_cache_key(clauses=self.filter_clauses),
+            clauses_cache_key(clauses=self.exclude_clauses),
+            tuple(self._select_related),
+            excludable_cache_key(excludable=self._excludable),
+            order_cache_key(order_bys=order_bys or self.order_bys),
+            self.limit_cache_key(limit=limit),
+            bool(offset or self.query_offset),
+            self.limit_sql_raw,
+        )
 
     def filter(  # noqa: A003
         self, *args: Any, _exclude: bool = False, **kwargs: Any
@@ -337,18 +671,22 @@ class QuerySet(Generic[T]):
             select_related=select_related,
             filter_clauses=self.filter_clauses,
         )
-        filter_clauses, select_related = qryclause.prepare_filter(**kwargs)
-        filter_clauses = filter_clauses + filter_groups  # type: ignore
         if _exclude:
-            exclude_clauses = filter_clauses
-            filter_clauses = self.filter_clauses
-        else:
-            exclude_clauses = self.exclude_clauses
-            filter_clauses = filter_clauses
-
+            own_clauses, select_related = qryclause.prepare_filter(
+                _own_only=True, **kwargs
+            )
+            if not own_clauses and not filter_groups:
+                return self.rebuild_self(select_related=select_related)
+            # groups are already resolved, so own actions are attached directly
+            exclude_group = FilterGroup(*filter_groups)
+            exclude_group.actions = own_clauses
+            return self.rebuild_self(
+                exclude_clauses=self.exclude_clauses + [exclude_group],
+                select_related=select_related,
+            )
+        filter_clauses, select_related = qryclause.prepare_filter(**kwargs)
         return self.rebuild_self(
-            filter_clauses=filter_clauses,
-            exclude_clauses=exclude_clauses,
+            filter_clauses=filter_clauses + filter_groups,  # type: ignore
             select_related=select_related,
         )
 
@@ -703,30 +1041,26 @@ class QuerySet(Generic[T]):
             if excludable is self._excludable
             else self.rebuild_self(excludable=excludable)
         )
-        expr = projected.build_select_expression()
+        template = projected.build_select_template()
         async with self.model_config.database.get_query_executor() as executor:
-            rows = await executor.fetch_all(expr)
+            rows = await executor.fetch_all(template.statement, template.params)
         if not rows:
             return []
-        alias_resolver = ReverseAliasResolver(
+        column_map = values_column_map(
+            model_cls=self.model_cls,  # type: ignore
             select_related=self._select_related,
             excludable=excludable,
-            model_cls=self.model_cls,  # type: ignore
             exclude_through=exclude_through,
+            column_names=list(rows[0].keys()),  # type: ignore
         )
-        column_map = alias_resolver.resolve_columns(columns_names=list(rows[0].keys()))  # type: ignore
-        result = [
-            {column_map.get(k): v for k, v in dict(x).items() if k in column_map}
-            for x in rows
-        ]
+        result = extract_values(rows=rows, column_map=column_map, as_dict=_as_dict)
         if _as_dict:
             return result
         if _flatten and self._excludable.include_entry_count() != 1:
             raise QueryDefinitionError(
                 "You cannot flatten values_list if more than one field is selected!"
             )
-        tuple_result = [tuple(x.values()) for x in result]
-        return tuple_result if not _flatten else [x[0] for x in tuple_result]
+        return result if not _flatten else [x[0] for x in result]
 
     async def values_list(
         self,
@@ -768,10 +1102,13 @@ class QuerySet(Generic[T]):
         :return: result of the check
         :rtype: bool
         """
-        expr = self.build_select_expression()
-        expr = sqlalchemy.exists(expr).select()
+        template = self.build_select_template(
+            variant=("exists",), wrap=exists_statement
+        )
         async with self.model_config.database.get_query_executor() as executor:
-            result = await executor.fetch_val(expr)
+            result = await executor.fetch_val(
+                query=template.statement, params=template.params
+            )
             return bool(result)
 
     async def count(self, distinct: bool = True) -> int:
@@ -790,14 +1127,18 @@ class QuerySet(Generic[T]):
         :return: number of rows
         :rtype: int
         """
-        expr = self.build_select_expression().alias("subquery_for_count")
-        expr = sqlalchemy.func.count().select().select_from(expr)  # type: ignore
-        if distinct:
-            pk_column_name = self.model.get_column_alias(self.model_config.pkname)
-            expr_distinct = expr.group_by(pk_column_name).alias("subquery_for_group")  # type: ignore
-            expr = sqlalchemy.func.count().select().select_from(expr_distinct)  # type: ignore
+        wrap = functools.partial(
+            count_statement,
+            distinct=distinct,
+            pk_column_name=self.model.get_column_alias(
+                field_name=self.model_config.pkname
+            ),
+        )
+        template = self.build_select_template(variant=("count", distinct), wrap=wrap)
         async with self.model_config.database.get_query_executor() as executor:
-            result = await executor.fetch_val(expr)  # type: ignore
+            result = await executor.fetch_val(
+                query=template.statement, params=template.params
+            )
             return int(result) if result is not None else 0
 
     async def _query_aggr_function(self, func_name: str, columns: list) -> Any:
@@ -816,11 +1157,16 @@ class QuerySet(Generic[T]):
                 "existing columns of the target model"
             )
         select_columns = [x.apply_func(func, use_label=True) for x in select_actions]
-        expr = self.build_select_expression().alias(f"subquery_for_{func_name}")
-        expr = sqlalchemy.select(*select_columns).select_from(expr)  # type: ignore
-        # print("\n", expr.compile(compile_kwargs={"literal_binds": True}))
+        wrap = functools.partial(
+            aggregate_statement, func_name=func_name, select_columns=select_columns
+        )
+        template = self.build_select_template(
+            variant=("aggregate", func_name, tuple(columns)), wrap=wrap
+        )
         async with self.model_config.database.get_query_executor() as executor:
-            result = await executor.fetch_one(expr)  # type: ignore
+            result = await executor.fetch_one(
+                query=template.statement, params=template.params
+            )
         return dict(result) if len(result) > 1 else result[columns[0]]  # type: ignore
 
     async def max(self, columns: Union[str, list[str]]) -> Any:  # noqa: A003
@@ -915,17 +1261,18 @@ class QuerySet(Generic[T]):
         )
         updates = {k: v for k, v in kwargs.items() if k in self_fields}
         updates = self.model.populate_onupdate_value(updates)
-        updates = self.model.validate_enums(updates)
+        updates = self.model.validate_update_values(updates)
+        updates = self.model.reconvert_str_to_bytes(updates)
         updates = self.model.translate_columns_to_aliases(updates)
+        unconsumed = [name for name in updates if name not in self.table.c]
+        if unconsumed:
+            raise sqlalchemy.exc.CompileError(
+                f"Unconsumed column names: {', '.join(unconsumed)}"
+            )
 
-        expr = FilterQuery(filter_clauses=self.filter_clauses).apply(
-            self.table.update().values(**updates)  # type: ignore
-        )
-        expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
-            expr
-        )
+        template = self.build_write_template(kind="update", values=updates)
         async with self.model_config.database.get_query_executor() as executor:
-            return await executor.execute(expr)
+            return await executor.execute(template.statement, template.params)
 
     async def delete(self, *args: Any, each: bool = False, **kwargs: Any) -> int:
         """
@@ -949,14 +1296,9 @@ class QuerySet(Generic[T]):
                 "If you want to delete all rows use delete(each=True)"
             )
         self._verify_no_related_filters("delete")
-        expr = FilterQuery(filter_clauses=self.filter_clauses).apply(
-            self.table.delete()  # type: ignore
-        )
-        expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
-            expr
-        )
+        template = self.build_write_template(kind="delete", values={})
         async with self.model_config.database.get_query_executor() as executor:
-            return await executor.execute(expr)
+            return await executor.execute(template.statement, template.params)
 
     def paginate(self, page: int, page_size: int = 20) -> "QuerySet[T]":
         """
@@ -1054,9 +1396,9 @@ class QuerySet(Generic[T]):
         :return: the single fetched model
         :rtype: Model
         """
-        expr = self.build_select_expression(limit=1, order_bys=order_bys)
+        template = self.build_select_template(limit=1, order_bys=order_bys)
         async with self.model_config.database.get_query_executor() as executor:
-            rows = await executor.fetch_all(expr)
+            rows = await executor.fetch_all(template.statement, template.params)
         processed_rows = await self._process_query_result_rows(rows)
         if self._prefetch_related and processed_rows:
             processed_rows = await self._prefetch_related_models(processed_rows, rows)
@@ -1187,8 +1529,8 @@ class QuerySet(Generic[T]):
         if kwargs or args:
             return await self.filter(*args, **kwargs).get()
 
-        if not self.filter_clauses:
-            expr = self.build_select_expression(
+        if not (self.filter_clauses or self.exclude_clauses):
+            template = self.build_select_template(
                 limit=1,
                 order_bys=(
                     [
@@ -1203,10 +1545,10 @@ class QuerySet(Generic[T]):
                 + self.order_bys,
             )
         else:
-            expr = self.build_select_expression()
+            template = self.build_select_template()
 
         async with self.model_config.database.get_query_executor() as executor:
-            rows = await executor.fetch_all(expr)
+            rows = await executor.fetch_all(template.statement, template.params)
         processed_rows = await self._process_query_result_rows(rows)
         if self._prefetch_related and processed_rows:
             processed_rows = await self._prefetch_related_models(processed_rows, rows)
@@ -1298,9 +1640,9 @@ class QuerySet(Generic[T]):
         if kwargs or args:
             return await self.filter(*args, **kwargs).all()
 
-        expr = self.build_select_expression()
+        template = self.build_select_template()
         async with self.model_config.database.get_query_executor() as executor:
-            rows = await executor.fetch_all(expr)
+            rows = await executor.fetch_all(template.statement, template.params)
         result_rows = await self._process_query_result_rows(rows)
         if self._prefetch_related and result_rows:
             result_rows = await self._prefetch_related_models(result_rows, rows)
@@ -1338,7 +1680,7 @@ class QuerySet(Generic[T]):
                 yield result
             return
 
-        expr = self.build_select_expression()
+        template = self.build_select_template()
 
         rows: list = []
         last_primary_key = None
@@ -1352,7 +1694,7 @@ class QuerySet(Generic[T]):
         async with self.model_config.database.get_query_executor(
             transactional=True
         ) as executor:
-            async for row in executor.iterate(expr):
+            async for row in executor.iterate(template.statement, template.params):
                 current_primary_key = row[pk_alias]
                 if last_primary_key == current_primary_key or last_primary_key is None:
                     last_primary_key = current_primary_key
@@ -1390,6 +1732,10 @@ class QuerySet(Generic[T]):
 
         A valid list of `Model` objects needs to be passed.
 
+        Objects that provide different sets of fields (e.g. an explicit pk or a
+        server_default value) are inserted in separate statements, so generated
+        primary keys may not follow the order of the passed list.
+
         Bulk operations do not send signals.
 
         :param objects: list of ormar models already initialized and ready to save.
@@ -1400,16 +1746,37 @@ class QuerySet(Generic[T]):
             raise ModelListEmptyError("Bulk create objects are empty!")
 
         ready_objects = []
+        trusted = self.model.flat_row_model()
         for i, obj in enumerate(objects):
-            ready_objects.append(obj.prepare_model_to_save(obj.model_dump()))
+            values = dump_for_save(obj=obj) if trusted else obj.model_dump()
+            ready_objects.append(obj.prepare_model_to_save(new_kwargs=values))
             if i % 100 == 99:  # pragma: no cover
                 await asyncio.sleep(0)
 
-        # don't use execute_many, as in databases it's executed in a loop
-        # instead of using execute_many from drivers
-        expr = self.table.insert().values(ready_objects)
-        async with self.model_config.database.get_query_executor() as executor:
-            await executor.execute(expr)
+        # rows with different key sets (explicit vs omitted pk or server_default)
+        # need different inserts, so each key set runs its own insert template;
+        # anything beyond a single statement (or a lone batch the driver runs
+        # atomically) runs in one transaction
+        rows_by_keys: dict[frozenset[str], list[dict]] = {}
+        for row in ready_objects:
+            rows_by_keys.setdefault(frozenset(row), []).append(row)
+        database = self.model_config.database
+        several_statements = len(rows_by_keys) > 1 or (
+            len(ready_objects) > 1 and not database.atomic_execute_many
+        )
+        async with database.get_query_executor(
+            transactional=several_statements
+        ) as executor:
+            for rows in rows_by_keys.values():
+                if len(rows) == 1:
+                    template = insert_template(model_cls=self.model, values=rows[0])
+                    await executor.execute(template.statement, template.params)
+                    continue
+                names = tuple(sorted(rows[0]))
+                await executor.execute_many(
+                    insert_statement(model_cls=self.model, names=names),
+                    [value_params(names=names, values=row) for row in rows],
+                )
 
         for obj in objects:
             obj.set_save_status(True)
@@ -1485,19 +1852,17 @@ class QuerySet(Generic[T]):
         ]
         pk_column_name = self.model.get_column_alias(pk_name)
         table_columns = [c.name for c in self.model_config.table.c]
-        expr = self.table.update().where(
-            pk_column == bindparam("new_" + pk_column_name)
+        updated = tuple(
+            k for k in columns if k != pk_column_name and k in table_columns
         )
-        expr = expr.values(
-            **{
-                k: bindparam("new_" + k)
-                for k in columns
-                if k != pk_column_name and k in table_columns
-            }
+        expr = cached_statement(
+            model_cls=self.model,
+            key=("bulk_update", updated),
+            builder=build_bulk_update,
+            table=self.table,
+            pk_column=pk_column,
+            columns=updated,
         )
-        # databases bind params only where query is passed as string
-        # otherwise it just passes all data to values and results in unconsumed columns
-        expr = str(expr)  # type: ignore
         # Multi-row execute_many: run in an explicit transaction so all rows
         # share a single COMMIT instead of one per row under AUTOCOMMIT.
         async with self.model_config.database.get_query_executor(

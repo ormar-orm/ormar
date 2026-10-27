@@ -1,13 +1,15 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from sqlalchemy import TextClause
 
 import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.query_action import QueryAction
+from ormar.relations.aliases import prefixed_table
 
 if TYPE_CHECKING:  # pragma: nocover
     from ormar import Model
+    from ormar.queryset.templates import SlotBinder
 
 FILTER_OPERATORS = {
     "exact": "__eq__",
@@ -123,30 +125,66 @@ class FilterAction(QueryAction):
         sufix = "%" if "end" not in self.operator else ""
         self.filter_value = f"{prefix}{self.filter_value}{sufix}"
 
-    def get_text_clause(self) -> TextClause:
+    def bound_value(self) -> Any:
+        """
+        Return the value bound to the query: an ormar Model is replaced by its
+        primary key, so ``filter(author=author)`` binds ``author.pk``.
+
+        ``filter_value`` itself is left untouched, so the action can be read
+        again on every call to collect the value for a cached template.
+
+        :return: value to bind
+        :rtype: Any
+        """
+        if isinstance(self.filter_value, ormar.Model):
+            return self.filter_value.pk
+        return self.filter_value
+
+    def binds_slot(self) -> bool:
+        """
+        Return whether the value is bound as a parameter: SQLAlchemy renders
+        ``None`` (``IS NULL``), booleans and ``isnull`` checks into the SQL text.
+
+        Only values that are bound can get a named slot in a statement
+        template. The others stay in the SQL text and become part of the
+        template's cache key instead (see ``templates.value_cache_key``)::
+
+            filter(name="a")  # True  -> name = :ormar_p0
+            filter(name=None)  # False -> name IS NULL
+
+        :return: True when the value is sent as a bound parameter
+        :rtype: bool
+        """
+        value = self.bound_value()
+        return (
+            self.operator != "isnull"
+            and value is not None
+            and not isinstance(value, bool)
+        )
+
+    def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
         """
         Escapes characters if it's required.
         Substitutes values of the models if value is a ormar Model with its pk value.
         Compiles the clause.
 
+        :param binder: names the bound value for statement templates
+            (``= :ormar_p0`` instead of an anonymous parameter), if given
+        :type binder: Optional[SlotBinder]
         :return: complied and escaped clause
         :rtype: sqlalchemy.sql.elements.TextClause
         """
-        if isinstance(self.filter_value, ormar.Model):
-            self.filter_value = self.filter_value.pk
-
+        value = self.bound_value()
         op_attr = FILTER_OPERATORS[self.operator]
         if self.operator == "isnull":
-            op_attr = "is_" if self.filter_value else "isnot"
+            op_attr = "is_" if value else "isnot"
             filter_value = None
         else:
-            filter_value = self.filter_value
+            filter_value = value
+            if binder is not None and self.binds_slot():
+                filter_value = binder.bind(action=self, value=value)
         if self.table_prefix:
-            aliased_table = (
-                self.source_model.ormar_config.alias_manager.prefixed_table_name(
-                    self.table_prefix, self.column.table
-                )
-            )
+            aliased_table = prefixed_table(self.table_prefix, self.column.table)
             aliased_column = getattr(aliased_table.c, self.column.name)
         else:
             aliased_column = self.column

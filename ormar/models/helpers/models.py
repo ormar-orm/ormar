@@ -1,3 +1,5 @@
+import sys
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ForwardRef
 
 import ormar_rust_utils
@@ -5,6 +7,9 @@ import pydantic
 
 import ormar  # noqa: I100
 from ormar.models.helpers.pydantic import populate_pydantic_default_values
+
+if sys.version_info >= (3, 14):  # pragma: no cover
+    import annotationlib
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
@@ -107,10 +112,34 @@ def extract_annotations_and_default_vals(attrs: dict) -> tuple[dict, dict]:
     :return: namespace of the class updated, dict of extracted model_fields
     :rtype: tuple[dict, dict]
     """
-    key = "__annotations__"
-    attrs[key] = attrs.get(key, {})
+    attrs["__annotations__"] = get_namespace_annotations(namespace=attrs)
     attrs, model_fields = populate_pydantic_default_values(attrs)
     return attrs, model_fields
+
+
+def get_namespace_annotations(namespace: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    Returns the annotations declared in a class namespace (or class ``__dict__``).
+
+    Since Python 3.14 (PEP 649) a class body no longer stores ``__annotations__``,
+    only an annotate function, so the annotations are evaluated from it in
+    forward-ref format (names not defined yet become ``ForwardRef``).
+
+    :param namespace: class namespace or class ``__dict__``
+    :type namespace: Mapping[str, Any]
+    :return: annotations declared in the namespace
+    :rtype: dict[str, Any]
+    """
+    annotations = namespace.get("__annotations__")
+    if annotations is not None:
+        return annotations
+    if sys.version_info >= (3, 14):  # pragma: no cover
+        annotate = annotationlib.get_annotate_from_class_namespace(obj=namespace)
+        if annotate is not None:
+            return annotationlib.call_annotate_function(
+                annotate=annotate, format=annotationlib.Format.FORWARDREF
+            )
+    return {}
 
 
 def group_related_list(list_: list) -> dict:
@@ -131,38 +160,6 @@ def group_related_list(list_: list) -> dict:
     :rtype: dict[str, list]
     """
     return ormar_rust_utils.group_related_list(list_)
-
-
-def ordered_join_paths(related_tree: Any, prefix: str = "") -> list[str]:
-    """
-    Flattens a grouped relation tree (as produced by :func:`group_related_list`)
-    into the depth-first order in which the join builder walks the relations, with
-    shared prefixes visited only once.
-
-    Sample: {'people': {'houses': [], 'cars': ['models', 'colors']}}
-    will become:
-    ["people", "people__houses", "people__cars", "people__cars__models",
-    "people__cars__colors"]
-
-    :param related_tree: grouped relation tree (nested dict or list of leaf names)
-    :type related_tree: Any
-    :param prefix: relation path accumulated from the parent levels
-    :type prefix: str
-    :return: depth-first ordered list of relation paths
-    :rtype: list[str]
-    """
-    items = (
-        related_tree.items()
-        if isinstance(related_tree, dict)
-        else [(name, None) for name in related_tree]
-    )
-    paths: list[str] = []
-    for name, subtree in items:
-        path = f"{prefix}__{name}" if prefix else name
-        paths.append(path)
-        if subtree:
-            paths.extend(ordered_join_paths(subtree, path))
-    return paths
 
 
 def config_field_not_set(model: type["Model"], field_name: str) -> bool:

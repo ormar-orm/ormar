@@ -74,6 +74,15 @@ async def create_user3(user: RequestUser):  # use the generated model here
 !!!Note
     To see more examples and read more visit [get_pydantic](../models/methods.md#get_pydantic) part of the documentation.
 
+If you prefer to send and receive related models as their primary keys instead of nested objects, pass them in the `flatten_fields` parameter (or use `flatten_all=True`).
+
+```python
+ItemSchema = Item.get_pydantic(flatten_fields="category")
+# request: {"name": "item", "category": 1}, response: {"id": 1, "name": "item", "category": 1}
+```
+
+To read more visit [relations as primary keys](../models/methods.md#relations-as-primary-keys).
+
 !!!Warning
     The `get_pydantic` method generates all models in a tree of nested models according to an algorithm that allows to avoid loops in models (same algorithm that is used in `model_dump()`, `select_all()` etc.)
         

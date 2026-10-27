@@ -1,6 +1,14 @@
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Optional, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    AbstractSet,
+    Any,
+    Optional,
+    Sequence,
+    Union,
+    cast,
+)
 
 try:
     from sqlalchemy.engine.result import ResultProxy  # type: ignore
@@ -10,6 +18,8 @@ except ImportError:  # pragma: no cover
 from ormar.models import NewBaseModel  # noqa: I202
 from ormar.models.excludable import ExcludableItems
 from ormar.models.helpers.models import group_related_list
+from ormar.models.row_registry import RegistryKey, RowRegistry, selects_multi_relation
+from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.fields import ForeignKeyField
@@ -30,11 +40,20 @@ class RowExtractionPlan:
         ``_construct_with_excluded`` after pydantic validation
     :ivar pk_field_name: cached ``ormar_config.pkname`` so the row reader can
         test for a populated pk without a per-row attribute lookup
+    :ivar pk_column: prefixed db column holding the pk, ``None`` when the pk is
+        not among the selected columns
+    :ivar foreign_key_names: selected forward foreign key fields, whose raw pk
+        value becomes a pk-only related model unless the relation is selected
+    :ivar holds_required_fields: every required field of the model is among
+        the mapped fields, so every row built with this plan holds them
     """
 
     column_mappings: tuple[tuple[str, str], ...]
     excluded_field_names: frozenset[str]
     pk_field_name: str
+    pk_column: Optional[str] = None
+    foreign_key_names: tuple[str, ...] = ()
+    holds_required_fields: bool = False
 
 
 PlanCache = dict[tuple[type, str, int], RowExtractionPlan]
@@ -55,7 +74,7 @@ def build_shared_row_plan(
 
     :param model_cls: model the plan is built for
     :type model_cls: type[ModelRow]
-    :param table_prefix: prefix of the table from AliasManager
+    :param table_prefix: alias of the table from alias_for
     :type table_prefix: str
     :param include: fields to include for this model
     :type include: frozenset
@@ -86,8 +105,9 @@ class ModelRow(NewBaseModel):
         excludable: Optional[ExcludableItems] = None,
         current_relation_str: str = "",
         proxy_source_model: Optional[type["Model"]] = None,
-        used_prefixes: Optional[list[str]] = None,
         plan_cache: Optional[PlanCache] = None,
+        registry: Optional[RowRegistry] = None,
+        scope: Any = None,
     ) -> Optional["Model"]:
         """
         Model method to convert raw sql row from database into ormar.Model instance.
@@ -102,8 +122,6 @@ class ModelRow(NewBaseModel):
         where rows are populated in a different way as they do not have
         nested models in result.
 
-        :param used_prefixes: list of already extracted prefixes
-        :type used_prefixes: list[str]
         :param proxy_source_model: source model from which querysetproxy is constructed
         :type proxy_source_model: Optional[type["ModelRow"]]
         :param excludable: structure of fields to include and exclude
@@ -120,29 +138,219 @@ class ModelRow(NewBaseModel):
         :type related_models: Union[list, dict]
         :param related_field: field with relation declaration
         :type related_field: ForeignKeyField
+        :param plan_cache: optional per-queryset plan cache
+        :type plan_cache: Optional[PlanCache]
+        :param registry: optional per-query identity map; when passed, a model
+            already built for the same relation path and pk is reused and only
+            new reverse/many-to-many children from this row are attached to it
+        :type registry: Optional[RowRegistry]
+        :param scope: registry key of the closest parent reached through a
+            many-to-many relation, ``None`` outside of such relations
+        :type scope: Any
         :return: returns model if model is populated from database
         :rtype: Optional[Model]
         """
-        item: dict[str, Any] = {}
-        select_related = select_related or []
-        related_models = related_models or []
-        table_prefix = ""
-        used_prefixes = used_prefixes if used_prefixes is not None else []
-        excludable = excludable or ExcludableItems()
-
         if select_related:
             related_models = group_related_list(select_related)
+        instance, _ = cls._materialize_row(
+            row=row,
+            source_model=source_model,
+            related_models=related_models or [],
+            related_field=related_field,
+            excludable=excludable or ExcludableItems(),
+            current_relation_str=current_relation_str,
+            proxy_source_model=proxy_source_model,
+            plan_cache=plan_cache,
+            registry=registry,
+            scope=scope,
+        )
+        return instance
 
-        if related_field:
-            table_prefix = cls._process_table_prefix(
-                source_model=source_model,
-                current_relation_str=current_relation_str,
-                related_field=related_field,
-                used_prefixes=used_prefixes,
+    @classmethod
+    def from_flat_rows(
+        cls,
+        rows: Sequence[Any],
+        excludable: ExcludableItems,
+        plan_cache: Optional[PlanCache],
+        registry: RowRegistry,
+    ) -> list["Model"]:
+        """
+        Build models of a query without joined relations of a model with
+        ``trusted_row_construction()``.
+
+        Without joins every row is one model, so what ``from_row`` does per row
+        is not needed here: looking up the extraction plan, the identity map,
+        building nested models and merging rows of the same model. One plan
+        is looked up for all the rows and each row becomes a model directly::
+
+            await Author.objects.all()
+            # rows [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+            # -> [Author(id=1, name="a"), Author(id=2, name="b")]
+
+        Foreign key values become pk-only related models, one per related pk
+        shared by every row of the query (kept in ``registry``), registered
+        on both sides. Repeated primary keys (views or tables without a
+        unique pk) keep the first row, like merging does.
+
+        :param rows: database rows of the main model only
+        :type rows: Sequence[Any]
+        :param excludable: structure of fields to include and exclude
+        :type excludable: ExcludableItems
+        :param plan_cache: per-queryset plan cache
+        :type plan_cache: Optional[PlanCache]
+        :param registry: identity map of the query, sharing pk-only related
+            models between rows
+        :type registry: RowRegistry
+        :return: models built from the rows
+        :rtype: list[Model]
+        """
+        plan = cls.get_or_build_row_plan(
+            table_prefix="", excludable=excludable, plan_cache=plan_cache
+        )
+        mappings = plan.column_mappings
+        foreign_keys = plan.foreign_key_names
+        pk_name = plan.pk_field_name
+        seen: set[Any] = set()
+        instances: list["Model"] = []
+        for row in rows:
+            item = {field_name: row[column] for column, field_name in mappings}
+            pk = item[pk_name]
+            if pk in seen:
+                continue
+            seen.add(pk)
+            if foreign_keys:
+                cls._share_pk_only_models(
+                    plan=plan, item=item, registry=registry, position=(None, "")
+                )
+            instance = cast("Model", cls.construct_row_instance(plan=plan, item=item))
+            object.__setattr__(instance, "_orm_saved", True)
+            object.__setattr__(instance, "__ormar_excludable__", excludable)
+            instances.append(instance)
+        return instances
+
+    @classmethod
+    def construct_row_instance(
+        cls, plan: RowExtractionPlan, item: dict[str, Any]
+    ) -> "ModelRow":
+        """
+        Build the model instance of one row.
+
+        For models with ``trusted_row_construction()`` the instance is built
+        directly from the row values (``_construct_from_row``), as long as the
+        row holds every required field. Otherwise it goes
+        through ``_construct_with_excluded``, which validates the values,
+        registers relations and raises for excluded required fields.
+
+        When the plan already holds every required field, the cached trust of
+        the model is enough and the row is not checked again; a model whose
+        trust was reset (``reset_relation_caches``) is checked again first.
+
+        :param plan: extraction plan of the row position
+        :type plan: RowExtractionPlan
+        :param item: field values of the row
+        :type item: dict[str, Any]
+        :return: model instance
+        :rtype: ModelRow
+        """
+        if (
+            plan.holds_required_fields and cls.__dict__.get("_trusted_rows")
+        ) or cls.constructs_from_row(item=item):
+            return cls._construct_from_row(
+                excluded=plan.excluded_field_names, values=item
             )
+        return cls._construct_with_excluded(excluded=plan.excluded_field_names, **item)
 
-        item = cls._populate_nested_models_from_row(
-            item=item,
+    @classmethod
+    def constructs_from_row(cls, item: dict[str, Any]) -> bool:
+        """
+        Return whether the instance of a row is built directly from the row
+        values: the model allows ``trusted_row_construction()`` and the row
+        holds every required field.
+
+        :param item: field values of the row
+        :type item: dict[str, Any]
+        :return: whether ``_construct_from_row`` builds the instance
+        :rtype: bool
+        """
+        return cls.trusted_row_construction() and cls._required_row_fields.issubset(
+            item
+        )
+
+    @classmethod
+    def _materialize_row(  # noqa: CFQ002
+        cls,
+        row: ResultProxy,
+        source_model: type["Model"],
+        related_models: Any,
+        related_field: Optional["ForeignKeyField"],
+        excludable: ExcludableItems,
+        current_relation_str: str,
+        proxy_source_model: Optional[type["Model"]],
+        plan_cache: Optional[PlanCache],
+        registry: Optional[RowRegistry],
+        scope: Any,
+    ) -> tuple[Optional["Model"], bool]:
+        """
+        Builds a model (and its selected relations) from a database row, or
+        reuses the model already built for the same relation path and pk.
+
+        :param row: raw result row from the database
+        :type row: ResultProxy
+        :param source_model: model on which relation was defined
+        :type source_model: type[Model]
+        :param related_models: list or dict of related models
+        :type related_models: Union[list, dict]
+        :param related_field: field with relation declaration
+        :type related_field: Optional[ForeignKeyField]
+        :param excludable: structure of fields to include and exclude
+        :type excludable: ExcludableItems
+        :param current_relation_str: name of the relation field
+        :type current_relation_str: str
+        :param proxy_source_model: source model from which querysetproxy is constructed
+        :type proxy_source_model: Optional[type[Model]]
+        :param plan_cache: optional per-queryset plan cache
+        :type plan_cache: Optional[PlanCache]
+        :param registry: optional per-query identity map
+        :type registry: Optional[RowRegistry]
+        :param scope: registry key of the closest parent reached through a
+            many-to-many relation, ``None`` outside of such relations
+        :type scope: Any
+        :return: the model (``None`` if the row has no pk for it) and a flag
+            whether it was reused from the registry, i.e. built from an
+            earlier row and already registered on its parent
+        :rtype: tuple[Optional[Model], bool]
+        """
+        table_prefix = alias_for(current_relation_str) if related_field else ""
+
+        plan = cls.get_or_build_row_plan(table_prefix, excludable, plan_cache)
+        key: Optional[RegistryKey] = None
+        if registry is not None and plan.pk_column is not None:
+            pk = row[plan.pk_column]
+            if pk is None:
+                return None, False
+            key = (scope, table_prefix, pk)
+            existing = registry.instances.get(key)
+            if existing is not None:
+                if cls._selects_multi_relation(registry, table_prefix, related_models):
+                    children, reused = cls._populate_nested_models_from_row(
+                        item={},
+                        row=row,
+                        related_models=related_models,
+                        excludable=excludable,
+                        current_relation_str=current_relation_str,
+                        source_model=source_model,  # type: ignore
+                        proxy_source_model=proxy_source_model,  # type: ignore
+                        table_prefix=table_prefix,
+                        plan_cache=plan_cache,
+                        registry=registry,
+                        parent_key=key,
+                        scope=scope,
+                    )
+                    cls._attach_children(existing, children, reused)
+                return existing, True
+
+        item, _ = cls._populate_nested_models_from_row(
+            item={},
             row=row,
             related_models=related_models,
             excludable=excludable,
@@ -150,58 +358,111 @@ class ModelRow(NewBaseModel):
             source_model=source_model,  # type: ignore
             proxy_source_model=proxy_source_model,  # type: ignore
             table_prefix=table_prefix,
-            used_prefixes=used_prefixes,
             plan_cache=plan_cache,
+            registry=registry,
+            parent_key=key,
+            scope=scope,
         )
-        plan = cls.get_or_build_row_plan(table_prefix, excludable, plan_cache)
         item = cls.apply_row_plan(plan, row, item)
+        if registry is not None and plan.foreign_key_names:
+            cls._share_pk_only_models(plan, item, registry, (scope, table_prefix))
 
         instance: Optional["Model"] = None
         if item.get(plan.pk_field_name, None) is not None:
-            instance = cast(
-                "Model",
-                cls._construct_with_excluded(plan.excluded_field_names, **item),
-            )
+            instance = cast("Model", cls.construct_row_instance(plan=plan, item=item))
             instance.set_save_status(True)
-        return instance
+            if key is not None:
+                registry.instances[key] = instance  # type: ignore[union-attr]
+        return instance, False
 
     @classmethod
-    def _process_table_prefix(
+    def _share_pk_only_models(
         cls,
-        source_model: type["Model"],
-        current_relation_str: str,
-        related_field: "ForeignKeyField",
-        used_prefixes: list[str],
-    ) -> str:
+        plan: RowExtractionPlan,
+        item: dict,
+        registry: RowRegistry,
+        position: tuple[Any, str],
+    ) -> None:
         """
+        Replaces raw foreign key values of not selected relations with pk-only
+        related models shared by every row of the query that points to the
+        same pk from the same position.
 
-        :param source_model: model on which relation was defined
-        :type source_model: type[Model]
-        :param current_relation_str: current relation string
-        :type current_relation_str: str
-        :param related_field: field with relation declaration
-        :type related_field: "ForeignKeyField"
-        :param used_prefixes: list of already extracted prefixes
-        :type used_prefixes: list[str]
-        :return: table_prefix to use
-        :rtype: str
+        :param plan: extraction plan of the model being built
+        :type plan: RowExtractionPlan
+        :param item: model kwargs read from the row, updated in place
+        :type item: dict
+        :param registry: per-query identity map
+        :type registry: RowRegistry
+        :param position: scope and table prefix of the model being built
+        :type position: tuple[Any, str]
         """
-        if related_field.is_multi:
-            previous_model = related_field.through
-        else:
-            previous_model = related_field.owner
-        table_prefix = cls.ormar_config.alias_manager.resolve_relation_alias(
-            from_model=previous_model, relation_name=related_field.name
-        )
-        if not table_prefix or table_prefix in used_prefixes:
-            manager = cls.ormar_config.alias_manager
-            table_prefix = manager.resolve_relation_alias_after_complex(
-                source_model=source_model,
-                relation_str=current_relation_str,
-                relation_field=related_field,
-            )
-        used_prefixes.append(table_prefix)
-        return table_prefix
+        model_fields = cls.ormar_config.model_fields
+        instances = registry.instances
+        for field_name in plan.foreign_key_names:
+            value = item[field_name]
+            field = cast("ForeignKeyField", model_fields[field_name])
+            if value is None or value.__class__ is field.to:
+                continue
+            key = (position, field_name, value)
+            related = instances.get(key)
+            if related is None:
+                related = field.construct_pk_only_model(value)
+                instances[key] = related
+            item[field_name] = related
+
+    @classmethod
+    def _selects_multi_relation(
+        cls, registry: RowRegistry, table_prefix: str, related_models: Any
+    ) -> bool:
+        """
+        Memoized per query check if relations selected below this model contain
+        a reverse or many-to-many relation that a repeated row can extend.
+
+        :param registry: per-query identity map holding the memo
+        :type registry: RowRegistry
+        :param table_prefix: alias of the model table in the query
+        :type table_prefix: str
+        :param related_models: selected relations as list or nested dict
+        :type related_models: Union[list, dict]
+        :return: True if repeated rows may carry new children for this model
+        :rtype: bool
+        """
+        memo_key = (cls, table_prefix)
+        result = registry.subtree_has_multi.get(memo_key)
+        if result is None:
+            result = selects_multi_relation(cls, related_models)
+            registry.subtree_has_multi[memo_key] = result
+        return result
+
+    @classmethod
+    def _attach_children(
+        cls, instance: "Model", children: dict, reused: AbstractSet[str]
+    ) -> None:
+        """
+        Registers children read from a repeated row on an already built model.
+
+        Only reverse, many-to-many and through relations can bring new children;
+        a forward foreign key of the same model always resolves to the same,
+        already registered instance. Children reused from the registry were
+        registered on this model by the row that built them, so they are skipped.
+
+        :param instance: model built from an earlier row
+        :type instance: Model
+        :param children: related models read from the current row by field name
+        :type children: dict
+        :param reused: names of relations whose child was reused from the registry
+        :type reused: AbstractSet[str]
+        """
+        model_fields = cls.ormar_config.model_fields
+        for name, child in children.items():
+            if name in reused:
+                continue
+            field = model_fields[name]
+            if child is not None and (
+                field.is_multi or field.virtual or field.is_through
+            ):
+                field.expand_relationship(child, instance, to_register=True)
 
     @classmethod
     def _populate_nested_models_from_row(  # noqa: CFQ002
@@ -212,11 +473,13 @@ class ModelRow(NewBaseModel):
         related_models: Any,
         excludable: ExcludableItems,
         table_prefix: str,
-        used_prefixes: list[str],
         current_relation_str: Optional[str] = None,
         proxy_source_model: Optional[type["Model"]] = None,
         plan_cache: Optional[PlanCache] = None,
-    ) -> dict:
+        registry: Optional[RowRegistry] = None,
+        parent_key: Optional[RegistryKey] = None,
+        scope: Any = None,
+    ) -> tuple[dict, set[str]]:
         """
         Traverses structure of related models and populates the nested models
         from the database row.
@@ -241,10 +504,21 @@ class ModelRow(NewBaseModel):
         :type row: ResultProxy
         :param related_models: list or dict of related models
         :type related_models: Union[dict, list]
+        :param plan_cache: optional per-queryset plan cache
+        :type plan_cache: Optional[PlanCache]
+        :param registry: optional per-query identity map
+        :type registry: Optional[RowRegistry]
+        :param parent_key: registry key of the model the children belong to,
+            used as the scope of children reached through many-to-many
+        :type parent_key: Optional[RegistryKey]
+        :param scope: registry scope of the model the children belong to
+        :type scope: Any
         :return: dictionary with keys corresponding to model fields names
-        and values are database values
-        :rtype: dict
+            and values are database values, and names of relations whose
+            child was reused from the registry
+        :rtype: tuple[dict, set[str]]
         """
+        reused: set[str] = set()
 
         for related in related_models:
             field = cls.ormar_config.model_fields[related]
@@ -261,19 +535,22 @@ class ModelRow(NewBaseModel):
                 current_relation_str=current_relation_str,
                 related=related,
             )
-            child = model_cls.from_row(
-                row,
-                related_models=remainder,
+            child, child_reused = model_cls._materialize_row(
+                row=row,
+                source_model=source_model,
+                related_models=remainder or [],
                 related_field=field,
                 excludable=excludable,
                 current_relation_str=relation_str,
-                source_model=source_model,
                 proxy_source_model=proxy_source_model,
-                used_prefixes=used_prefixes,
                 plan_cache=plan_cache,
+                registry=registry,
+                scope=parent_key if field.is_multi else scope,
             )
-            item[model_cls.get_column_name_from_alias(related)] = child
-            if (
+            item[related] = child
+            if child_reused:
+                reused.add(related)
+            elif (
                 field.is_multi
                 and child
                 and not model_excludable.is_excluded(field.through.get_name())
@@ -282,13 +559,14 @@ class ModelRow(NewBaseModel):
                     row=row,
                     item=item,
                     related=related,
+                    relation_str=relation_str,
                     excludable=excludable,
                     child=child,
                     proxy_source_model=proxy_source_model,
                     plan_cache=plan_cache,
                 )
 
-        return item
+        return item, reused
 
     @staticmethod
     def _process_remainder_and_relation_string(
@@ -323,6 +601,7 @@ class ModelRow(NewBaseModel):
         row: ResultProxy,
         item: dict,
         related: str,
+        relation_str: str,
         excludable: ExcludableItems,
         child: "Model",
         proxy_source_model: Optional[type["Model"]],
@@ -338,6 +617,8 @@ class ModelRow(NewBaseModel):
         :type item: dict
         :param related: current relation name
         :type related: str
+        :param relation_str: path of the many to many relation from the query root
+        :type relation_str: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems
         :param child: child item of parent
@@ -350,8 +631,8 @@ class ModelRow(NewBaseModel):
         through_name = cls.ormar_config.model_fields[related].through.get_name()
         through_child = cls._create_through_instance(
             row=row,
-            related=related,
             through_name=through_name,
+            relation_str=relation_str,
             excludable=excludable,
             plan_cache=plan_cache,
         )
@@ -367,7 +648,7 @@ class ModelRow(NewBaseModel):
         cls,
         row: ResultProxy,
         through_name: str,
-        related: str,
+        relation_str: str,
         excludable: ExcludableItems,
         plan_cache: Optional[PlanCache] = None,
     ) -> "ModelRow":
@@ -379,8 +660,8 @@ class ModelRow(NewBaseModel):
         :type row: sqlalchemy.engine.ResultProxy
         :param through_name: name of the through field
         :type through_name: str
-        :param related: name of the relation
-        :type related: str
+        :param relation_str: path of the many to many relation from the query root
+        :type relation_str: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems
         :param plan_cache: optional per-queryset plan cache
@@ -389,9 +670,7 @@ class ModelRow(NewBaseModel):
         :rtype: "ModelRow"
         """
         model_cls = cls.ormar_config.model_fields[through_name].to
-        table_prefix = cls.ormar_config.alias_manager.resolve_relation_alias(
-            from_model=cls, relation_name=related
-        )
+        table_prefix = alias_for(f"{relation_str}__{through_name}")
         # remove relations on through field — must happen before the plan is
         # built so the plan reflects the through-model's full exclude set
         model_excludable = excludable.get(model_cls=model_cls, alias=table_prefix)
@@ -416,7 +695,7 @@ class ModelRow(NewBaseModel):
         excludable)`` triple — the work that previously ran inside
         ``extract_prefixed_table_columns`` for every row.
 
-        :param table_prefix: prefix of the table from AliasManager
+        :param table_prefix: alias of the table from alias_for
         :type table_prefix: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems
@@ -438,10 +717,27 @@ class ModelRow(NewBaseModel):
         excluded = frozenset(
             cls.get_names_to_exclude(excludable=excludable, alias=table_prefix)
         )
+        pk_name = cls.ormar_config.pkname
+        pk_column = next(
+            (column for column, field_name in mappings if field_name == pk_name),
+            None,
+        )
+        model_fields = cls.ormar_config.model_fields
+        foreign_key_names = tuple(
+            field_name
+            for _, field_name in mappings
+            if model_fields[field_name].is_relation
+        )
+        cls.trusted_row_construction()  # fills ``_required_row_fields``
         return RowExtractionPlan(
             column_mappings=mappings,
             excluded_field_names=excluded,
-            pk_field_name=cls.ormar_config.pkname,
+            pk_field_name=pk_name,
+            pk_column=pk_column,
+            foreign_key_names=foreign_key_names,
+            holds_required_fields=cls._required_row_fields.issubset(
+                field_name for _, field_name in mappings
+            ),
         )
 
     @classmethod
@@ -456,7 +752,7 @@ class ModelRow(NewBaseModel):
         shared between querysets. When ``plan_cache`` is ``None`` (legacy /
         external caller) only the shared plans are used.
 
-        :param table_prefix: prefix of the table from AliasManager
+        :param table_prefix: alias of the table from alias_for
         :type table_prefix: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems
@@ -483,7 +779,7 @@ class ModelRow(NewBaseModel):
         Return a plan shared between querysets for the model's own
         include/exclude/pk_only settings at the given table prefix.
 
-        :param table_prefix: prefix of the table from AliasManager
+        :param table_prefix: alias of the table from alias_for
         :type table_prefix: str
         :param excludable: structure of fields to include and exclude
         :type excludable: ExcludableItems

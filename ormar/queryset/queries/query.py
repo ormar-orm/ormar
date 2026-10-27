@@ -10,14 +10,26 @@ from ormar.models.helpers.models import group_related_list
 from ormar.queryset.actions.filter_action import FilterAction
 from ormar.queryset.join import SqlJoin
 from ormar.queryset.queries import FilterQuery, LimitQuery, OffsetQuery, OrderQuery
+from ormar.relations.aliases import prefixed_columns
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
     from ormar.models.excludable import ExcludableItems
     from ormar.queryset import OrderAction
+    from ormar.queryset.templates import SlotBinder
 
 
 class Query:
+    """
+    Builds the select of a queryset: joins of ``select_related``, selected
+    columns, filters, ordering, limit and offset (with a pagination subquery
+    when a limit meets ``select_related``).
+
+    With a ``binder`` (see ``templates.SlotBinder``) every filter value, the
+    limit and the offset are bound as named parameters, so the select can be
+    cached as a statement template.
+    """
+
     def __init__(  # noqa CFQ002
         self,
         model_cls: type["Model"],
@@ -29,6 +41,7 @@ class Query:
         excludable: "ExcludableItems",
         order_bys: Optional[list["OrderAction"]],
         limit_raw_sql: bool,
+        binder: Optional["SlotBinder"] = None,
     ) -> None:
         self.query_offset = offset
         self.limit_count = limit_count
@@ -49,6 +62,7 @@ class Query:
         self._init_sorted_orders()
 
         self.limit_raw_sql = limit_raw_sql
+        self.binder = binder
 
     def _init_sorted_orders(self) -> None:
         """
@@ -113,9 +127,7 @@ class Query:
         self_related_fields = self.model_cls.own_table_columns(
             model=self.model_cls, excludable=self.excludable, use_alias=True
         )
-        self.columns = self.model_cls.ormar_config.alias_manager.prefixed_columns(  # type: ignore
-            "", self.table, self_related_fields
-        )
+        self.columns = prefixed_columns("", self.table, self_related_fields)  # type: ignore
         self.apply_order_bys_for_primary_model()
         self.select_from = self.table
 
@@ -193,15 +205,21 @@ class Query:
 
         limit_qry: Select[Any] = sqlalchemy.sql.select(qry_text)
         limit_qry = limit_qry.select_from(self.select_from)  # type: ignore
-        limit_qry = FilterQuery(filter_clauses=self.filter_clauses).apply(limit_qry)
         limit_qry = FilterQuery(
-            filter_clauses=self.exclude_clauses, exclude=True
-        ).apply(limit_qry)
+            filter_clauses=self.filter_clauses, binder=self.binder
+        ).apply(expr=limit_qry)
+        limit_qry = FilterQuery(
+            filter_clauses=self.exclude_clauses, exclude=True, binder=self.binder
+        ).apply(expr=limit_qry)
         limit_qry = limit_qry.group_by(qry_text)
         for order_by in maxes.values():
             limit_qry = limit_qry.order_by(order_by)
-        limit_qry = LimitQuery(limit_count=self.limit_count).apply(limit_qry)
-        limit_qry = OffsetQuery(query_offset=self.query_offset).apply(limit_qry)
+        limit_qry = LimitQuery(limit_count=self.limit_count, binder=self.binder).apply(
+            expr=limit_qry
+        )
+        limit_qry = OffsetQuery(
+            query_offset=self.query_offset, binder=self.binder
+        ).apply(expr=limit_qry)
         limit_qry = limit_qry.alias("limit_query")  # type: ignore
         on_clause = sqlalchemy.text(
             f"limit_query.{pk_alias}={self.table.name}.{pk_alias}"
@@ -226,13 +244,19 @@ class Query:
         :return: expression with all present clauses applied
         :rtype: sqlalchemy.sql.selectable.Select
         """
-        expr = FilterQuery(filter_clauses=self.filter_clauses).apply(expr)
-        expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
-            expr
-        )
+        expr = FilterQuery(
+            filter_clauses=self.filter_clauses, binder=self.binder
+        ).apply(expr=expr)
+        expr = FilterQuery(
+            filter_clauses=self.exclude_clauses, exclude=True, binder=self.binder
+        ).apply(expr=expr)
         if not self._pagination_query_required():
-            expr = LimitQuery(limit_count=self.limit_count).apply(expr)
-            expr = OffsetQuery(query_offset=self.query_offset).apply(expr)
+            expr = LimitQuery(limit_count=self.limit_count, binder=self.binder).apply(
+                expr=expr
+            )
+            expr = OffsetQuery(
+                query_offset=self.query_offset, binder=self.binder
+            ).apply(expr=expr)
         expr = OrderQuery(sorted_orders=self.sorted_orders).apply(expr)
         return expr
 

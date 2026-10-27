@@ -1,14 +1,18 @@
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional
 
 import sqlalchemy
 from sqlalchemy import TextClause, text
 
 import ormar  # noqa I100
-from ormar.exceptions import ModelDefinitionError, RelationshipInstanceError
-from ormar.relations import AliasManager
+from ormar.exceptions import (
+    ModelDefinitionError,
+    QueryDefinitionError,
+    RelationshipInstanceError,
+)
+from ormar.relations.aliases import alias_for, prefixed_columns, prefixed_table
 
 if TYPE_CHECKING:  # pragma no cover
-    from ormar import ManyToManyField, Model
+    from ormar import Model
     from ormar.models.excludable import ExcludableItems
     from ormar.queryset import OrderAction
 
@@ -27,7 +31,6 @@ class SqlJoin:
         relation_str: str,
         related_models: Any = None,
         own_alias: str = "",
-        source_model: Optional[type["Model"]] = None,
         already_sorted: Optional[dict] = None,
     ) -> None:
         self.relation_name = relation_name
@@ -48,10 +51,9 @@ class SqlJoin:
         ]
 
         self._next_model: Optional[type["Model"]] = None
-        self._next_alias: Optional[str] = None
+        self.next_alias = ""
 
         self.relation_str = relation_str
-        self.source_model = source_model
 
     @property
     def next_model(self) -> type["Model"]:
@@ -64,26 +66,6 @@ class SqlJoin:
     @next_model.setter
     def next_model(self, value: type["Model"]) -> None:
         self._next_model = value
-
-    @property
-    def next_alias(self) -> str:
-        if not self._next_alias:  # pragma: nocover
-            raise RelationshipInstanceError("Alias for given relation not found.")
-        return self._next_alias
-
-    @next_alias.setter
-    def next_alias(self, value: str) -> None:
-        self._next_alias = value
-
-    @property
-    def alias_manager(self) -> AliasManager:
-        """
-        Shortcut for ormar's model AliasManager stored on OrmarConfig.
-
-        :return: alias manager from model's OrmarConfig
-        :rtype: AliasManager
-        """
-        return self.main_model.ormar_config.alias_manager
 
     @property
     def to_table(self) -> sqlalchemy.Table:
@@ -142,37 +124,39 @@ class SqlJoin:
 
         :return: list of used aliases, select from, list of aliased columns, sort orders
         :rtype: tuple[list[str], Join, list[TextClause], dict]
+        :raises RelationshipInstanceError: if a through model is selected directly
         """
+        if self.target_field.is_through:
+            raise RelationshipInstanceError(
+                f"Relation '{self.relation_str}' points to a through model, "
+                "select the many to many relation instead - "
+                "the through model is loaded with it."
+            )
         if self.target_field.is_multi:
             self._process_m2m_through_table()
 
         self.next_model = self.target_field.to
-        self._forward_join()
+        self._forward_join(relation_path=self.relation_str)
 
         self._process_following_joins()
 
         return (self.used_aliases, self.select_from, self.columns, self.sorted_orders)
 
-    def _forward_join(self) -> None:
+    def _forward_join(self, relation_path: str) -> None:
         """
-        Process actual join.
-        Registers complex relation join on encountering of the duplicated alias.
+        Process actual join, the joined table is aliased by its relation path.
+
+        :param relation_path: path of the joined table from the query root model
+        :type relation_path: str
+        :raises QueryDefinitionError: if two joined tables would share an alias
         """
-        self.next_alias = self.alias_manager.resolve_relation_alias(
-            from_model=self.target_field.owner, relation_name=self.relation_name
-        )
-        if self.next_alias not in self.used_aliases:
-            self._process_join()
-        else:
-            if "__" in self.relation_str and self.source_model:
-                relation_key = f"{self.source_model.get_name()}_{self.relation_str}"
-                if relation_key not in self.alias_manager:
-                    self.next_alias = self.alias_manager.add_alias(
-                        alias_key=relation_key
-                    )
-                else:
-                    self.next_alias = self.alias_manager[relation_key]
-                self._process_join()
+        self.next_alias = alias_for(relation_path)
+        if self.next_alias in self.used_aliases:
+            raise QueryDefinitionError(
+                f"Alias '{self.next_alias}' of relation '{relation_path}' collides "
+                "with an already joined relation."
+            )
+        self._process_join()
 
     def _process_following_joins(self) -> None:
         """
@@ -216,7 +200,6 @@ class SqlJoin:
             related_models=remainder,
             relation_str="__".join([self.relation_str, related_name]),
             own_alias=self.next_alias,
-            source_model=self.source_model or self.main_model,
             already_sorted=self.already_sorted,
         )
         (
@@ -244,7 +227,9 @@ class SqlJoin:
         new_part = self._process_m2m_related_name_change()
 
         self.next_model = self.target_field.through
-        self._forward_join()
+        self._forward_join(
+            relation_path=f"{self.relation_str}__{self.target_field.through.get_name()}"
+        )
 
         self.relation_name = new_part
         self.own_alias = self.next_alias
@@ -301,9 +286,7 @@ class SqlJoin:
             to_table_name=self.to_table.name,
             to_column_name=to_key,
         )
-        target_table = self.alias_manager.prefixed_table_name(
-            self.next_alias, self.to_table
-        )
+        target_table = prefixed_table(self.next_alias, self.to_table)
         self.select_from = sqlalchemy.sql.outerjoin(
             self.select_from,  # type: ignore
             target_table,
@@ -319,7 +302,7 @@ class SqlJoin:
             use_alias=True,
         )
         self.columns.extend(
-            self.alias_manager.prefixed_columns(  # type: ignore
+            prefixed_columns(
                 self.next_alias,
                 target_table,  # type: ignore
                 self_related_fields,
@@ -357,23 +340,8 @@ class SqlJoin:
         """
         if self.target_field.is_multi and "__" in order_by:
             self._verify_allowed_order_field(order_by=order_by)
-            alias = self.next_alias
-            model = self.target_field.owner
-        elif self.target_field.is_multi:
-            alias = self.alias_manager.resolve_relation_alias(
-                from_model=self.target_field.through,
-                relation_name=cast(
-                    "ManyToManyField", self.target_field
-                ).get_relation_name(),
-            )
-            model = self.target_field.to
-        else:
-            alias = self.alias_manager.resolve_relation_alias(
-                from_model=self.target_field.owner, relation_name=self.target_field.name
-            )
-            model = self.target_field.to
-
-        return alias, model
+            return self.next_alias, self.target_field.owner
+        return alias_for(self.relation_str), self.target_field.to
 
     def _get_order_bys(self) -> None:  # noqa: CCR001
         """

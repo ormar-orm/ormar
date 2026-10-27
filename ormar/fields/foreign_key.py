@@ -335,16 +335,6 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         self.foreign_key_name: Optional[str] = kwargs.pop("foreign_key_name", None)
         super().__init__(**kwargs)
 
-    def get_source_related_name(self) -> str:
-        """
-        Returns name to use for source relation name.
-        For FK it's the same, differs for m2m fields.
-        It's either set as `related_name` or by default it's owner model. get_name + 's'
-        :return: name of the related_name or default related name.
-        :rtype: str
-        """
-        return self.get_related_name()
-
     def get_related_name(self) -> str:
         """
         Returns name to use for reverse relation.
@@ -549,6 +539,22 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :return: (if needed) registered Model
         :rtype: Model
         """
+        model = self.construct_pk_only_model(value)
+        if to_register:
+            self.register_relation(model=model, child=child)
+        return model
+
+    def construct_pk_only_model(self, value: Any) -> "Model":
+        """
+        Takes a pk value and creates a dummy instance of the related model
+        with only the pk populated, without registering it on any side.
+
+        :param value: value of a related pk / fk column
+        :type value: Any
+        :raises RelationshipInstanceError: if value does not match the pk type
+        :return: related model with only pk set
+        :rtype: Model
+        """
         if self.to.pk_type() == uuid.UUID and isinstance(value, str):  # pragma: nocover
             value = uuid.UUID(value)
         if not isinstance(value, self.to.pk_type()):
@@ -560,10 +566,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
                     f"is of type {self.to.pk_type()} "
                     f"while {type(value)} passed as a parameter."
                 )
-        model = create_dummy_instance(fk=self.to, pk=value)
-        if to_register:
-            self.register_relation(model=model, child=child)
-        return model
+        return create_dummy_instance(fk=self.to, pk=value)
 
     def register_relation(self, model: "Model", child: "Model") -> None:
         """
@@ -653,12 +656,3 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :rtype: bool
         """
         return self.name
-
-    def get_source_model(self) -> type["Model"]:  # pragma: no cover
-        """
-        Returns model from which the relation comes -> either owner or through model
-
-        :return: source model
-        :rtype: type["Model"]
-        """
-        return self.owner

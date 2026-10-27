@@ -455,6 +455,7 @@ async def test_inheritance_with_multi_relation() -> None:
 
             unicorn = (
                 await Bus2.objects.select_related(["owner", "co_owners"])
+                .filter(name="Unicorn 2")
                 .exclude(co_owners__name="Joe")
                 .get()
             )

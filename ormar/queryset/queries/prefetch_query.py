@@ -10,6 +10,7 @@ import ormar  # noqa:  I100, I202
 from ormar.queryset.clause import QueryClause
 from ormar.queryset.queries.query import Query
 from ormar.queryset.utils import translate_list_to_dict
+from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import ForeignKeyField, Model
@@ -195,6 +196,7 @@ class LoadNode(Node):
     ) -> None:
         super().__init__(relation_field=relation_field, parent=parent)
         self.excludable = excludable
+        self.query_excludable = excludable
         self.exclude_prefix: str = ""
         self.orders_by = orders_by
         self.use_alias = True
@@ -214,6 +216,11 @@ class LoadNode(Node):
         if self.relation_field.is_multi:
             query_target = self.relation_field.through
             select_related = [self.target_name]
+            self.query_excludable = self.excludable.with_entry_alias(
+                model_cls=self.relation_field.to,
+                source_alias=self.exclude_prefix,
+                target_alias=self.table_prefix,
+            )
         else:
             query_target = self.relation_field.to
             select_related = []
@@ -228,7 +235,7 @@ class LoadNode(Node):
                 exclude_clauses=[],
                 offset=None,
                 limit_count=None,
-                excludable=self.excludable,
+                excludable=self.query_excludable,
                 order_bys=self._extract_own_order_bys(),
                 limit_raw_sql=False,
             )
@@ -252,15 +259,9 @@ class LoadNode(Node):
         if the excludable has the exclude/include clauses
         """
         related_field_names = self.relation_field.get_related_field_name()
-        alias_manager = self.relation_field.to.ormar_config.alias_manager
-        relation_key = self._build_relation_key()
-        self.exclude_prefix = alias_manager.resolve_relation_alias_after_complex(
-            source_model=self.source_model,
-            relation_str=relation_key,
-            relation_field=self.relation_field,
-        )
+        self.exclude_prefix = alias_for(self._build_relation_key())
         if self.relation_field.is_multi:
-            self.table_prefix = self.exclude_prefix
+            self.table_prefix = alias_for(self.target_name)
         target_model = self.relation_field.to
         model_excludable = self.excludable.get(
             model_cls=target_model, alias=self.exclude_prefix
@@ -380,10 +381,10 @@ class LoadNode(Node):
             excludable=self.excludable, alias=self.exclude_prefix
         )
         # ``self.table_prefix`` and ``self.exclude_prefix`` can differ, so the
-        # plan only amortizes the column mapping work — exclude set is reused
-        # from above. Build once before the loop.
+        # plan is built from the sub-query excludable and only amortizes the
+        # column mapping work — exclude set is reused from above.
         row_plan = self.relation_field.to.build_row_extraction_plan(
-            self.table_prefix, self.excludable
+            self.table_prefix, self.query_excludable
         )
         parsed_rows: dict[tuple, "Model"] = {}
         for row in self.rows:

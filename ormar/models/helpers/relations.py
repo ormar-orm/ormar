@@ -21,58 +21,10 @@ from ormar import ForeignKey, ManyToMany
 from ormar.fields import Through
 from ormar.models.descriptors import RelationDescriptor
 from ormar.models.helpers.sqlalchemy import adjust_through_many_to_many_model
-from ormar.relations import AliasManager
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
-    from ormar.fields import BaseField, ForeignKeyField, ManyToManyField
-
-alias_manager = AliasManager()
-
-
-def register_relation_on_build(field: "ForeignKeyField") -> None:
-    """
-    Registers ForeignKey relation in alias_manager to set a table_prefix.
-    Registration include also reverse relation side to be able to join both sides.
-
-    Relation is registered by model name and relation field name to allow for multiple
-    relations between two Models that needs to have different
-    aliases for proper sql joins.
-
-    :param field: relation field
-    :type field: ForeignKey class
-    """
-    alias_manager.add_relation_type(
-        source_model=field.owner,
-        relation_name=field.name,
-        reverse_name=field.get_source_related_name(),
-    )
-
-
-def register_many_to_many_relation_on_build(field: "ManyToManyField") -> None:
-    """
-    Registers connection between through model and both sides of the m2m relation.
-    Registration include also reverse relation side to be able to join both sides.
-
-    Relation is registered by model name and relation field name to allow for multiple
-    relations between two Models that needs to have different
-    aliases for proper sql joins.
-
-    By default relation name is a model.name.lower().
-
-    :param field: relation field
-    :type field: ManyToManyField class
-    """
-    alias_manager.add_relation_type(
-        source_model=field.through,
-        relation_name=field.default_source_field_name(),
-        reverse_name=field.get_source_related_name(),
-    )
-    alias_manager.add_relation_type(
-        source_model=field.through,
-        relation_name=field.default_target_field_name(),
-        reverse_name=field.get_related_name(),
-    )
+    from ormar.fields import ForeignKeyField, ManyToManyField
 
 
 def expand_reverse_relationship(model_field: "ForeignKeyField") -> None:
@@ -109,6 +61,21 @@ def expand_reverse_relationships(model: type["Model"]) -> None:
             expand_reverse_relationship(model_field=model_field)
 
 
+def reset_relation_caches(model: type["Model"]) -> None:
+    """
+    Drop the lazily cached relation metadata of a model that gains a reverse
+    relation, so models already used before a related model was defined see
+    the new relation (and lose trusted row construction).
+
+    :param model: model receiving a reverse relation
+    :type model: type[Model]
+    """
+    model._related_names = None
+    model._related_fields = None
+    model._related_field_map = None
+    model._trusted_rows = None
+
+
 def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
     """
     Registers reverse ForeignKey field on related model.
@@ -121,6 +88,7 @@ def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
     :type model_field: relation Field
     """
     related_name = model_field.get_related_name()
+    reset_relation_caches(model=model_field.to)
     related_model_fields = model_field.to.ormar_config.model_fields
     if model_field.is_multi:
         related_model_fields[related_name] = ManyToMany(  # type: ignore
@@ -167,6 +135,10 @@ def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
         add_field_serializer_for_reverse_relations(
             to_model=model_field.to, related_name=related_name
         )
+        # The metaclass marks finished models incomplete; pydantic >= 2.14 only
+        # drops the cached schema on a forced rebuild of a complete model, so
+        # restore the flag or the new reverse field is silently ignored.
+        model_field.to.__pydantic_complete__ = True  # type: ignore[attr-defined]
         model_field.to.model_rebuild(
             force=True,
             _types_namespace={
@@ -308,30 +280,6 @@ def register_through_shortcut_fields(model_field: "ManyToManyField") -> None:
     )
     setattr(model_field.owner, through_name, RelationDescriptor(name=through_name))
     setattr(model_field.to, through_name, RelationDescriptor(name=through_name))
-
-
-def register_relation_in_alias_manager(field: "BaseField") -> None:
-    """
-    Registers the relation (and reverse relation) in alias manager.
-    The m2m relations require registration of through model between
-    actual end models of the relation.
-
-    Delegates the actual registration to:
-    m2m - register_many_to_many_relation_on_build
-    fk - register_relation_on_build
-
-    :param field: relation field
-    :type field: ForeignKey or ManyToManyField class
-    """
-    if field.is_multi:
-        if field.has_unresolved_forward_refs():
-            return
-        field = cast("ManyToManyField", field)
-        register_many_to_many_relation_on_build(field=field)
-    elif field.is_relation and not field.is_through:
-        if field.has_unresolved_forward_refs():
-            return
-        register_relation_on_build(field=cast("ForeignKeyField", field))
 
 
 def verify_related_name_dont_duplicate(
