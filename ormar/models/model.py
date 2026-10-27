@@ -415,6 +415,25 @@ class Model(ModelRow):
         await self._emit_signal("post_delete", instance=self)
         return result
 
+    async def _load_by_set_fields(self) -> dict[str, Any]:
+        """
+        Load the row of a key-only model referenced by a unique non-pk field
+        (``ForeignKey(to_field=...)``): it has no primary key, so the row is
+        looked up by its set own fields.
+
+        :raises NoMatch: if no row matches
+        :return: values of the row by field name
+        :rtype: dict[str, Any]
+        """
+        own_fields = self.extract_db_own_fields()
+        lookup = {
+            name: value
+            for name, value in self.__dict__.items()
+            if name in own_fields and value is not None
+        }
+        found = await type(self).objects.get(**lookup)
+        return {name: found.__dict__[name] for name in own_fields}
+
     async def load(self: T) -> T:
         """
         Allow to refresh existing Models fields from database.
@@ -426,14 +445,18 @@ class Model(ModelRow):
         :return: reloaded Model
         :rtype: Model
         """
-        template = pk_select_template(model_cls=type(self), pk=self.persisted_key)
-        row = await self._execute_query(
-            expr=template.statement, is_select=True, params=template.params
-        )
-        if not row:  # pragma nocover
-            raise NoMatch("Instance was deleted from database and cannot be refreshed")
-        kwargs = dict(row)
-        kwargs = self.translate_aliases_to_columns(kwargs)
+        if self.persisted_key is None:
+            kwargs = await self._load_by_set_fields()
+        else:
+            template = pk_select_template(model_cls=type(self), pk=self.persisted_key)
+            row = await self._execute_query(
+                expr=template.statement, is_select=True, params=template.params
+            )
+            if not row:  # pragma nocover
+                raise NoMatch(
+                    "Instance was deleted from database and cannot be refreshed"
+                )
+            kwargs = self.translate_aliases_to_columns(dict(row))
         self.update_from_dict(kwargs)
         self.set_save_status(True)
         self.__setattr_fields__.clear()

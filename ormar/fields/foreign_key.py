@@ -41,7 +41,7 @@ class FkParams(NamedTuple):
 
 
 def populate_fk_params_based_on_to_model(
-    *, to: type["T"], nullable: bool, virtual: bool
+    *, to: type["T"], nullable: bool, virtual: bool, to_field: Optional[str] = None
 ) -> FkParams:
     """
     Based on target to model to which relation leads to populates the type of the
@@ -53,6 +53,8 @@ def populate_fk_params_based_on_to_model(
     :type nullable: bool
     :param virtual: whether the field is a reverse relation holding no column
     :type virtual: bool
+    :param to_field: unique field of the target referenced instead of its pk
+    :type to_field: Optional[str]
     :raises ModelDefinitionError: if a column-holding relation leads to a model
         with a composite primary key (not supported yet)
     :return: annotation, column type and key-only model of the relation
@@ -64,18 +66,58 @@ def populate_fk_params_based_on_to_model(
             f"Relations to models with a composite primary key are not supported "
             f"yet ({to.__name__})."
         )
-    to_field = to.ormar_config.model_fields[key.fields[0]]
-    key_only_model = key_only_model_type(target=to, fields=key.fields)
+    if to_field is None:
+        target_fields = key.fields
+        value_type = key.python_type()
+    else:
+        validate_to_field(to=to, to_field=to_field)
+        target_fields = (to_field,)
+        value_type = to.ormar_config.model_fields[to_field].__type__
+    target_field = to.ormar_config.model_fields[target_fields[0]]
+    key_only_model = key_only_model_type(target=to, fields=target_fields)
     annotation = (
-        Union[key.python_type(), to, key_only_model]
+        Union[value_type, to, key_only_model]
         if not nullable
-        else Optional[Union[key.python_type(), to, key_only_model]]
+        else Optional[Union[value_type, to, key_only_model]]
     )
     return FkParams(
         annotation=annotation,
-        column_type=to_field.column_type,
+        column_type=target_field.column_type,
         key_only_model=key_only_model,
     )
+
+
+def validate_to_field(to: type["Model"], to_field: str) -> None:
+    """
+    Check that a ``to_field`` names a field identifying one row of the target:
+    its primary key, a ``unique=True`` field or a single-column
+    ``UniqueColumns`` constraint.
+
+    :raises ModelDefinitionError: if the field does not exist or is not unique
+    :param to: target model
+    :type to: type[Model]
+    :param to_field: referenced field name
+    :type to_field: str
+    """
+    field = to.ormar_config.model_fields.get(to_field)
+    if field is None or field.is_relation:
+        raise ModelDefinitionError(
+            f"to_field '{to_field}' is not a column field of {to.__name__}."
+        )
+    unique_sets = [
+        {column.name for column in constraint.columns}
+        for constraint in to.ormar_config.table.constraints
+        if isinstance(constraint, sqlalchemy.UniqueConstraint)
+    ]
+    if not (
+        to.ormar_config.pk.fields == (to_field,)
+        or field.unique
+        or {field.get_alias()} in unique_sets
+    ):
+        raise ModelDefinitionError(
+            f"to_field '{to_field}' of {to.__name__} must be unique "
+            "(primary key, unique=True or a UniqueColumns constraint)."
+        )
 
 
 def validate_not_allowed_fields(kwargs: dict) -> None:
@@ -204,6 +246,13 @@ def ForeignKey(  # type: ignore # noqa CFQ002
     sql_nullable = nullable if sql_nullable is None else sql_nullable
 
     index = kwargs.pop("index", False)
+    to_field = kwargs.pop("to_field", None)
+    db_constraint = kwargs.pop("db_constraint", True)
+    if not db_constraint and (onupdate is not None or ondelete is not None):
+        raise ModelDefinitionError(
+            "ondelete/onupdate need a database constraint, they cannot be used "
+            "with db_constraint=False."
+        )
     if kwargs.pop("primary_key", False):
         raise ModelDefinitionError(
             "Relation fields cannot be part of a primary key yet."
@@ -219,6 +268,7 @@ def ForeignKey(  # type: ignore # noqa CFQ002
             to=to,  # type: ignore
             nullable=nullable,
             virtual=virtual,
+            to_field=to_field,
         )
         __type__ = params.annotation
         column_type = params.column_type
@@ -244,6 +294,8 @@ def ForeignKey(  # type: ignore # noqa CFQ002
         onupdate=onupdate,
         ondelete=ondelete,
         foreign_key_name=foreign_key_name,
+        to_field=to_field,
+        db_constraint=db_constraint,
         owner=owner,
         self_reference=self_reference,
         is_relation=True,
@@ -270,6 +322,8 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         self.ondelete: str = kwargs.pop("ondelete", None)
         self.onupdate: str = kwargs.pop("onupdate", None)
         self.foreign_key_name: Optional[str] = kwargs.pop("foreign_key_name", None)
+        self.to_field: Optional[str] = kwargs.pop("to_field", None)
+        self.db_constraint: bool = kwargs.pop("db_constraint", True)
         super().__init__(**kwargs)
 
     def construct_constraints(self) -> list:
@@ -283,7 +337,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :return: SQLAlchemy foreign keys, empty until the target is resolved
         :rtype: list
         """
-        if self.virtual or self.has_unresolved_forward_refs():
+        if self.virtual or not self.db_constraint or self.has_unresolved_forward_refs():
             return []
         owner_table = self.owner.ormar_config.tablename
         target_table = self.to.ormar_config.tablename
@@ -369,9 +423,19 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
                     target_field=field,
                     target_column=self.to.get_column_alias(field_name=field),
                 )
-                for field in self.to.ormar_config.pk.fields
+                for field in self.target_fields()
             ),
         )
+
+    def target_fields(self) -> tuple[str, ...]:
+        """
+        :return: fields of the related model the foreign key references: its
+            ``to_field`` or its primary key fields
+        :rtype: tuple[str, ...]
+        """
+        if self.to_field is not None:
+            return (self.to_field,)
+        return self.to.ormar_config.pk.fields
 
     def _evaluate_forward_ref(
         self, globalns: Any, localns: Any, is_through: bool = False
@@ -398,7 +462,10 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         if self.to.__class__ == ForwardRef:
             self._evaluate_forward_ref(globalns, localns)
             params = populate_fk_params_based_on_to_model(
-                to=self.to, nullable=self.nullable, virtual=self.virtual
+                to=self.to,
+                nullable=self.nullable,
+                virtual=self.virtual,
+                to_field=self.to_field,
             )
             self.__type__ = params.annotation
             self.column_type = params.column_type
@@ -449,11 +516,11 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :rtype: Model
         """
         key_only_model = None
-        key = self.to.ormar_config.pk
+        target_fields = self.target_fields()
         own_keys = set(value.keys()) - self.to.extract_related_names()
         if (
-            own_keys == set(key.fields)
-            and key.lookup(kwargs=value) is not None
+            own_keys == set(target_fields)
+            and all(value.get(field) is not None for field in target_fields)
             and not self.is_through
         ):
             key_only_model = self.to_key_only(**value)
@@ -501,20 +568,40 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :return: related model with only pk set
         :rtype: Model
         """
-        key = self.to.ormar_config.pk
-        key_type = key.python_type()
-        if key_type == uuid.UUID and isinstance(value, str):  # pragma: nocover
+        if isinstance(value, self.to_key_only):
+            values = {field: getattr(value, field) for field in self.target_fields()}
+            return key_only_instance(target=self.to, values=values)
+        value_type = self.target_value_type()
+        if value_type == uuid.UUID and isinstance(value, str):  # pragma: nocover
             value = uuid.UUID(value)
-        if not isinstance(value, key_type):
-            if isinstance(value, self.to_key_only):
-                value = key.value(instance=value)  # type: ignore[arg-type]
-            else:
-                raise RelationshipInstanceError(
-                    f"Relationship error - ForeignKey {self.to.__name__} "
-                    f"is of type {key_type} "
-                    f"while {type(value)} passed as a parameter."
-                )
-        return key_only_instance(target=self.to, values=key.to_dict(value=value))
+        if not isinstance(value, value_type):
+            raise RelationshipInstanceError(
+                f"Relationship error - ForeignKey {self.to.__name__} "
+                f"is of type {value_type} "
+                f"while {type(value)} passed as a parameter."
+            )
+        return key_only_instance(target=self.to, values=self.target_values(value=value))
+
+    def target_value_type(self) -> Any:
+        """
+        :return: python type of a raw value of the relation: the ``to_field``
+            type or the related model's key type
+        :rtype: Any
+        """
+        if self.to_field is not None:
+            return self.to.ormar_config.model_fields[self.to_field].__type__
+        return self.to.ormar_config.pk.python_type()
+
+    def target_values(self, value: Any) -> dict[str, Any]:
+        """
+        :param value: raw value of the relation
+        :type value: Any
+        :return: the value split into the referenced fields of the related model
+        :rtype: dict[str, Any]
+        """
+        if self.to_field is not None:
+            return {self.to_field: value}
+        return self.to.ormar_config.pk.to_dict(value=value)
 
     def register_relation(self, model: "Model", child: "Model") -> None:
         """

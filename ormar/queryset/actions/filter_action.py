@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from sqlalchemy import TextClause
 
@@ -8,7 +8,7 @@ from ormar.queryset.actions.query_action import QueryAction
 from ormar.relations.aliases import prefixed_table
 
 if TYPE_CHECKING:  # pragma: nocover
-    from ormar import Model
+    from ormar import ForeignKeyField, Model
     from ormar.queryset.templates import SlotBinder
 
 FILTER_OPERATORS = {
@@ -128,7 +128,8 @@ class FilterAction(QueryAction):
     def bound_value(self) -> Any:
         """
         Return the value bound to the query: an ormar Model is replaced by its
-        primary key, so ``filter(author=author)`` binds ``author.pk``.
+        value it is referenced by (its primary key or the foreign key's
+        ``to_field``), so ``filter(author=author)`` binds ``author.pk``.
 
         ``filter_value`` itself is left untouched, so the action can be read
         again on every call to collect the value for a cached template.
@@ -137,6 +138,16 @@ class FilterAction(QueryAction):
         :rtype: Any
         """
         if isinstance(self.filter_value, ormar.Model):
+            field = self.target_model.ormar_config.model_fields.get(self.field_name)
+            if (
+                field is not None
+                and field.is_relation
+                and not field.virtual
+                and not field.is_multi
+            ):
+                relation_field = cast("ForeignKeyField", field)
+                values = relation_field.link.values_for(related=self.filter_value)
+                return values[self.field_name]
             return self.filter_value.pk
         return self.filter_value
 
