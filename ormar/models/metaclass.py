@@ -296,8 +296,8 @@ def copy_and_replace_m2m_through_model(  # noqa: CFQ002
         constraints=through_class.ormar_config.constraints,
         order_by=through_class.ormar_config.orders_by,
     )
-    new_config.table = through_class.ormar_config.pkname  # type: ignore
-    new_config.pkname = through_class.ormar_config.pkname
+    # a set table keeps the copy from registering one in metadata on creation
+    new_config.table = through_class.ormar_config.table
     new_config.signals = through_class.ormar_config.signals
     new_config.requires_ref_update = through_class.ormar_config.requires_ref_update
     new_config.model_fields = copy.deepcopy(through_class.ormar_config.model_fields)
@@ -584,7 +584,6 @@ def wire_proxy_from_parent(new_model: type["Model"]) -> None:
     cfg = new_model.ormar_config
     cfg.table = parent_cfg.table
     cfg.tablename = parent_cfg.tablename
-    cfg.pkname = parent_cfg.pkname
     cfg.pk = parent_cfg.pk.rebind(owner=new_model)
     cfg.columns = parent_cfg.columns
     cfg.model_fields = parent_cfg.model_fields
@@ -680,7 +679,7 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
 
         If class has ormar_config declared (so actual ormar Models) it also:
 
-        * populate sqlalchemy columns, pkname and tables from model_fields
+        * populate sqlalchemy columns, primary key and tables from model_fields
         * register reverse relationships on related models
         * exposes alias manager on each Model
         * creates QuerySet for each model and exposes it on a class
@@ -744,18 +743,17 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
                         name=field_name, field=field, new_model=new_model
                     )
 
-                if (
-                    new_model.ormar_config.pkname
-                    and new_model.ormar_config.pkname not in attrs["__annotations__"]
-                    and new_model.ormar_config.pkname not in new_model.model_fields
-                ):
-                    field_name = new_model.ormar_config.pkname
-                    new_model.model_fields[field_name] = (
-                        FieldInfo.from_annotated_attribute(
-                            Optional[int],  # type: ignore
-                            None,
+                for field_name in new_model.ormar_config.pk.fields:
+                    if (
+                        field_name not in attrs["__annotations__"]
+                        and field_name not in new_model.model_fields
+                    ):
+                        new_model.model_fields[field_name] = (
+                            FieldInfo.from_annotated_attribute(
+                                Optional[int],  # type: ignore
+                                None,
+                            )
                         )
-                    )
                 new_model.pk = PkDescriptor(key=new_model.ormar_config.pk)
 
             if not (

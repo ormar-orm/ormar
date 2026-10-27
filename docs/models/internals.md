@@ -29,7 +29,10 @@ For example to list table columns you can:
 ```
 
 !!!tip
-    You can access table primary key name by `Course.ormar_config.pkname`
+    You can access the table primary key by `Course.ormar_config.pk`: its field names
+    with `Course.ormar_config.pk.fields`, database column names with
+    `Course.ormar_config.pk.column_aliases()` and SQLAlchemy columns with
+    `Course.ormar_config.pk.columns()`
 
 !!!info
     For more options visit official [sqlalchemy-metadata][sqlalchemy-metadata] documentation.

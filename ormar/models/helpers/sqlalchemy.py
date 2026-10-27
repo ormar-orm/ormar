@@ -276,7 +276,6 @@ def populate_config_tablename_columns_and_pk(
 
     new_model.ormar_config.columns = columns
     new_model.ormar_config.pk = key
-    new_model.ormar_config.pkname = key.fields[0]
     if not new_model.ormar_config.orders_by:
         # by default, we sort by the primary key if other option not provided
         new_model.ormar_config.orders_by.extend(key.fields)

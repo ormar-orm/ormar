@@ -297,48 +297,6 @@ class ManyToManyField(  # type: ignore
         ]
         return cast("ForeignKeyField", through_field).link.mirrored()
 
-    def get_model_relation_fields(self, use_alias: bool = False) -> str:
-        """
-        Extract names of the database columns or model fields that are connected
-        with given relation based on use_alias switch.
-
-        :param use_alias: use db names aliases or model fields
-        :type use_alias: bool
-        :return: name or names of the related columns/ fields
-        :rtype: Union[str, list[str]]
-        """
-        pk_field = self.owner.ormar_config.model_fields[self.owner.ormar_config.pkname]
-        result = pk_field.get_alias() if use_alias else pk_field.name
-        return result
-
-    def get_related_field_alias(self) -> str:
-        """
-        Extract names of the related database columns or that are connected
-        with given relation based to use as a target in filter clause.
-
-        :return: name or names of the related columns/ fields
-        :rtype: Union[str, dict[str, str]]
-        """
-        if self.self_reference and self.self_reference_primary == self.name:
-            field_name = self.default_target_field_name()
-        else:
-            field_name = self.default_source_field_name()
-        sub_field = self.through.ormar_config.model_fields[field_name]
-        return sub_field.get_alias()
-
-    def get_related_field_name(self) -> Union[str, list[str]]:
-        """
-        Returns name of the relation field that should be used in prefetch query.
-        This field is later used to register relation in prefetch query,
-        populate relations dict, and populate nested model in prefetch query.
-
-        :return: name(s) of the field
-        :rtype: Union[str, list[str]]
-        """
-        if self.self_reference and self.self_reference_primary == self.name:
-            return self.default_target_field_name()
-        return self.default_source_field_name()
-
     def create_default_through_model(self) -> None:
         """
         Creates default empty through model if no additional fields are required.

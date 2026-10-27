@@ -342,61 +342,6 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
             ),
         )
 
-    def get_model_relation_fields(self, use_alias: bool = False) -> str:
-        """
-        Extract names of the database columns or model fields that are connected
-        with given relation based on use_alias switch and which side of the relation
-        the current field is - reverse or normal.
-
-        :param use_alias: use db names aliases or model fields
-        :type use_alias: bool
-        :return: name or names of the related columns/ fields
-        :rtype: Union[str, list[str]]
-        """
-        if use_alias:
-            return self._get_model_relation_fields_alias()
-        return self._get_model_relation_fields_name()
-
-    def _get_model_relation_fields_name(self) -> str:
-        if self.virtual:
-            return self.owner.ormar_config.pkname
-        return self.name
-
-    def _get_model_relation_fields_alias(self) -> str:
-        if self.virtual:
-            return self.owner.ormar_config.model_fields[
-                self.owner.ormar_config.pkname
-            ].get_alias()
-        return self.get_alias()
-
-    def get_related_field_alias(self) -> str:
-        """
-        Extract names of the related database columns or that are connected
-        with given relation based to use as a target in filter clause.
-
-        :return: name or names of the related columns/ fields
-        :rtype: Union[str, dict[str, str]]
-        """
-        if self.virtual:
-            field_name = self.get_related_name()
-            field = self.to.ormar_config.model_fields[field_name]
-            return field.get_alias()
-        target_field = self.to.get_column_alias(self.to.ormar_config.pkname)
-        return target_field
-
-    def get_related_field_name(self) -> Union[str, list[str]]:
-        """
-        Returns name of the relation field that should be used in prefetch query.
-        This field is later used to register relation in prefetch query,
-        populate relations dict, and populate nested model in prefetch query.
-
-        :return: name(s) of the field
-        :rtype: Union[str, list[str]]
-        """
-        if self.virtual:
-            return self.get_related_name()
-        return self.to.ormar_config.pkname
-
     def _evaluate_forward_ref(
         self, globalns: Any, localns: Any, is_through: bool = False
     ) -> None:

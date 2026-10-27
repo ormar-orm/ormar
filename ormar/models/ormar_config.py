@@ -15,7 +15,6 @@ from ormar.signals import SignalEmitter
 
 class OrmarConfig:
     if TYPE_CHECKING:  # pragma: no cover
-        pkname: str
         pk: PrimaryKey
         metadata: sqlalchemy.MetaData
         database: DatabaseConnection
@@ -46,7 +45,6 @@ class OrmarConfig:
         extra: Extra = Extra.forbid,
         constraints: Optional[list[ColumnCollectionConstraint]] = None,
     ) -> None:
-        self.pkname = None  # type: ignore
         self.pk = None  # type: ignore
         self.metadata = metadata  # type: ignore
         self.database = database  # type: ignore

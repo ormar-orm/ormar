@@ -102,7 +102,7 @@ create_test_database = init_tests(base_ormar_config)
 def test_proxy_shares_parent_table() -> None:
     assert User.ormar_config.table is Human.ormar_config.table
     assert User.ormar_config.tablename == Human.ormar_config.tablename
-    assert User.ormar_config.pkname == Human.ormar_config.pkname
+    assert User.ormar_config.pk.fields == Human.ormar_config.pk.fields
     assert User.ormar_config.columns is Human.ormar_config.columns
     assert User.ormar_config.model_fields is Human.ormar_config.model_fields
     assert User.ormar_config.metadata is Human.ormar_config.metadata

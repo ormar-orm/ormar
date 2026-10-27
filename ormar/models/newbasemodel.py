@@ -18,7 +18,6 @@ from typing import (
 )
 
 import pydantic
-import sqlalchemy
 import typing_extensions
 from pydantic_core import to_jsonable_python
 
@@ -115,7 +114,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         "_orm_id",
         "_orm_saved",
         "_orm",
-        "_pk_column",
         "__pk_only__",
         "__ormar_excludable__",
         "__cached_hash__",
@@ -695,7 +693,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         """
         # object.__setattr__(self, "_orm_id", uuid.uuid4().hex)
         object.__setattr__(self, "_orm_saved", False)
-        object.__setattr__(self, "_pk_column", None)
         object.__setattr__(self, "__cached_hash__", None)
         object.__setattr__(self, "__setattr_fields__", set())
         object.__setattr__(
@@ -787,23 +784,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         return cls.__name__
 
     @property
-    def pk_column(self) -> sqlalchemy.Column:
-        """
-        Retrieves primary key sqlalchemy column from models OrmarConfig.table.
-        Each model has to have primary key.
-        Only one primary key column is allowed.
-
-        :return: primary key sqlalchemy column
-        :rtype: sqlalchemy.Column
-        """
-        if object.__getattribute__(self, "_pk_column") is not None:
-            return object.__getattribute__(self, "_pk_column")
-        pk_columns = self.ormar_config.table.primary_key.columns.values()
-        pk_col = pk_columns[0]
-        object.__setattr__(self, "_pk_column", pk_col)
-        return pk_col
-
-    @property
     def saved(self) -> bool:
         """Saved status of the model. Changed by setattr and loading from db"""
         return self._orm_saved
@@ -812,11 +792,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
     def signals(self) -> "SignalEmitter":
         """Exposes signals from model OrmarConfig"""
         return self.ormar_config.signals
-
-    @classmethod
-    def pk_type(cls) -> Any:
-        """Shortcut to models primary key field type"""
-        return cls.ormar_config.model_fields[cls.ormar_config.pkname].__type__
 
     @classmethod
     def db_backend_name(cls) -> str:

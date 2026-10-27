@@ -4,6 +4,19 @@
 
 ### ✨ Breaking changes
 
+* **Primary key and relation internals replaced (preparing composite keys)**
+
+    `ormar_config.pkname`, `Model.pk_column` and `Model.pk_type()` are removed. Use
+    `ormar_config.pk`: `ormar_config.pk.fields` (field names),
+    `.column_aliases()` (database column names), `.columns()` (SQLAlchemy columns)
+    and `.python_type()`. The `ForeignKeyField` helpers
+    `get_related_field_alias()`, `get_related_field_name()` and
+    `get_model_relation_fields()` are replaced by `field.link` (the column pairs
+    connecting two models), `to_pk_only` is renamed to `to_key_only`, and the
+    internal `ForeignKeyConstraint` dataclass and per-field `constraints` list are
+    gone (foreign keys are built from `field.link`). Model definitions, queries,
+    generated SQL and DDL are unchanged.
+
 * **Python 3.10 is no longer supported**
 
     Python 3.10 reaches end-of-life in October 2026, and the fixes for the
