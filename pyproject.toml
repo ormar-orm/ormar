@@ -117,7 +117,7 @@ types-toml = "^0.10.8"
 
 # Documentation
 mkdocs = "^1.5.3"
-mkdocs-material = ">=8.1.2,<9.8"
+mkdocs-material = ">=8.1.2,<9.9"
 mkdocs-material-extensions = "^1.2"
 mkdocstrings = {version = "==1.0.6", extras = ["python"]}
 mkdocs-gen-files = ">=0.5,<0.7"
