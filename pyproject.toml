@@ -95,7 +95,7 @@ codecov = "^2.1.13"
 pytest-asyncio = ">=1.1.0,<2.0"
 fastapi = ">=0.125.0"
 
-ruff = ">=0.5.1,<0.17.3"
+ruff = ">=0.5.1,<0.17.4"
 
 setuptools = ">=78.1.1,<85.0.0"
 
@@ -117,9 +117,9 @@ types-toml = "^0.10.8"
 
 # Documentation
 mkdocs = "^1.5.3"
-mkdocs-material = ">=8.1.2,<9.8"
+mkdocs-material = ">=8.1.2,<9.9"
 mkdocs-material-extensions = "^1.2"
-mkdocstrings = {version = "==1.0.6", extras = ["python"]}
+mkdocstrings = {version = "==1.0.8", extras = ["python"]}
 mkdocs-gen-files = ">=0.5,<0.7"
 mkdocs-literate-nav = "^0.6.1"
 mkdocs-section-index = "^0.3.7"
