@@ -147,11 +147,10 @@ class Model(ModelRow):
         await self._emit_signal("pre_save", instance=self)
         self_fields = self._extract_model_db_fields()
 
-        if (
-            not self.pk
-            and self.ormar_config.model_fields[self.ormar_config.pkname].autoincrement
-        ):
-            self_fields.pop(self.ormar_config.pkname, None)
+        key = self.ormar_config.pk
+        if not self.pk and key.autoincrement:
+            for field in key.fields:
+                self_fields.pop(field, None)
         self_fields = self.populate_default_values(self_fields)
         # Values taken from ``__dict__`` are already set, re-assigning them only
         # costs a validation and two hash recomputations per field.
@@ -169,11 +168,11 @@ class Model(ModelRow):
         self_fields = self.translate_columns_to_aliases(self_fields)
         template = insert_template(model_cls=type(self), values=self_fields)
 
-        pkname = self.ormar_config.pkname
         pk_returned_from_insert = False
         pk = await self._execute_query(expr=template.statement, params=template.params)
-        if pk and isinstance(pk, self.pk_type()):
-            setattr(self, pkname, pk)
+        if pk and isinstance(pk, key.python_type()):
+            for field, part in key.to_dict(value=pk).items():
+                setattr(self, field, part)
             pk_returned_from_insert = True
 
         if self.pk is None:
@@ -196,7 +195,7 @@ class Model(ModelRow):
             field.server_default is not None
             for name, field in self.ormar_config.model_fields.items()
             if name not in self_fields
-            and not (pk_returned_from_insert and name == pkname)
+            and not (pk_returned_from_insert and name in key.fields)
         ):
             await self.load()
 
@@ -339,7 +338,8 @@ class Model(ModelRow):
 
         await self._emit_signal("pre_update", instance=self, passed_args=kwargs)
         self_fields = self._extract_model_db_fields()
-        self_fields.pop(self.get_column_name_from_alias(self.ormar_config.pkname))
+        for field in self.ormar_config.pk.fields:
+            self_fields.pop(field)
         if _columns:
             self_fields = {
                 k: v
@@ -351,7 +351,7 @@ class Model(ModelRow):
             template = update_template(
                 model_cls=type(self),
                 values=self_fields,
-                pk=getattr(self, self.ormar_config.pkname),
+                pk=self.pk,
             )
             await self._execute_query(expr=template.statement, params=template.params)
         self.set_save_status(True)
@@ -375,9 +375,7 @@ class Model(ModelRow):
         :rtype: int
         """
         await self._emit_signal("pre_delete", instance=self)
-        template = delete_template(
-            model_cls=type(self), pk=getattr(self, self.ormar_config.pkname)
-        )
+        template = delete_template(model_cls=type(self), pk=self.pk)
         result = await self._execute_query(
             expr=template.statement, params=template.params
         )

@@ -209,9 +209,9 @@ class PydanticMixin(RelationMixin):
         :rtype: Any
         """
         target: Any = Annotated[
-            field.to.pk_type(),  # type: ignore
+            field.to.ormar_config.pk.python_type(),  # type: ignore
             BeforeValidator(
-                partial(extract_pk_value, pkname=field.to.ormar_config.pkname)
+                partial(extract_pk_value, fields=field.to.ormar_config.pk.fields)
             ),
         ]
         return cls._wrap_relation_field_type(

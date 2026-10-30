@@ -204,10 +204,14 @@ class QueryClause:
         :rtype: tuple[list[sqlalchemy.sql.elements.TextClause], list[str]]
         """
         if kwargs.get("pk"):
-            pk_name = self.model_cls.get_column_alias(
-                self.model_cls.ormar_config.pkname
-            )
-            kwargs[pk_name] = kwargs.pop("pk")
+            key = self.model_cls.ormar_config.pk
+            kwargs = {
+                **{name: value for name, value in kwargs.items() if name != "pk"},
+                **{
+                    self.model_cls.get_column_alias(field_name=field): part
+                    for field, part in key.to_dict(value=kwargs["pk"]).items()
+                },
+            }
 
         filter_clauses, select_related = self._populate_filter_clauses(
             _own_only=_own_only, **kwargs

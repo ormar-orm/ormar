@@ -99,12 +99,12 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         :return: dictionary of model that is about to be saved
         :rtype: dict[str, str]
         """
-        pkname = cls.ormar_config.pkname
-        pk = cls.ormar_config.model_fields[pkname]
-        if new_kwargs.get(pkname, ormar.Undefined) is None and (
-            pk.nullable or pk.autoincrement
-        ):
-            del new_kwargs[pkname]
+        for field_name in cls.ormar_config.pk.fields:
+            field = cls.ormar_config.model_fields[field_name]
+            if new_kwargs.get(field_name, ormar.Undefined) is None and (
+                field.nullable or field.autoincrement
+            ):
+                del new_kwargs[field_name]
         return new_kwargs
 
     @classmethod
@@ -122,10 +122,10 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
             field_value = model_dict.get(field, None)
             if field_value is not None:
                 target_field = cls.ormar_config.model_fields[field]
-                target_pkname = target_field.to.ormar_config.pkname
+                target_key = target_field.to.ormar_config.pk
                 if isinstance(field_value, ormar.Model):  # pragma: no cover
-                    pk_value = getattr(field_value, target_pkname)
-                    if not pk_value:
+                    pk_value = target_key.value(instance=field_value)
+                    if pk_value is None:
                         raise ModelPersistenceError(
                             f"You cannot save {field_value.get_name()} "
                             f"model without pk set!"
@@ -134,10 +134,10 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
                 elif isinstance(field_value, (list, dict)) and field_value:
                     if isinstance(field_value, list):
                         model_dict[field] = [
-                            target.get(target_pkname) for target in field_value
+                            target_key.value_from(data=target) for target in field_value
                         ]
                     else:
-                        model_dict[field] = field_value.get(target_pkname)
+                        model_dict[field] = target_key.value_from(data=field_value)
                 else:
                     model_dict.pop(field, None)
         return model_dict
@@ -327,21 +327,20 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         :rtype: Any
         """
         target = cls.ormar_config.model_fields[field_name].to
-        pkname = target.ormar_config.pkname
+        target_key = target.ormar_config.pk
         if isinstance(value, ormar.Model):
-            value = getattr(value, pkname)
+            value = target_key.value(instance=value)
             if value is None:
                 raise ModelPersistenceError(
                     f"You cannot update {field_name} with {target.get_name()} "
                     f"model without pk set!"
                 )
         elif isinstance(value, dict):
-            value = value.get(pkname)
+            value = target_key.value_from(data=value)
         if value is None:
             return None
-        return target._build_individual_schema_validator()[pkname].validate_python(
-            value
-        )
+        validators = target._build_individual_schema_validator()
+        return validators[target_key.fields[0]].validate_python(value)
 
     @classmethod
     def _build_individual_schema_validator(cls) -> Any:

@@ -5,6 +5,7 @@ from ormar.fields.parsers import decode_bytes, encode_json
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import Model
+    from ormar.models.primary_key import PrimaryKey
 
 
 class PydanticDescriptor:
@@ -74,19 +75,40 @@ class BytesDescriptor:
 
 class PkDescriptor:
     """
-    As of now it's basically a copy of PydanticDescriptor but that will
-    change in the future with multi column primary keys
+    Descriptor of ``Model.pk``, reading and writing the key value through the
+    model's ``PrimaryKey``.
     """
 
-    def __init__(self, name: str) -> None:
-        self.name = name
+    def __init__(self, *, key: "PrimaryKey") -> None:
+        """
+        :param key: primary key of the model class
+        :type key: PrimaryKey
+        """
+        self.key = key
+        self.read = key.value
 
     def __get__(self, instance: "Model", owner: type["Model"]) -> Any:
-        value = instance.__dict__.get(self.name, None)
-        return value
+        """
+        :param instance: model instance
+        :type instance: Model
+        :param owner: model class
+        :type owner: type[Model]
+        :return: key value of the instance
+        :rtype: Any
+        """
+        return self.read(instance)
 
     def __set__(self, instance: "Model", value: Any) -> None:
-        instance._internal_set(self.name, value)
+        """
+        Sets every key field of the instance and marks it as not saved.
+
+        :param instance: model instance
+        :type instance: Model
+        :param value: new key value
+        :type value: Any
+        """
+        for field_name, part in self.key.to_dict(value=value).items():
+            instance._internal_set(name=field_name, value=part)
         instance.set_save_status(False)
 
 

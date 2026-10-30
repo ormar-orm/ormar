@@ -18,7 +18,6 @@ from typing import (
 )
 
 import pydantic
-import sqlalchemy
 import typing_extensions
 from pydantic_core import to_jsonable_python
 
@@ -115,7 +114,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         "_orm_id",
         "_orm_saved",
         "_orm",
-        "_pk_column",
         "__pk_only__",
         "__ormar_excludable__",
         "__cached_hash__",
@@ -244,7 +242,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             finally:
                 instance.restore_nested_models_json_fields(decoded=decoded)
         else:
-            fields_set = {instance.ormar_config.pkname}
+            fields_set = set(instance.ormar_config.pk.fields)
             object.__setattr__(instance, "__dict__", new_kwargs)
             object.__setattr__(instance, "__pydantic_fields_set__", fields_set)
 
@@ -489,7 +487,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             self.__setattr_fields__.add(name)
 
         # In this case, the hash could have changed, so update it
-        if name == self.ormar_config.pkname or self.pk is None:
+        if name in self.ormar_config.pk.fields or self.pk is None:
             object.__setattr__(self, "__cached_hash__", None)
             new_hash = hash(self)
 
@@ -617,7 +615,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             kwargs.pop(prop_field, None)
 
         if "pk" in kwargs:
-            kwargs[config.pkname] = kwargs.pop("pk")
+            kwargs = config.pk.expand_pk_kwarg(kwargs=kwargs)
 
         # extract through fields
         through_tmp_dict = {
@@ -695,7 +693,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         """
         # object.__setattr__(self, "_orm_id", uuid.uuid4().hex)
         object.__setattr__(self, "_orm_saved", False)
-        object.__setattr__(self, "_pk_column", None)
         object.__setattr__(self, "__cached_hash__", None)
         object.__setattr__(self, "__setattr_fields__", set())
         object.__setattr__(
@@ -787,23 +784,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         return cls.__name__
 
     @property
-    def pk_column(self) -> sqlalchemy.Column:
-        """
-        Retrieves primary key sqlalchemy column from models OrmarConfig.table.
-        Each model has to have primary key.
-        Only one primary key column is allowed.
-
-        :return: primary key sqlalchemy column
-        :rtype: sqlalchemy.Column
-        """
-        if object.__getattribute__(self, "_pk_column") is not None:
-            return object.__getattribute__(self, "_pk_column")
-        pk_columns = self.ormar_config.table.primary_key.columns.values()
-        pk_col = pk_columns[0]
-        object.__setattr__(self, "_pk_column", pk_col)
-        return pk_col
-
-    @property
     def saved(self) -> bool:
         """Saved status of the model. Changed by setattr and loading from db"""
         return self._orm_saved
@@ -812,11 +792,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
     def signals(self) -> "SignalEmitter":
         """Exposes signals from model OrmarConfig"""
         return self.ormar_config.signals
-
-    @classmethod
-    def pk_type(cls) -> Any:
-        """Shortcut to models primary key field type"""
-        return cls.ormar_config.model_fields[cls.ormar_config.pkname].__type__
 
     @classmethod
     def db_backend_name(cls) -> str:
@@ -1577,14 +1552,16 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         self_fields = {
             k: v
             for k, v in self_fields.items()
-            if self.get_column_alias(k) in self.ormar_config.table.columns
+            if self.get_column_alias(field_name=k) in self.ormar_config.table.columns
         }
         for field in self._extract_db_related_names():
-            relation_field = self.ormar_config.model_fields[field]
-            target_pk_name = relation_field.to.ormar_config.pkname
-            target_field = getattr(self, field)
-            self_fields[field] = getattr(target_field, target_pk_name, None)
-            if not relation_field.nullable and not self_fields[field]:
+            relation_field = cast(
+                "ForeignKeyField", self.ormar_config.model_fields[field]
+            )
+            self_fields.update(
+                relation_field.link.values_for(related=getattr(self, field))
+            )
+            if not relation_field.nullable and self_fields[field] is None:
                 raise ModelPersistenceError(
                     f"You cannot save {relation_field.to.get_name()} "
                     f"model without pk set!"
