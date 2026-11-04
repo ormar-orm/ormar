@@ -70,6 +70,9 @@
   [primary keys](models/primary-keys.md).
 * `pk` lookups (`pk__in`, `pk__gt`, ...) and `order_by("pk")` / `order_by("-pk")`
   work for every model (`order_by("pk")` produced invalid SQL before).
+* Python-style filters on the primary key work for composite keys
+  (`Order.pk == (1, 7)`, `Order.pk.in_([...])`, `Order.pk.desc()`) and through
+  relations for every key (`Book.author.pk == 1`).
 
 * Python 3.15 is now supported and tested in CI, and the CI matrix now also
   covers Python 3.14.

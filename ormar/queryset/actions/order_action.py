@@ -205,17 +205,27 @@ def expand_pk_orders(model_cls: type["Model"], columns: list[Any]) -> list[Any]:
 
     :param model_cls: ordered model
     :type model_cls: type[Model]
-    :param columns: order strings or ``OrderAction`` instances
+    :param columns: order strings or ``OrderAction`` instances (``Model.pk.asc()``
+        and ``Model.pk.desc()`` on a composite key order by ``pk`` too)
     :type columns: list[Any]
     :return: order list with ``pk`` expanded
     :rtype: list[Any]
     """
     expanded: list[Any] = []
+    fields = model_cls.ormar_config.pk.fields
     for column in columns:
         if isinstance(column, str) and column.lstrip("-") == "pk":
             sign = "-" if column.startswith("-") else ""
+            expanded.extend(f"{sign}{field}" for field in fields)
+        elif isinstance(column, OrderAction) and column.query_str.lstrip("-") == "pk":
+            sign = "-" if column.query_str.startswith("-") else ""
             expanded.extend(
-                f"{sign}{field}" for field in model_cls.ormar_config.pk.fields
+                OrderAction(
+                    order_str=f"{sign}{field}",
+                    model_cls=model_cls,
+                    nulls_ordering=column.nulls_ordering,
+                )
+                for field in fields
             )
         else:
             expanded.append(column)

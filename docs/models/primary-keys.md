@@ -83,8 +83,19 @@ relations (`Book.objects.filter(author__pk=1)`). On a composite key `pk=` and
 `(tenant_id, number) IN ((1, 7), (2, 3))`, and only those two lookups are available.
 A composite key value with a `None` part raises `QueryDefinitionError`. A key value
 that doesn't match the key (wrong number of parts, unknown field names) raises
-`QueryDefinitionError`. Python-style filters on the key (`Album.pk == 1`) work for
-single column keys only.
+`QueryDefinitionError`.
+
+Python-style filters work on the key too, also through relations. On a composite key
+`==` and `in_()` / `<<` compile to the same row-value comparison as `pk=` and
+`pk__in=`, and `asc()` / `desc()` order by every key field:
+
+```python
+await Album.objects.filter(Album.pk == 1).all()
+await Order.objects.get(Order.pk == (1, 7))
+await Order.objects.filter(Order.pk.in_([(1, 7), (2, 3)])).all()
+await Order.objects.order_by(Order.pk.desc()).all()
+await Book.objects.filter(Book.author.pk == 1).all()
+```
 
 ## Changing a key and saving
 
