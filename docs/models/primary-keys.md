@@ -97,6 +97,11 @@ await Order.objects.order_by(Order.pk.desc()).all()
 await Book.objects.filter(Book.author.pk == 1).all()
 ```
 
+Ordering by `pk` expands to the key fields in key order wherever an ordering is
+accepted: `order_by()` on the model and through relations (`order_by("-stock__pk")`,
+`order_by(Shop.stock.pk.desc())`), `ormar_config` `order_by=["-pk"]`, and the
+`orders_by` / `related_orders_by` of relations.
+
 ## Changing a key and saving
 
 ormar remembers the key a model was loaded or last saved with. `update()`,
