@@ -18,7 +18,7 @@ import ormar  # noqa: I100, I202
 from ormar.exceptions import ModelPersistenceError, NoMatch, QueryDefinitionError
 
 if TYPE_CHECKING:  # pragma no cover
-    from ormar import OrderAction, RelationType
+    from ormar import ManyToManyField, OrderAction, RelationType
     from ormar.models import Model, T
     from ormar.queryset import QuerySet
     from ormar.relations import Relation
@@ -121,9 +121,8 @@ class QuerysetProxy(Generic[T]):
         :return: owner column name and child column name
         :rtype: tuple[str, str]
         """
-        owner_column: str = self.related_field.get_relation_name()  # type: ignore
-        child_column: str = self.related_field.get_related_field_name()  # type: ignore
-        return owner_column, child_column
+        field = cast("ManyToManyField", self.related_field)
+        return field.through_target_field_name(), field.through_owner_field_name()
 
     def _get_through_link_kwargs(self, child: "T") -> dict[str, Any]:
         """
@@ -670,13 +669,13 @@ class QuerysetProxy(Generic[T]):
         :return: updated or created model
         :rtype: Model
         """
-        pk_name = self.queryset.model_config.pkname
-        if "pk" in kwargs:
-            kwargs[pk_name] = kwargs.pop("pk")
-        if pk_name not in kwargs or kwargs.get(pk_name) is None:
+        key = self.queryset.model_config.pk
+        kwargs = key.expand_pk_kwarg(kwargs=kwargs)
+        lookup = key.lookup(kwargs=kwargs)
+        if lookup is None:
             return await self.create(**kwargs)
         try:
-            model = await self.queryset.get(pk=kwargs[pk_name])
+            model = await self.queryset.get(**lookup)
         except NoMatch:
             return await self.create(**kwargs)
         return await model.update(**kwargs)

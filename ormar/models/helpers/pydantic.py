@@ -128,7 +128,7 @@ def get_potential_fields(attrs: Union[dict, MappingProxyType]) -> dict:
     }
 
 
-def extract_pk_value(value: Any, pkname: str) -> Any:
+def extract_pk_value(value: Any, fields: tuple[str, ...]) -> Any:
     """
     Reduce a related model, its dict representation or a bare pk to the pk value.
 
@@ -139,11 +139,12 @@ def extract_pk_value(value: Any, pkname: str) -> Any:
 
     :param value: related model instance, dict or pk value
     :type value: Any
-    :param pkname: name of the primary key field of the related model
-    :type pkname: str
+    :param fields: primary key fields of the related model
+    :type fields: tuple[str, ...]
     :return: primary key value, or the original value if it cannot be reduced
     :rtype: Any
     """
+    (pkname,) = fields
     if isinstance(value, dict):
         return value.get(pkname, value)
     if isinstance(value, pydantic.BaseModel):

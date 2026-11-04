@@ -33,7 +33,6 @@ class BaseField(FieldInfo):  # type: ignore[misc]
         self.related_name = kwargs.pop("related_name", None)
 
         self.column_type: sqlalchemy.Column = kwargs.pop("column_type", None)
-        self.constraints: list = kwargs.pop("constraints", list())
         self.name: str = kwargs.pop("name", None)
         self.db_alias: str = kwargs.pop("alias", None)
 
@@ -75,7 +74,7 @@ class BaseField(FieldInfo):  # type: ignore[misc]
 
         self.owner: type["Model"] = kwargs.pop("owner", None)
         self.to: type["Model"] = kwargs.pop("to", None)
-        self.to_pk_only: type["Model"] = kwargs.pop("to_pk_only", None)
+        self.to_key_only: type["Model"] = kwargs.pop("to_key_only", None)
         self.through: type["Model"] = kwargs.pop("through", None)
         self.self_reference: bool = kwargs.pop("self_reference", False)
         self.self_reference_primary: Optional[str] = kwargs.pop(
@@ -281,28 +280,13 @@ class BaseField(FieldInfo):  # type: ignore[misc]
 
     def construct_constraints(self) -> list:
         """
-        Converts list of ormar constraints into sqlalchemy ForeignKeys.
-        Has to be done dynamically as sqlalchemy binds ForeignKey to the table.
-        And we need a new ForeignKey for subclasses of current model
+        Builds the sqlalchemy ForeignKeys of the field's column. Plain fields
+        have none, relation fields build them from their link.
 
-        :return: list of sqlalchemy foreign keys - by default one.
+        :return: list of sqlalchemy foreign keys
         :rtype: list[sqlalchemy.schema.ForeignKey]
         """
-        constraints = []
-        for constraint in self.constraints:
-            owner_table = self.owner.ormar_config.tablename
-            target_table = self.to.ormar_config.tablename
-            target_pk = self.to.get_column_alias(self.to.ormar_config.pkname)
-            default_name = f"fk_{owner_table}_{target_table}_{target_pk}_{self.name}"
-            constraints.append(
-                sqlalchemy.ForeignKey(
-                    constraint.reference,
-                    ondelete=constraint.ondelete,
-                    onupdate=constraint.onupdate,
-                    name=constraint.name or default_name,
-                )
-            )
-        return constraints
+        return []
 
     def get_column(self, name: str) -> sqlalchemy.Column:
         """

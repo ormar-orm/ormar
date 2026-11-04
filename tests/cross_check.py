@@ -36,11 +36,32 @@ from ormar.queryset.templates import (
     delete_template,
     insert_template,
     pk_select_template,
-    primary_key_column,
     update_template,
 )
 
 ENABLED = True
+
+
+def primary_key_condition(model_cls: Any, pk: Any) -> Any:
+    """
+    Build the condition matching one row of a model by primary key, with the
+    key value inlined as literals (as the fresh statements here are built).
+
+    :param model_cls: model class
+    :type model_cls: Any
+    :param pk: primary key value
+    :type pk: Any
+    :return: condition over the key columns
+    :rtype: Any
+    """
+    key = model_cls.ormar_config.pk
+    return sqlalchemy.and_(
+        *(
+            column == part
+            for column, part in zip(key.columns(), key.to_dict(value=pk).values())
+        )
+    )
+
 
 # numbered placeholders in rendered SQL: ``$1`` (asyncpg) or ``:1`` (numeric)
 NUMBERED = re.compile(r"[$:](\d+)")
@@ -308,7 +329,7 @@ def checked_update_template(
         fresh = (
             table.update()
             .values(literal_values(table=table, values=values))
-            .where(primary_key_column(model_cls=model_cls) == pk)
+            .where(primary_key_condition(model_cls=model_cls, pk=pk))
         )
         assert_same_write(model_cls=model_cls, template=template, fresh=fresh)
     return template
@@ -328,7 +349,7 @@ def checked_delete_template(model_cls: Any, pk: Any) -> StatementTemplate:
     template = ORIGINAL_DELETE_TEMPLATE(model_cls=model_cls, pk=pk)
     if ENABLED:
         table = model_cls.ormar_config.table
-        fresh = table.delete().where(primary_key_column(model_cls=model_cls) == pk)
+        fresh = table.delete().where(primary_key_condition(model_cls=model_cls, pk=pk))
         assert_same_write(model_cls=model_cls, template=template, fresh=fresh)
     return template
 
@@ -347,7 +368,7 @@ def checked_pk_select_template(model_cls: Any, pk: Any) -> StatementTemplate:
     template = ORIGINAL_PK_SELECT_TEMPLATE(model_cls=model_cls, pk=pk)
     if ENABLED:
         table = model_cls.ormar_config.table
-        fresh = table.select().where(primary_key_column(model_cls=model_cls) == pk)
+        fresh = table.select().where(primary_key_condition(model_cls=model_cls, pk=pk))
         assert_same_write(model_cls=model_cls, template=template, fresh=fresh)
     return template
 

@@ -73,7 +73,6 @@ from ormar.queryset.templates.slots import (
     SlotBinder,
     canonical_actions,
     iter_actions,
-    primary_key_bind,
     template_params,
     value_binds,
     value_params,
@@ -88,7 +87,6 @@ from ormar.queryset.templates.writes import (
     insert_statement,
     insert_template,
     pk_select_template,
-    primary_key_column,
     update_template,
 )
 
@@ -118,8 +116,6 @@ __all__ = [
     "iter_actions",
     "order_cache_key",
     "pk_select_template",
-    "primary_key_bind",
-    "primary_key_column",
     "release_values",
     "template_cache_for",
     "template_params",

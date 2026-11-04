@@ -191,19 +191,21 @@ class Query:
         The condition is added to filters to filter out desired number of main model
         primary key values. Whole query is used to determine the values.
         """
-        pk_alias = self.model_cls.get_column_alias(self.model_cls.ormar_config.pkname)
-        pk_aliased_name = f"{self.table.name}.{pk_alias}"
-        qry_text = sqlalchemy.text(f"{pk_aliased_name}")
+        pk_aliases = self.model_cls.ormar_config.pk.column_aliases()
+        pk_aliased_names = tuple(f"{self.table.name}.{alias}" for alias in pk_aliases)
+        qry_texts = [sqlalchemy.text(name) for name in pk_aliased_names]
         maxes = {}
         for order in list(self.sorted_orders.keys()):
-            if order is not None and order.get_field_name_text() != pk_aliased_name:
+            if (
+                order is not None
+                and order.get_field_name_text() not in pk_aliased_names
+            ):
                 aliased_col = order.get_field_name_text()
-                # maxes[aliased_col] = order.get_text_clause()
                 maxes[aliased_col] = order.get_min_or_max()
-            elif order.get_field_name_text() == pk_aliased_name:
-                maxes[pk_aliased_name] = order.get_text_clause()
+            elif order.get_field_name_text() in pk_aliased_names:
+                maxes[order.get_field_name_text()] = order.get_text_clause()
 
-        limit_qry: Select[Any] = sqlalchemy.sql.select(qry_text)
+        limit_qry: Select[Any] = sqlalchemy.sql.select(*qry_texts)
         limit_qry = limit_qry.select_from(self.select_from)  # type: ignore
         limit_qry = FilterQuery(
             filter_clauses=self.filter_clauses, binder=self.binder
@@ -211,7 +213,7 @@ class Query:
         limit_qry = FilterQuery(
             filter_clauses=self.exclude_clauses, exclude=True, binder=self.binder
         ).apply(expr=limit_qry)
-        limit_qry = limit_qry.group_by(qry_text)
+        limit_qry = limit_qry.group_by(*qry_texts)
         for order_by in maxes.values():
             limit_qry = limit_qry.order_by(order_by)
         limit_qry = LimitQuery(limit_count=self.limit_count, binder=self.binder).apply(
@@ -222,7 +224,9 @@ class Query:
         ).apply(expr=limit_qry)
         limit_qry = limit_qry.alias("limit_query")  # type: ignore
         on_clause = sqlalchemy.text(
-            f"limit_query.{pk_alias}={self.table.name}.{pk_alias}"
+            " AND ".join(
+                f"limit_query.{alias}={self.table.name}.{alias}" for alias in pk_aliases
+            )
         )
         return limit_qry, on_clause  # type: ignore
 

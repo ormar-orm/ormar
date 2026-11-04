@@ -7,6 +7,7 @@ from sqlalchemy.sql.schema import ColumnCollectionConstraint
 
 from ormar.databases.connection import DatabaseConnection
 from ormar.fields import BaseField, ForeignKeyField, ManyToManyField
+from ormar.models.primary_key import PrimaryKey
 from ormar.models.utils import Extra
 from ormar.queryset.queryset import QuerySet
 from ormar.signals import SignalEmitter
@@ -14,7 +15,7 @@ from ormar.signals import SignalEmitter
 
 class OrmarConfig:
     if TYPE_CHECKING:  # pragma: no cover
-        pkname: str
+        pk: PrimaryKey
         metadata: sqlalchemy.MetaData
         database: DatabaseConnection
         engine: AsyncEngine
@@ -44,7 +45,7 @@ class OrmarConfig:
         extra: Extra = Extra.forbid,
         constraints: Optional[list[ColumnCollectionConstraint]] = None,
     ) -> None:
-        self.pkname = None  # type: ignore
+        self.pk = None  # type: ignore
         self.metadata = metadata  # type: ignore
         self.database = database  # type: ignore
         self.engine = engine  # type: ignore
