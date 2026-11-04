@@ -39,8 +39,7 @@ async def test_updating_selected_columns():
             id=1, name="Lord of The Rings", year=2003, director=director1, profit=1.212
         ).upsert()
 
-        with pytest.raises(ormar.NoMatch):
-            await Movie.objects.get()
+        assert (await Movie.objects.get()).id == 1
 
         await Movie(
             id=1, name="Lord of The Rings", year=2003, director=director1, profit=1.212

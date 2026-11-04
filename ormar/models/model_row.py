@@ -230,6 +230,7 @@ class ModelRow(NewBaseModel):
                 )
             instance = cast("Model", cls.construct_row_instance(plan=plan, item=item))
             object.__setattr__(instance, "_orm_saved", True)
+            object.__setattr__(instance, "_orm_persisted", True)
             object.__setattr__(instance, "__ormar_excludable__", excludable)
             instances.append(instance)
         return instances

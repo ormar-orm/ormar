@@ -1,6 +1,6 @@
 import copy
 from functools import lru_cache
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import sqlalchemy
 from sqlalchemy import text
@@ -157,8 +157,9 @@ class OrderAction(QueryAction):
         :rtype: list[OrderAction]
         """
         return [
-            cls(order_str=str(name), model_cls=model_cls)
+            action
             for name in model_cls.ormar_config.orders_by
+            for action in order_actions_for(order_str=str(name), model_cls=model_cls)
         ]
 
     def flipped(self) -> "OrderAction":
@@ -194,3 +195,79 @@ class OrderAction(QueryAction):
         :rtype: bool
         """
         return target_model == self.target_model and alias == self.table_prefix
+
+
+def order_actions_for(
+    order_str: str,
+    model_cls: type["Model"],
+    alias: Optional[str] = None,
+    nulls_ordering: Optional[str] = None,
+) -> list[OrderAction]:
+    """
+    Build the order actions for one order string, expanding ``pk`` (also after
+    relations) into the primary key fields of the model it points at, in key
+    order::
+
+        "-pk"         -> ["-tenant_id", "-number"]
+        "-stock__pk"  -> ["-stock__code", "-stock__sku"]
+        "shop__pk"    -> ["shop__id"]
+
+    :param order_str: order string, ``-`` prefixed for descending order
+    :type order_str: str
+    :param model_cls: model the order string starts from
+    :type model_cls: type[Model]
+    :param alias: table alias of the ordered model, if already known
+    :type alias: Optional[str]
+    :param nulls_ordering: optional nulls placement, ``"first"`` or ``"last"``
+    :type nulls_ordering: Optional[str]
+    :return: order actions, one per key field for a ``pk`` order
+    :rtype: list[OrderAction]
+    """
+    action = OrderAction(
+        order_str=order_str,
+        model_cls=model_cls,
+        alias=alias,
+        nulls_ordering=nulls_ordering,
+    )
+    if action.field_name != "pk":
+        return [action]
+    prefix = order_str[: -len("pk")]
+    return [
+        OrderAction(
+            order_str=f"{prefix}{field}",
+            model_cls=model_cls,
+            alias=alias,
+            nulls_ordering=nulls_ordering,
+        )
+        for field in action.target_model.ormar_config.pk.fields
+    ]
+
+
+def expand_pk_orders(model_cls: type["Model"], columns: list[Any]) -> list[OrderAction]:
+    """
+    Turn an ``order_by`` list into order actions, expanding ``pk`` orders (also
+    after relations and from ``Model.pk.asc()`` / ``Model.rel.pk.desc()``) into
+    the primary key fields with :func:`order_actions_for`.
+
+    :param model_cls: ordered model
+    :type model_cls: type[Model]
+    :param columns: order strings or ``OrderAction`` instances
+    :type columns: list[Any]
+    :return: order actions with ``pk`` expanded
+    :rtype: list[OrderAction]
+    """
+    expanded: list[OrderAction] = []
+    for column in columns:
+        if isinstance(column, str):
+            expanded.extend(order_actions_for(order_str=column, model_cls=model_cls))
+        elif column.field_name == "pk":
+            expanded.extend(
+                order_actions_for(
+                    order_str=column.query_str,
+                    model_cls=model_cls,
+                    nulls_ordering=column.nulls_ordering,
+                )
+            )
+        else:
+            expanded.append(column)
+    return expanded

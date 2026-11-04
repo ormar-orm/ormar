@@ -26,6 +26,7 @@ from typing import (
 import sqlalchemy
 from sqlalchemy.sql import operators
 from sqlalchemy.sql.elements import BindParameter
+from sqlalchemy.sql.sqltypes import TupleType
 
 from ormar.queryset.actions.filter_action import FILTER_OPERATORS
 
@@ -202,6 +203,33 @@ class SlotBinder:
             expanding=action.operator == "in",
             _compared_to_operator=operator,
             _compared_to_type=action.column.type,
+        )
+
+    def bind_key_in(
+        self, action: "FilterAction", value: Any, column_types: List[Any]
+    ) -> BindParameter:
+        """
+        Return the expanding bind parameter of a row-value ``IN`` over several
+        key columns, typed as a tuple of the column types so each part gets its
+        column's bind processing::
+
+            (orders.tenant_id, orders.number) IN (:ormar_p0)
+            # rendered per call as IN ((?, ?), (?, ?))
+
+        :param action: the key ``IN`` filter action
+        :type action: FilterAction
+        :param value: key values, one tuple of parts per key
+        :type value: Any
+        :param column_types: types of the key columns, in key order
+        :type column_types: List[Any]
+        :return: named expanding bind parameter
+        :rtype: BindParameter
+        """
+        return BindParameter(
+            key=self.slots[id(action)],
+            value=value,
+            expanding=True,
+            type_=TupleType(*column_types),
         )
 
     def limit(self, value: int) -> BindParameter:

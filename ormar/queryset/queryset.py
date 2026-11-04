@@ -25,7 +25,7 @@ from ormar.exceptions import (
 )
 from ormar.models.row_registry import RowRegistry
 from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
-from ormar.queryset.actions.order_action import OrderAction
+from ormar.queryset.actions.order_action import OrderAction, expand_pk_orders
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
@@ -990,15 +990,7 @@ class QuerySet(Generic[T]):
         """
         if not isinstance(columns, list):
             columns = [columns]
-
-        orders_by = [
-            (
-                OrderAction(order_str=x, model_cls=self.model_cls)  # type: ignore
-                if not isinstance(x, OrderAction)
-                else x
-            )
-            for x in columns
-        ]
+        orders_by = expand_pk_orders(model_cls=self.model, columns=columns)
 
         order_bys = self.order_bys + [x for x in orders_by if x not in self.order_bys]
         return self.rebuild_self(order_bys=order_bys)
@@ -1750,6 +1742,7 @@ class QuerySet(Generic[T]):
         trusted = self.model.flat_row_model()
         for i, obj in enumerate(objects):
             values = dump_for_save(obj=obj) if trusted else obj.model_dump()
+            obj._verify_key_parts_set(self_fields=values)
             ready_objects.append(obj.prepare_model_to_save(new_kwargs=values))
             if i % 100 == 99:  # pragma: no cover
                 await asyncio.sleep(0)
@@ -1806,6 +1799,7 @@ class QuerySet(Generic[T]):
             raise ModelListEmptyError("Bulk update objects are empty!")
 
         ready_objects = []
+        persisted_keys: list[Any] = []
         key = self.model_config.pk
         if not columns:
             columns = list(
@@ -1847,21 +1841,38 @@ class QuerySet(Generic[T]):
             ready_objects.append(
                 {"new_" + k: v for k, v in new_kwargs.items() if k in columns}
             )
+            persisted_keys.append(obj.persisted_key)
             if i % 100 == 99:  # pragma: no cover
                 await asyncio.sleep(0)
 
         pk_column_names = key.column_aliases()
         table_columns = [c.name for c in self.model_config.table.c]
-        updated = tuple(
-            k for k in columns if k not in pk_column_names and k in table_columns
+        keys_moved = any(
+            persisted != obj.pk for persisted, obj in zip(persisted_keys, objects)
         )
+        where_prefix = "old_" if keys_moved else "new_"
+        updated = tuple(
+            k
+            for k in columns
+            if (keys_moved or k not in pk_column_names) and k in table_columns
+        )
+        if keys_moved:
+            for row, persisted in zip(ready_objects, persisted_keys):
+                parts = key.to_dict(value=persisted).values()
+                row.update(
+                    {
+                        f"old_{alias}": part
+                        for alias, part in zip(pk_column_names, parts)
+                    }
+                )
         expr = cached_statement(
             model_cls=self.model,
-            key=("bulk_update", updated),
+            key=("bulk_update", updated, where_prefix),
             builder=build_bulk_update,
             table=self.table,
             primary_key=key,
             columns=updated,
+            where_prefix=where_prefix,
         )
         # Multi-row execute_many: run in an explicit transaction so all rows
         # share a single COMMIT instead of one per row under AUTOCOMMIT.

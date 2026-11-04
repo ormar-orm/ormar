@@ -38,6 +38,7 @@ class BaseField(FieldInfo):  # type: ignore[misc]
 
         self.primary_key: bool = kwargs.pop("primary_key", False)
         self.autoincrement: bool = kwargs.pop("autoincrement", False)
+        self.autoincrement_explicit: bool = kwargs.pop("autoincrement_explicit", False)
         self.nullable: bool = kwargs.pop("nullable", False)
         self.sql_nullable: bool = kwargs.pop("sql_nullable", False)
         self.index: bool = kwargs.pop("index", False)

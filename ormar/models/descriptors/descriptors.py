@@ -93,9 +93,13 @@ class PkDescriptor:
         :type instance: Model
         :param owner: model class
         :type owner: type[Model]
+        :raises AttributeError: on class access, so the model metaclass resolves
+            ``Model.pk`` to a key accessor for python-style filters
         :return: key value of the instance
         :rtype: Any
         """
+        if instance is None:
+            raise AttributeError("pk")
         return self.read(instance)
 
     def __set__(self, instance: "Model", value: Any) -> None:
@@ -107,6 +111,7 @@ class PkDescriptor:
         :param value: new key value
         :type value: Any
         """
+        instance.remember_persisted_key()
         for field_name, part in self.key.to_dict(value=value).items():
             instance._internal_set(name=field_name, value=part)
         instance.set_save_status(False)

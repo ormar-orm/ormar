@@ -5,10 +5,12 @@ import sqlalchemy
 from sqlalchemy import ColumnElement
 
 import ormar  # noqa I100
-from ormar.queryset.actions.filter_action import FilterAction
+from ormar.exceptions import QueryDefinitionError
+from ormar.queryset.actions.filter_action import FilterAction, KeyInFilterAction
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
+    from ormar.models.primary_key import PrimaryKey
     from ormar.queryset.templates import SlotBinder
 
 
@@ -203,16 +205,6 @@ class QueryClause:
         :return: tuple with list of where clauses and updated select_related list
         :rtype: tuple[list[sqlalchemy.sql.elements.TextClause], list[str]]
         """
-        if kwargs.get("pk"):
-            key = self.model_cls.ormar_config.pk
-            kwargs = {
-                **{name: value for name, value in kwargs.items() if name != "pk"},
-                **{
-                    self.model_cls.get_column_alias(field_name=field): part
-                    for field, part in key.to_dict(value=kwargs["pk"]).items()
-                },
-            }
-
         filter_clauses, select_related = self._populate_filter_clauses(
             _own_only=_own_only, **kwargs
         )
@@ -237,15 +229,104 @@ class QueryClause:
         select_related = list(self._select_related)
 
         for key, value in kwargs.items():
-            filter_action = FilterAction(
-                filter_str=key, value=value, model_cls=self.model_cls
-            )
-            select_related = filter_action.update_select_related(
-                select_related=select_related
-            )
-
-            own_filter_clauses.append(filter_action)
+            actions = pk_filter_actions(
+                model_cls=self.model_cls, name=key, value=value
+            ) or [FilterAction(filter_str=key, value=value, model_cls=self.model_cls)]
+            for filter_action in actions:
+                select_related = filter_action.update_select_related(
+                    select_related=select_related
+                )
+                own_filter_clauses.append(filter_action)
 
         if _own_only:
             return own_filter_clauses, select_related
         return filter_clauses + own_filter_clauses, select_related
+
+
+def pk_filter_actions(
+    model_cls: type["Model"], name: str, value: Any
+) -> Optional[list[FilterAction]]:
+    """
+    Turn a filter on ``pk`` (also through relations, ``author__pk=1``) into
+    filters on the primary key fields of the model it points at::
+
+        pk=4             -> id=4
+        pk__gt=4         -> id__gt=4
+        pk=(1, 7)        -> (tenant_id, number) IN ((1, 7))  (composite key)
+        pk__in=[(1, 7)]  -> (tenant_id, number) IN ((1, 7))  (composite key)
+
+    :raises QueryDefinitionError: for operators other than ``in`` on a
+        composite key, values not matching the key, or ``pk`` after a field
+        that is not a relation
+    :param model_cls: queried model
+    :type model_cls: type[Model]
+    :param name: filter keyword
+    :type name: str
+    :param value: filter value
+    :type value: Any
+    :return: filter actions, ``None`` if the keyword is not a ``pk`` lookup
+    :rtype: Optional[list[FilterAction]]
+    """
+    parts = name.split("__")
+    if "pk" not in parts:
+        return None
+    position = parts.index("pk")
+    prefix = "".join(f"{part}__" for part in parts[:position])
+    operator = "__".join(parts[position + 1 :])
+    target = model_cls
+    for part in parts[:position]:
+        field = target.ormar_config.model_fields.get(part)
+        if field is None or not field.is_relation:
+            raise QueryDefinitionError(
+                f"pk lookup {name} must follow relations, {part} is not a relation "
+                f"of {target.__name__}."
+            )
+        target = field.to
+    key = target.ormar_config.pk
+    if key.is_composite and operator in ("", "exact"):
+        key_value = tuple(key_parts_of(key=key, value=value).values())
+        return [
+            KeyInFilterAction(prefix=prefix, values=[key_value], model_cls=model_cls)
+        ]
+    if operator in ("", "exact"):
+        return [
+            FilterAction(filter_str=f"{prefix}{field}", value=part, model_cls=model_cls)
+            for field, part in key_parts_of(key=key, value=value).items()
+        ]
+    if not key.is_composite:
+        return [
+            FilterAction(
+                filter_str=f"{prefix}{key.fields[0]}__{operator}",
+                value=value,
+                model_cls=model_cls,
+            )
+        ]
+    if operator != "in":
+        raise QueryDefinitionError(
+            f"Only pk=... and pk__in=... lookups are supported on the composite "
+            f"primary key of {target.__name__}, got {name}."
+        )
+    values = [tuple(key_parts_of(key=key, value=item).values()) for item in value]
+    return [KeyInFilterAction(prefix=prefix, values=values, model_cls=model_cls)]
+
+
+def key_parts_of(key: "PrimaryKey", value: Any) -> dict[str, Any]:
+    """
+    Split a key value used in a filter, rejecting composite values with a
+    ``None`` part (a key with a missing part identifies no row).
+
+    :raises QueryDefinitionError: if the value doesn't match the key
+    :param key: primary key filtered on
+    :type key: PrimaryKey
+    :param value: key value
+    :type value: Any
+    :return: key parts by field name
+    :rtype: dict[str, Any]
+    """
+    parts = key.to_dict(value=value)
+    if key.is_composite and None in parts.values():
+        raise QueryDefinitionError(
+            f"{key.owner.__name__} composite primary key value cannot contain "
+            f"None: {value!r}"
+        )
+    return parts
