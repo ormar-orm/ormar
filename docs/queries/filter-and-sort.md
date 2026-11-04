@@ -855,6 +855,9 @@ Order in which order_by clauses are applied is as follows:
   * Model's `ormar_config` object `orders_by`
   * Model's `primary_key` column ascending (fallback, used if none of above provided)
 
+Every source accepts `pk`, also after relations (`"-pk"`, `"author__pk"`). On a
+[composite primary key](../models/primary-keys.md) it orders by each key field.
+
 **Order from only one source is applied to each `Model` (so that you can always overwrite it in a single query).**
 
 That means that if you provide explicit `order_by` for a model in a query, the `Relation` and `Model` sort orders are skipped.

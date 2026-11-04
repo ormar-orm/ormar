@@ -5,7 +5,7 @@ import pytest_asyncio
 
 import ormar
 from ormar.exceptions import QueryDefinitionError
-from ormar.models.descriptors import PkDescriptor
+from ormar.queryset import FieldAccessor
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -35,13 +35,26 @@ class Stock(ormar.Model):
     shop: Optional[Shop] = ormar.ForeignKey(Shop, related_name="stock")
 
 
+class Label(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="cq_labels")
+
+    id: int = ormar.Integer(primary_key=True)
+
+
+class Parcel(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="cq_parcels")
+
+    id: int = ormar.Integer(primary_key=True)
+    labels: Optional[list[Label]] = ormar.ManyToMany(Label)
+
+
 create_test_database = init_tests(base_ormar_config)
 
 
 @pytest_asyncio.fixture(autouse=True)
 async def clean():
     async with base_ormar_config.database:
-        for model in (Stock, Shop, Order):
+        for model in (Parcel, Label, Stock, Shop, Order):
             await model.objects.delete(each=True)
         yield
 
@@ -147,7 +160,59 @@ async def test_invalid_composite_pk_filters_raise():
         await Order.objects.filter(pk__in=[(1, 7, 3)]).all()
     with pytest.raises(QueryDefinitionError):
         await Order.objects.filter(pk__gt=(1, 7)).all()
-    assert isinstance(Order.pk, PkDescriptor)
+    with pytest.raises(QueryDefinitionError):
+        await Order.objects.filter(Order.pk > (1, 7)).all()
+    assert isinstance(Order.pk, FieldAccessor)
+
+
+@pytest.mark.asyncio
+async def test_python_style_filters_on_composite_pk():
+    await seed()
+    assert (await Order.objects.get(Order.pk == (1, 8))).note == "b"
+    assert (
+        await Order.objects.get(Order.pk == {"tenant_id": 2, "number": 7})
+    ).note == ("c")
+    found = await Order.objects.filter(Order.pk.in_([(1, 7), (2, 7)])).all()
+    assert sorted(o.note for o in found) == ["a", "c"]
+    found = await Order.objects.filter(Order.pk << [(1, 8)]).all()
+    assert [o.note for o in found] == ["b"]
+    found = (
+        await Order.objects.exclude(Order.pk == (1, 7)).order_by(Order.pk.desc()).all()
+    )
+    assert [o.note for o in found] == ["c", "b"]
+    found = await Order.objects.filter((Order.pk == (1, 7)) | (Order.note == "c")).all()
+    assert sorted(o.note for o in found) == ["a", "c"]
+
+
+@pytest.mark.asyncio
+async def test_python_style_pk_filters_through_relations():
+    shop = await Shop.objects.create(name="s")
+    await Stock.objects.create(shop_code="A", sku="1", shop=shop)
+    await Stock.objects.create(shop_code="A", sku="2")
+    assert [s.name for s in await Shop.objects.filter(Shop.pk == shop.id).all()] == [
+        "s"
+    ]
+    found = await Stock.objects.filter(Stock.shop.pk == shop.id).all()
+    assert [s.sku for s in found] == ["1"]
+    shops = await Shop.objects.filter(Shop.stock.pk.in_([("A", "1")])).all()
+    assert [s.name for s in shops] == ["s"]
+
+
+@pytest.mark.asyncio
+async def test_python_style_pk_filter_through_many_to_many():
+    labelled = await Parcel.objects.create()
+    await Parcel.objects.create()
+    label = await Label.objects.create()
+    await labelled.labels.add(label)
+    found = await Parcel.objects.filter(Parcel.labels.pk == label.id).all()
+    assert [parcel.id for parcel in found] == [labelled.id]
+
+
+def test_unsupported_python_style_composite_pk_filters_raise():
+    with pytest.raises(QueryDefinitionError, match="got None"):
+        Order.objects.filter(Order.pk == None)  # noqa: E711
+    with pytest.raises(QueryDefinitionError, match="Only pk=... and pk__in=..."):
+        Order.objects.filter(Order.pk.isnull(True))
 
 
 @pytest.mark.asyncio
