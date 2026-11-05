@@ -41,7 +41,7 @@ class AliasMixin:
         column_to_field = dict(cls._alias_to_field_map)
         multi_column_fields = []
         for field_name, field in cls.ormar_config.model_fields.items():
-            if not field.is_relation or field.virtual or field.is_multi:
+            if not field.kind.holds_columns:
                 continue
             columns = field.column_aliases()
             if len(columns) > 1:

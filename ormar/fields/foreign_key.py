@@ -675,8 +675,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :rtype: list
         """
         if (
-            self.virtual
-            or self.is_multi
+            not self.kind.holds_columns
             or self.has_unresolved_forward_refs()
             or self.owner.ormar_config.view
         ):
@@ -888,7 +887,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
             of a reverse or many-to-many relation
         :rtype: tuple[str, ...]
         """
-        if self.virtual or self.is_multi:
+        if not self.kind.holds_columns:
             return self.to.ormar_config.pk.fields
         return self.target_fields()
 
@@ -920,7 +919,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         fields = self.flat_fields()
         if len(fields) > 1:
             return key_dict_type(target=self.to, fields=fields)
-        if self.virtual or self.is_multi:
+        if not self.kind.holds_columns:
             return self.to.ormar_config.model_fields[fields[0]].__type__
         return self.target_value_type()
 
@@ -1024,7 +1023,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
             if to_register:
                 self.register_relation(model=value, child=cast("Model", child))
             return value
-        if value.__class__ is list and not self.virtual and not self.is_multi:
+        if value.__class__ is list and self.kind.holds_columns:
             # a key of several columns given as a JSON list
             value = tuple(value)
         return self._constructor_dispatch.get(

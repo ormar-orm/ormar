@@ -17,15 +17,22 @@ class RelationKind:
 
     :ivar name: kind name, for messages and debugging
     :ivar many: whether the field holds a list of related models
+    :ivar holds_columns: whether the field stores the relation in columns of
+        its own model (the forward side of a foreign key or one-to-one)
     """
 
     name: str
     many: bool
+    holds_columns: bool = False
 
 
-FORWARD_FOREIGN_KEY = RelationKind(name="forward foreign key", many=False)
+FORWARD_FOREIGN_KEY = RelationKind(
+    name="forward foreign key", many=False, holds_columns=True
+)
 REVERSE_FOREIGN_KEY = RelationKind(name="reverse foreign key", many=True)
-FORWARD_ONE_TO_ONE = RelationKind(name="forward one to one", many=False)
+FORWARD_ONE_TO_ONE = RelationKind(
+    name="forward one to one", many=False, holds_columns=True
+)
 REVERSE_ONE_TO_ONE = RelationKind(name="reverse one to one", many=False)
 MANY_TO_MANY = RelationKind(name="many to many", many=True)
 THROUGH = RelationKind(name="through", many=False)
