@@ -25,21 +25,6 @@ if TYPE_CHECKING:  # pragma no cover
 REF_PREFIX = "#/components/schemas/"
 
 
-def forbid_through_relations(through: type["Model"]) -> None:
-    """
-    Verifies if the through model does not have relations.
-
-    :param through: through Model to be checked
-    :type through: type['Model]
-    """
-    if any(field.is_relation for field in through.ormar_config.model_fields.values()):
-        raise ModelDefinitionError(
-            f"Through Models cannot have explicit relations "
-            f"defined. Remove the relations from Model "
-            f"{through.get_name(lower=False)}"
-        )
-
-
 def populate_m2m_params_based_on_to_model(
     to: type["Model"], nullable: bool
 ) -> tuple[Any, Any, Any]:
@@ -145,9 +130,6 @@ def ManyToMany(  # type: ignore
         "through_reverse_relation_nullable", True
     )
 
-    if through is not None and through.__class__ != ForwardRef:
-        forbid_through_relations(cast(type["Model"], through))
-
     validate_not_allowed_fields(kwargs)
     pk_only_model = None
     if to.__class__ == ForwardRef:
@@ -250,8 +232,6 @@ class ManyToManyField(  # type: ignore
         if self.through.__class__ == ForwardRef:
             self._evaluate_forward_ref(globalns, localns, is_through=True)
 
-            forbid_through_relations(self.through)
-
     def get_relation_name(self) -> str:
         """
         Returns name of the relation, which can be a own name or through model
@@ -260,12 +240,31 @@ class ManyToManyField(  # type: ignore
         :return: result of the check
         :rtype: bool
         """
-        if self.self_reference and self.name == self.self_reference_primary:
-            return self.default_source_field_name()
-        return self.default_target_field_name()
+        return self.through_target_field_name()
 
     def get_filter_clause_target(self) -> type["Model"]:
         return self.through
+
+    def swaps_through_fields(self) -> bool:
+        """
+        On the primary side of a self-referencing relation the generated
+        through field names (``from_<model>`` / ``to_<model>``) are swapped, so
+        both sides read the same columns. Explicit ``through_relation_name``
+        and ``through_reverse_relation_name`` are used as documented on both
+        sides instead (the field leading to the declaring model, and the field
+        leading to the related model).
+
+        :return: whether the owner and target through fields are swapped
+        :rtype: bool
+        """
+        explicit = bool(
+            self.through_relation_name and self.through_reverse_relation_name
+        )
+        return (
+            self.self_reference
+            and self.self_reference_primary == self.name
+            and not explicit
+        )
 
     def through_owner_field_name(self) -> str:
         """
@@ -273,7 +272,7 @@ class ManyToManyField(  # type: ignore
             (for self-referencing relations depends on which side this is)
         :rtype: str
         """
-        if self.self_reference and self.self_reference_primary == self.name:
+        if self.swaps_through_fields():
             return self.default_target_field_name()
         return self.default_source_field_name()
 
@@ -282,7 +281,7 @@ class ManyToManyField(  # type: ignore
         :return: name of the through model field pointing to the related model
         :rtype: str
         """
-        if self.self_reference and self.self_reference_primary == self.name:
+        if self.swaps_through_fields():
             return self.default_source_field_name()
         return self.default_target_field_name()
 
