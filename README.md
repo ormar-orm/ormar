@@ -623,6 +623,7 @@ asyncio.run(cleanup_database())
 #### Relation types
 
 *  One to many  - with `ForeignKey(to: Model)`
+*  One to one   - with `OneToOne(to: Model)`
 *  Many to many - with `ManyToMany(to: Model, Optional[through]: Model)`
 
 #### Model fields types
@@ -647,6 +648,7 @@ Available Model Fields (with required args - optional ones in docs):
 * `Enum` like Field - by passing `choices` to any other Field type
 * `EncryptedString` - by passing `encrypt_secret` and `encrypt_backend`
 * `ForeignKey(to)`
+* `OneToOne(to)`
 * `ManyToMany(to)`
 
 ### Available fields options

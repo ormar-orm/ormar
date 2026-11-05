@@ -20,6 +20,11 @@ import ormar
 from ormar import ForeignKey, ManyToMany
 from ormar.exceptions import ModelDefinitionError
 from ormar.fields import Through
+from ormar.fields.relation_kind import (
+    REVERSE_FOREIGN_KEY,
+    REVERSE_ONE_TO_ONE,
+    RelationKind,
+)
 from ormar.models.descriptors import RelationDescriptor
 from ormar.models.helpers.sqlalchemy import adjust_through_many_to_many_model
 
@@ -60,6 +65,26 @@ def expand_reverse_relationships(model: type["Model"]) -> None:
         ):
             model_field = cast("ForeignKeyField", model_field)
             expand_reverse_relationship(model_field=model_field)
+
+
+def reverse_field_annotation(kind: RelationKind, annotation: Any) -> Any:
+    """
+    Pydantic annotation of a reverse relation field: a reverse foreign key
+    accepts one model or a list of them, a reverse one-to-one a single model,
+    and a many-to-many keeps the annotation of its field.
+
+    :param kind: kind of the reverse relation field
+    :type kind: RelationKind
+    :param annotation: annotation of the reverse field, models already copied
+    :type annotation: Any
+    :return: annotation to register on the related model
+    :rtype: Any
+    """
+    if kind is REVERSE_FOREIGN_KEY:
+        return Union[annotation, list[annotation], None]
+    if kind is REVERSE_ONE_TO_ONE:
+        return Optional[annotation]
+    return annotation
 
 
 def reset_relation_caches(model: type["Model"]) -> None:
@@ -228,14 +253,16 @@ def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
             self_reference=model_field.self_reference,
             orders_by=model_field.related_orders_by,
             skip_field=model_field.skip_reverse,
+            one_to_one=model_field.one_to_one,
         )
     if not model_field.skip_reverse:
-        field_type = related_model_fields[related_name].__type__
-        field_type = replace_models_with_copy(
-            annotation=field_type, source_model_field=model_field.name
+        reverse_field = related_model_fields[related_name]
+        field_type = reverse_field_annotation(
+            kind=reverse_field.kind,
+            annotation=replace_models_with_copy(
+                annotation=reverse_field.__type__, source_model_field=model_field.name
+            ),
         )
-        if not model_field.is_multi:
-            field_type = Union[field_type, list[field_type], None]  # type: ignore
         model_field.to.model_fields[related_name] = FieldInfo.from_annotated_attribute(
             annotation=field_type, default=None
         )
@@ -281,6 +308,8 @@ def add_field_serializer_for_reverse_relations(
                 if not str(exc).startswith("Circular reference"):
                     raise exc
 
+                if hasattr(children, "ormar_config"):
+                    return cast("Model", children).reference_dict()
                 result = []
                 for child in children:
                     if not hasattr(child, "ormar_config"):

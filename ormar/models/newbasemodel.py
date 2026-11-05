@@ -50,6 +50,7 @@ from ormar.queryset.field_accessor import FieldAccessor
 from ormar.queryset.utils import translate_list_to_dict
 from ormar.relations.relation import Relation
 from ormar.relations.relation_manager import RelationsManager
+from ormar.relations.utils import is_dead_proxy
 from ormar.warnings import OrmarDeprecatedSince020
 
 # pydantic model config keys that make validation change a value the column
@@ -569,7 +570,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 # proxy stays un-materialized — there is nothing in an
                 # empty proxy to migrate hashes for.
                 relation_proxy = relation.related_models
-
+                if is_dead_proxy(relation_proxy):
+                    continue
                 if hasattr(relation_proxy, "update_cache"):
                     relation_proxy.update_cache(prev_hash, new_hash)  # type: ignore
                 elif recurse and hasattr(relation_proxy, "_orm"):

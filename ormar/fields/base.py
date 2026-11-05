@@ -5,6 +5,7 @@ from pydantic.fields import FieldInfo, _Unset
 
 import ormar  # noqa I101
 from ormar import ModelDefinitionError
+from ormar.fields.relation_kind import NOT_A_RELATION, RelationKind
 from ormar.fields.sqlalchemy_encrypted import (
     EncryptBackend,
     EncryptBackends,
@@ -44,6 +45,7 @@ class BaseField(FieldInfo):  # type: ignore[misc]
         self.index: bool = kwargs.pop("index", False)
         self.unique: bool = kwargs.pop("unique", False)
 
+        self.one_to_one: bool = kwargs.pop("one_to_one", False)
         self.virtual: bool = kwargs.pop(
             "virtual", None
         )  # ManyToManyFields and reverse ForeignKeyFields
@@ -124,6 +126,16 @@ class BaseField(FieldInfo):  # type: ignore[misc]
         :rtype: bool
         """
         return not self.is_multi and not self.virtual
+
+    @property
+    def kind(self) -> RelationKind:
+        """
+        Relation fields override it with the kind they declare.
+
+        :return: ``NOT_A_RELATION`` for plain fields
+        :rtype: RelationKind
+        """
+        return NOT_A_RELATION
 
     def get_alias(self) -> str:
         """

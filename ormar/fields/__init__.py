@@ -7,7 +7,7 @@ Also a definition for custom CHAR based sqlalchemy UUID field
 
 from ormar.fields.base import BaseField
 from ormar.fields.constraints import CheckColumns, IndexColumns, UniqueColumns
-from ormar.fields.foreign_key import ForeignKey, ForeignKeyField
+from ormar.fields.foreign_key import ForeignKey, ForeignKeyField, OneToOne
 from ormar.fields.many_to_many import ManyToMany, ManyToManyField
 from ormar.fields.model_fields import (
     JSON,
@@ -51,6 +51,7 @@ __all__ = [
     "ManyToManyField",
     "BaseField",
     "ForeignKeyField",
+    "OneToOne",
     "ThroughField",
     "Through",
     "EncryptBackends",

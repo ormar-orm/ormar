@@ -62,6 +62,10 @@
 
 ### 🆕 Features
 
+* `ormar.OneToOne(to, ...)` relation: a unique foreign key whose reverse side holds a
+  single model or `None`. Closes [#256](https://github.com/ormar-orm/ormar/issues/256).
+  See [OneToOne](relations/one-to-one.md).
+
 * `ormar.Prefetch(relation, queryset=...)` in `prefetch_related()` filters, orders and
   narrows prefetched models with a queryset of the related model. See
   [prefetch with a queryset](queries/joins-and-subqueries.md#prefetch-with-a-queryset).

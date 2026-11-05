@@ -3,7 +3,16 @@ from typing import TYPE_CHECKING, Generic, Optional, TypeVar, Union, cast
 
 import ormar  # noqa I100
 from ormar.exceptions import RelationshipInstanceError  # noqa I100
+from ormar.fields.relation_kind import (
+    FORWARD_FOREIGN_KEY,
+    FORWARD_ONE_TO_ONE,
+    MANY_TO_MANY,
+    REVERSE_FOREIGN_KEY,
+    REVERSE_ONE_TO_ONE,
+    THROUGH,
+)
 from ormar.relations.relation_proxy import RelationProxy
+from ormar.relations.utils import is_dead_proxy
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar.models import Model, NewBaseModel, T
@@ -16,15 +25,27 @@ class RelationType(Enum):
     """
     Different types of relations supported by ormar:
 
-    *  ForeignKey = PRIMARY
+    *  ForeignKey and both sides of OneToOne = PRIMARY
     *  reverse ForeignKey = REVERSE
     *  ManyToMany = MULTIPLE
+    *  field leading to a through model = THROUGH
     """
 
     PRIMARY = 1
     REVERSE = 2
     MULTIPLE = 3
     THROUGH = 4
+
+
+RELATION_TYPE_BY_KIND = {
+    FORWARD_FOREIGN_KEY: RelationType.PRIMARY,
+    REVERSE_FOREIGN_KEY: RelationType.REVERSE,
+    FORWARD_ONE_TO_ONE: RelationType.PRIMARY,
+    REVERSE_ONE_TO_ONE: RelationType.PRIMARY,
+    MANY_TO_MANY: RelationType.MULTIPLE,
+    THROUGH: RelationType.THROUGH,
+}
+"""Type of the relation registered for a relation field, by the field's kind."""
 
 
 class Relation(Generic[T]):
@@ -211,6 +232,9 @@ class Relation(Generic[T]):
         """
         if self._to_remove:
             self._clean_related()
+        if self._type == RelationType.PRIMARY and is_dead_proxy(self.related_models):
+            self.related_models = None
+            self._owner.__dict__.pop(self.field_name, None)
         if self.related_models is None and self._type in (
             RelationType.REVERSE,
             RelationType.MULTIPLE,

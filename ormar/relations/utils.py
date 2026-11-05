@@ -1,10 +1,26 @@
-from typing import TYPE_CHECKING
-from weakref import proxy
+from typing import TYPE_CHECKING, Any
+from weakref import ProxyTypes, proxy
 
 from ormar.fields.foreign_key import ForeignKeyField
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
+
+
+def is_dead_proxy(value: Any) -> bool:
+    """
+    :param value: a related model, or a weak proxy to one
+    :type value: Any
+    :return: whether the value is a weak proxy to a model that no longer exists
+    :rtype: bool
+    """
+    if not isinstance(value, ProxyTypes):
+        return False
+    try:
+        value.__class__
+    except ReferenceError:
+        return True
+    return False
 
 
 def get_relations_sides_and_names(
