@@ -6,7 +6,6 @@ import sqlalchemy
 
 import ormar
 from ormar.exceptions import ModelDefinitionError, ReadOnlyModelError
-from tests import cross_check
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -103,10 +102,7 @@ def test_foreign_key_to_a_view_needs_db_constraint_false():
 
 
 @pytest.mark.asyncio
-async def test_reading_a_view(data, monkeypatch):
-    # the cross-check's detached copies drop relations, and a foreign key in the
-    # primary key is required
-    monkeypatch.setattr(cross_check, "ENABLED", False)
+async def test_reading_a_view(data):
     ann, bob = data
     totals = await CustomerTotal.objects.order_by("total").all()
     assert [(t.pk, t.total) for t in totals] == [(ann.id, 4.0), (bob.id, 10.0)]
@@ -201,9 +197,8 @@ def test_many_to_many_to_a_view_creates_no_constraint_to_it():
 
 @pytest.mark.asyncio
 async def test_relation_writes_through_views_are_refused_before_changing_anything(
-    data, monkeypatch
+    data,
 ):
-    monkeypatch.setattr(cross_check, "ENABLED", False)
     ann, bob = data
     total = await CustomerTotal.objects.get(pk=ann.id)
     with pytest.raises(ReadOnlyModelError):
@@ -225,8 +220,7 @@ async def test_relation_writes_through_views_are_refused_before_changing_anythin
 
 
 @pytest.mark.asyncio
-async def test_save_related_of_a_table_skips_loaded_view_relations(data, monkeypatch):
-    monkeypatch.setattr(cross_check, "ENABLED", False)
+async def test_save_related_of_a_table_skips_loaded_view_relations(data):
     ann, _ = data
     customer = await Customer.objects.prefetch_related("totals").get(id=ann.id)
     customer.name = "Anna"
