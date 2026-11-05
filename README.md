@@ -648,6 +648,7 @@ Available Model Fields (with required args - optional ones in docs):
 * `Enum` like Field - by passing `choices` to any other Field type
 * `EncryptedString` - by passing `encrypt_secret` and `encrypt_backend`
 * `ForeignKey(to)`
+* `OneToOne(to)`
 * `ManyToMany(to)`
 
 ### Available fields options
