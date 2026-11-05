@@ -88,6 +88,10 @@
 
 ### 🐛 Fixes
 
+* A model with both a concrete relation and a `ForwardRef` relation (e.g.
+  `ForeignKey(Author)` next to `ForeignKey(ForwardRef("Book"))`) no longer fails at
+  class creation with `PydanticUndefinedAnnotation`. The related models finish
+  building when `update_forward_refs()` resolves the reference.
 * Models inheriting the same foreign key from an abstract parent no longer share
   one field object. Queries joining or filtering through that relation from any
   child but the last one defined (e.g. `select_related("label")`) referenced

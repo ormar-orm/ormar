@@ -25,6 +25,7 @@ from ormar.models.helpers.sqlalchemy import adjust_through_many_to_many_model
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
     from ormar.fields import ForeignKeyField, ManyToManyField
+    from ormar.models import NewBaseModel
 
 
 def expand_reverse_relationship(model_field: "ForeignKeyField") -> None:
@@ -138,19 +139,67 @@ def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
         # The metaclass marks finished models incomplete; pydantic >= 2.14 only
         # drops the cached schema on a forced rebuild of a complete model, so
         # restore the flag or the new reverse field is silently ignored.
+        # The owner may still hold unresolved forward refs: the rebuild then
+        # defers, and the owner's update_forward_refs() completes it.
         model_field.to.__pydantic_complete__ = True  # type: ignore[attr-defined]
         model_field.to.model_rebuild(
             force=True,
+            raise_errors=False,
             _types_namespace={
-                **{model_field.owner.__name__: model_field.owner},
-                **{
-                    field.to.__name__: field.to
-                    for field in related_model_fields.values()
-                    if field.is_relation and field.to.__class__ != ForwardRef
-                },
+                model_field.owner.__name__: model_field.owner,
+                **relation_targets_namespace(model=model_field.to),
             },
         )
         setattr(model_field.to, related_name, RelationDescriptor(name=related_name))
+
+
+def relation_targets_namespace(
+    model: Union[type["Model"], type["NewBaseModel"]],
+) -> dict[str, type["Model"]]:
+    """
+    Collects the models that the relation fields of a model point to, keyed by
+    class name, skipping forward references that are not resolved yet.
+
+    :param model: model whose relation fields are inspected
+    :type model: Union[type[Model], type[NewBaseModel]]
+    :return: related models by class name
+    :rtype: dict[str, type[Model]]
+    """
+    return {
+        field.to.__name__: field.to
+        for field in model.ormar_config.model_fields.values()
+        if field.is_relation and field.to.__class__ != ForwardRef
+    }
+
+
+def rebuild_related_models(model: Union[type["Model"], type["NewBaseModel"]]) -> None:
+    """
+    Rebuilds the pydantic schema of related and through models left incomplete
+    because this model (or its reverse relation copy) held unresolved forward
+    references when they were built.
+
+    The namespace also holds the targets of each related model's relations,
+    since the copy's annotations name the models this model points to.
+    Rebuilds still defer if another model's forward refs are pending.
+
+    :param model: model whose forward references were just resolved
+    :type model: Union[type[Model], type[NewBaseModel]]
+    """
+    through_models = [
+        cast("ManyToManyField", field).through
+        for field in model.ormar_config.model_fields.values()
+        if field.is_multi
+    ]
+    for related in [*relation_targets_namespace(model=model).values(), *through_models]:
+        if related.__pydantic_complete__:
+            continue
+        namespace: dict[str, type["Model"]] = {}
+        for target in relation_targets_namespace(model=related).values():
+            namespace.update(relation_targets_namespace(model=target))
+        namespace.update(relation_targets_namespace(model=related))
+        related.model_rebuild(
+            force=True, raise_errors=False, _types_namespace=namespace
+        )
 
 
 def add_field_serializer_for_reverse_relations(
