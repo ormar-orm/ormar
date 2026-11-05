@@ -44,6 +44,7 @@ from ormar.models.helpers import (
 from ormar.models.ormar_config import OrmarConfig
 from ormar.models.quick_access_views import quick_access_set
 from ormar.queryset import FieldAccessor, QuerySet
+from ormar.queryset.field_accessor import key_accessor
 from ormar.signals import Signal
 
 if TYPE_CHECKING:  # pragma no cover
@@ -822,7 +823,11 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
         ):
             raise AttributeError()
         if item == "pk":
-            item = self.ormar_config.pk.fields[0]
+            return key_accessor(
+                source_model=cast(type["Model"], self),
+                model=cast(type["Model"], self),
+                prefix="",
+            )
         if item in object.__getattribute__(self, "ormar_config").model_fields:
             field = self.ormar_config.model_fields.get(item)
             if field.is_relation:
