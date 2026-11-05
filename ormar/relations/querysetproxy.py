@@ -21,6 +21,7 @@ if TYPE_CHECKING:  # pragma no cover
     from ormar import ManyToManyField, OrderAction, RelationType
     from ormar.models import Model, T
     from ormar.queryset import QuerySet
+    from ormar.queryset.prefetch import Prefetch
     from ormar.relations import Relation
 else:
     T = TypeVar("T", bound="Model")
@@ -799,7 +800,9 @@ class QuerysetProxy(Generic[T]):
             relation=self.relation, type_=self.type_, to=self.to, qryset=queryset
         )
 
-    def prefetch_related(self, related: Union[list, str]) -> "QuerysetProxy[T]":
+    def prefetch_related(
+        self, related: Union[list, str, "Prefetch"]
+    ) -> "QuerysetProxy[T]":
         """
         Allows to prefetch related models during query - but opposite to
         `select_related` each subsequent model is fetched in a separate database query.

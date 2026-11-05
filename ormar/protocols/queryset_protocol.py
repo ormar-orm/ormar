@@ -7,6 +7,7 @@ except ImportError:  # pragma: nocover
 
 if TYPE_CHECKING:  # noqa: C901; #pragma nocover
     from ormar import Model
+    from ormar.queryset.prefetch import Prefetch
     from ormar.relations.querysetproxy import QuerysetProxy
 
 
@@ -19,7 +20,9 @@ class QuerySetProtocol(Protocol):  # pragma: nocover
 
     def select_related(self, related: Union[list, str]) -> "QuerysetProxy": ...
 
-    def prefetch_related(self, related: Union[list, str]) -> "QuerysetProxy": ...
+    def prefetch_related(
+        self, related: Union[list, str, "Prefetch"]
+    ) -> "QuerysetProxy": ...
 
     async def exists(self) -> bool: ...
 
