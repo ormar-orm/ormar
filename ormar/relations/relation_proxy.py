@@ -252,6 +252,20 @@ class RelationProxy(Generic[T], list[T]):
         proxy = self._queryset_proxy
         return proxy is not None and proxy._queryset is not None
 
+    def _verify_writable(self, item: "T") -> None:
+        """
+        Refuse relation changes that write read-only models: the through model
+        of a many-to-many relation, or the child holding the foreign key.
+
+        :raises ReadOnlyModelError: if the written model is read-only
+        :param item: child added to or removed from the relation
+        :type item: Model
+        """
+        if self.type_ == ormar.RelationType.MULTIPLE:
+            self.relation.through.verify_writable()
+        else:
+            item.verify_writable()
+
     def _check_if_model_saved(self) -> None:
         """
         Verifies if the parent model of the relation has been already saved.
@@ -308,6 +322,7 @@ class RelationProxy(Generic[T], list[T]):
         :param keep_reversed: flag if the reversed model should be kept or deleted too
         :type keep_reversed: bool
         """
+        self._verify_writable(item=item)
         if item not in self:
             raise NoMatch(
                 f"Object {self._owner.get_name()} has no "
@@ -362,6 +377,7 @@ class RelationProxy(Generic[T], list[T]):
         :param item: child to add to relation
         :type item: Model
         """
+        self._verify_writable(item=item)
         new_idx = len(self) if item not in self else self.index(item)
         relation_name = self.related_field_name
         await self._owner.signals.pre_relation_add.send(

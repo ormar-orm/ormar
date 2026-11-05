@@ -87,6 +87,25 @@ def populate_fk_params_based_on_to_model(
     )
 
 
+def validate_view_target(to: type["Model"], virtual: bool, db_constraint: bool) -> None:
+    """
+    A database can't enforce a foreign key to a view, so a relation to a model
+    mapped to a view must not create one.
+
+    :raises ModelDefinitionError: if a foreign key to a view keeps its constraint
+    :param to: target model
+    :type to: type[Model]
+    :param virtual: whether the field is a reverse relation holding no column
+    :type virtual: bool
+    :param db_constraint: whether the foreign key creates a database constraint
+    :type db_constraint: bool
+    """
+    if to.ormar_config.view and not virtual and db_constraint:
+        raise ModelDefinitionError(
+            f"{to.__name__} is a view, a foreign key to it needs db_constraint=False."
+        )
+
+
 def validate_to_field(to: type["Model"], to_field: str) -> None:
     """
     Check that a ``to_field`` names a field identifying one row of the target:
@@ -269,6 +288,11 @@ def ForeignKey(  # type: ignore # noqa CFQ002
         __type__ = to if not nullable else Optional[to]
         column_type = None
     else:
+        validate_view_target(
+            to=to,  # type: ignore
+            virtual=virtual,
+            db_constraint=db_constraint,
+        )
         params = populate_fk_params_based_on_to_model(
             to=to,  # type: ignore
             nullable=nullable,
@@ -342,7 +366,12 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :return: SQLAlchemy foreign keys, empty until the target is resolved
         :rtype: list
         """
-        if self.virtual or not self.db_constraint or self.has_unresolved_forward_refs():
+        if (
+            self.virtual
+            or not self.db_constraint
+            or self.has_unresolved_forward_refs()
+            or self.owner.ormar_config.view
+        ):
             return []
         owner_table = self.owner.ormar_config.tablename
         target_table = self.to.ormar_config.tablename
@@ -466,6 +495,9 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         """
         if self.to.__class__ == ForwardRef:
             self._evaluate_forward_ref(globalns, localns)
+            validate_view_target(
+                to=self.to, virtual=self.virtual, db_constraint=self.db_constraint
+            )
             params = populate_fk_params_based_on_to_model(
                 to=self.to,
                 nullable=self.nullable,

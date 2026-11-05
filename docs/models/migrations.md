@@ -385,3 +385,23 @@ context.configure(
 [alembic]: https://alembic.sqlalchemy.org/en/latest/tutorial.html
 [save status]:  ../models/index/#model-save-status
 [Internals]:  #internals
+
+## Views
+
+Models declared with `OrmarConfig(view=True)` (see [views](views.md)) are kept out of
+`ormar_config.metadata`, so `metadata.create_all()` and Alembic's autogenerate never
+create or drop them. Create views in a migration yourself:
+
+```python
+def upgrade():
+    op.execute(
+        "CREATE VIEW customer_totals AS "
+        "SELECT customer AS customer_id, SUM(amount) AS total "
+        "FROM purchases GROUP BY customer"
+    )
+
+
+def downgrade():
+    op.execute("DROP VIEW customer_totals")
+```
+

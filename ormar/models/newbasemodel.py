@@ -22,7 +22,12 @@ import typing_extensions
 from pydantic_core import to_jsonable_python
 
 import ormar  # noqa I100
-from ormar.exceptions import ModelError, ModelPersistenceError, QueryDefinitionError
+from ormar.exceptions import (
+    ModelError,
+    ModelPersistenceError,
+    QueryDefinitionError,
+    ReadOnlyModelError,
+)
 from ormar.fields.foreign_key import ForeignKeyField
 from ormar.fields.parsers import decode_bytes, encode_json
 from ormar.models.excludable import (
@@ -851,6 +856,19 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         """
         if self._orm_persisted and self._orm_persisted_key is None:
             object.__setattr__(self, "_orm_persisted_key", self.pk)
+
+    @classmethod
+    def verify_writable(cls) -> None:
+        """
+        Refuse writes to read-only models, such as models mapped to database
+        views (``OrmarConfig(view=True)``).
+
+        :raises ReadOnlyModelError: if the model is read-only
+        """
+        if cls.ormar_config.view:
+            raise ReadOnlyModelError(
+                f"{cls.__name__} is mapped to a database view and is read-only."
+            )
 
     def reference_dict(self) -> dict[str, Any]:
         """

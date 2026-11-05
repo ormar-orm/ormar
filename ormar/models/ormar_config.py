@@ -24,6 +24,7 @@ class OrmarConfig:
         comment: Optional[str]
         order_by: list[str]
         abstract: bool
+        view: bool
         proxy: bool
         emit_parent_signals: bool
         exclude_parent_fields: list[str]
@@ -44,6 +45,7 @@ class OrmarConfig:
         queryset_class: type[QuerySet] = QuerySet,
         extra: Extra = Extra.forbid,
         constraints: Optional[list[ColumnCollectionConstraint]] = None,
+        view: bool = False,
     ) -> None:
         self.pk = None  # type: ignore
         self.metadata = metadata  # type: ignore
@@ -61,6 +63,7 @@ class OrmarConfig:
         self.property_fields: set = set()
         self.signals: SignalEmitter = SignalEmitter()
         self.abstract = abstract
+        self.view = view
         self.proxy = proxy
         self.emit_parent_signals = emit_parent_signals
         self.requires_ref_update: bool = False
@@ -83,6 +86,7 @@ class OrmarConfig:
         queryset_class: Optional[type[QuerySet]] = None,
         extra: Optional[Extra] = None,
         constraints: Optional[list[ColumnCollectionConstraint]] = None,
+        view: Optional[bool] = None,
     ) -> "OrmarConfig":
         # PydanticUndefined distinguishes "omitted" (inherit parent schema)
         # from an explicit ``schema=None`` (clear schema).
@@ -110,4 +114,5 @@ class OrmarConfig:
             queryset_class=queryset_class or self.queryset_class,
             extra=extra or self.extra,
             constraints=constraints,
+            view=view if view is not None else self.view,
         )

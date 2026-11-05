@@ -1239,6 +1239,7 @@ class QuerySet(Generic[T]):
         :return: number of updated rows
         :rtype: int
         """
+        self.model.verify_writable()
         if not each and not (self.filter_clauses or self.exclude_clauses):
             raise QueryDefinitionError(
                 "You cannot update without filtering the queryset first. "
@@ -1278,6 +1279,7 @@ class QuerySet(Generic[T]):
         :return: number of deleted rows
         :rtype:int
         """
+        self.model.verify_writable()
         if kwargs or args:
             return await self.filter(*args, **kwargs).delete()
         if not each and not (self.filter_clauses or self.exclude_clauses):
@@ -1734,6 +1736,7 @@ class QuerySet(Generic[T]):
         :param objects: list of ormar models already initialized and ready to save.
         :type objects: list[Model]
         """
+        self.model.verify_writable()
 
         if not objects:
             raise ModelListEmptyError("Bulk create objects are empty!")
@@ -1795,6 +1798,7 @@ class QuerySet(Generic[T]):
         :param columns: list of columns to update
         :type columns: list[str]
         """
+        self.model.verify_writable()
         if not objects:
             raise ModelListEmptyError("Bulk update objects are empty!")
 

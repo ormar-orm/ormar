@@ -62,6 +62,11 @@
 
 ### 🆕 Features
 
+* Read-only models for database views: `OrmarConfig(view=True)`. They can be queried,
+  joined and prefetched; writes raise the new `ReadOnlyModelError`, and their tables
+  are kept out of `metadata.create_all()` / Alembic. Closes
+  [#970](https://github.com/ormar-orm/ormar/issues/970). See [views](models/views.md).
+
 * A `ManyToMany` `through` model can declare its own foreign keys to both sides,
   e.g. a legacy link table keyed by them, and ormar uses those fields instead of
   adding its own. See

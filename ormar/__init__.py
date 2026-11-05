@@ -40,6 +40,7 @@ from ormar.exceptions import (  # noqa: I100
     ModelDefinitionError,
     MultipleMatches,
     NoMatch,
+    ReadOnlyModelError,
 )
 from ormar.fields import (
     DECODERS_MAP,
@@ -105,6 +106,7 @@ __all__ = [
     "ManyToMany",
     "Model",
     "ModelDefinitionError",
+    "ReadOnlyModelError",
     "MultipleMatches",
     "NoMatch",
     "ForeignKey",
