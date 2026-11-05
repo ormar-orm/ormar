@@ -85,8 +85,13 @@
   Relations to models with a composite key follow in a later release. Part of
   [#137](https://github.com/ormar-orm/ormar/issues/137). See
   [primary keys](models/primary-keys.md).
-* `pk` lookups (`pk__in`, `pk__gt`, ...) and `order_by("pk")` / `order_by("-pk")`
-  work for every model (`order_by("pk")` produced invalid SQL before).
+* `pk` lookups (`pk__in`, `pk__gt`, ...) and ordering by `pk` work for every model:
+  `order_by("pk")` / `order_by("-pk")`, through relations (`order_by("author__pk")`),
+  in `ormar_config` `order_by=["-pk"]` and in relation `orders_by` /
+  `related_orders_by`. All of them produced invalid SQL before.
+* Python-style filters on the primary key work for composite keys
+  (`Order.pk == (1, 7)`, `Order.pk.in_([...])`, `Order.pk.desc()`) and through
+  relations for every key (`Book.author.pk == 1`).
 
 * Python 3.15 is now supported and tested in CI, and the CI matrix now also
   covers Python 3.14.
