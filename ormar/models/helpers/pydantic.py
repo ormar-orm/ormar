@@ -34,7 +34,9 @@ def create_pydantic_field(
         default=None,
     )
     model_field.through.model_rebuild(
-        force=True, _types_namespace={model_field.owner.__name__: model_field.owner}
+        force=True,
+        raise_errors=False,
+        _types_namespace={model_field.owner.__name__: model_field.owner},
     )
 
 

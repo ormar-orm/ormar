@@ -33,7 +33,11 @@ from ormar.models.excludable import (
     resolve_flatten_map,
     skip_ellipsis,
 )
-from ormar.models.helpers.relations import expand_reverse_relationship
+from ormar.models.helpers.relations import (
+    expand_reverse_relationship,
+    rebuild_related_models,
+    relation_targets_namespace,
+)
 from ormar.models.helpers.sqlalchemy import (
     populate_config_sqlalchemy_table_if_required,
     update_column_definition,
@@ -925,14 +929,14 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 update_column_definition(model=cls, field=field)
         populate_config_sqlalchemy_table_if_required(config=cls.ormar_config)
         # super().update_forward_refs(**localns)
+        # Own refs are evaluated above (NameError if undefined); the rebuild only
+        # defers while a related model waits on another model's forward refs.
         cls.model_rebuild(
             force=True,
-            _types_namespace={
-                field.to.__name__: field.to
-                for field in fields_to_check.values()
-                if field.is_relation
-            },
+            raise_errors=False,
+            _types_namespace=relation_targets_namespace(model=cls),
         )
+        rebuild_related_models(model=cls)
         cls.ormar_config.requires_ref_update = False
 
     @staticmethod
