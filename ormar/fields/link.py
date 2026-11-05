@@ -65,6 +65,27 @@ def key_parts(value: Any, size: int) -> tuple[Any, ...]:
     return (value,) if size == 1 else tuple(value)
 
 
+def referenced_value(related: BaseModel, field: str) -> Any:
+    """
+    Read the value a foreign key stores for a related model: its value of the
+    referenced field, resolved to a raw value when that field is itself a
+    relation (a model keyed by a foreign key)::
+
+        Profile keyed by ForeignKey(Student) -> profile.student.id
+
+    :param related: related model or its key-only pydantic model
+    :type related: BaseModel
+    :param field: referenced field of the related model
+    :type field: str
+    :return: raw referenced value, ``None`` when not set
+    :rtype: Any
+    """
+    value = getattr(related, field, None)
+    if isinstance(value, BaseModel) and isinstance(related, ormar.Model):
+        return related.ormar_config.pk.part_value(field=field, value=value)
+    return value
+
+
 @dataclass(frozen=True)
 class ColumnPair:
     """
@@ -166,7 +187,7 @@ class RelationLink:
         for pair in self.pairs:
             value = getattr(model, pair.source_field)
             if isinstance(value, ormar.Model):
-                value = getattr(value, pair.target_field)
+                value = referenced_value(related=value, field=pair.target_field)
             values.append(value)
         return key_value(parts=tuple(values))
 
@@ -189,7 +210,9 @@ class RelationLink:
             return {pair.source_field: None for pair in self.pairs}
         if isinstance(related, BaseModel):
             return {
-                pair.source_field: getattr(related, pair.target_field, None)
+                pair.source_field: referenced_value(
+                    related=related, field=pair.target_field
+                )
                 for pair in self.pairs
             }
         if isinstance(related, dict):

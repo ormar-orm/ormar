@@ -62,6 +62,13 @@
 
 ### 🆕 Features
 
+* Foreign keys can be (part of) the primary key: `ForeignKey(..., primary_key=True)`
+  for link tables keyed by their foreign keys and for shared primary keys. The key
+  value holds the referenced values (`enrollment.pk == (student.id, course.id)`).
+* `ForeignKey(..., to_field="iso_code")` references a unique non-pk column of the
+  related model, and `ForeignKey(..., db_constraint=False)` skips the database
+  `FOREIGN KEY` constraint. See [foreign keys](relations/foreign-key.md).
+
 * Composite primary keys: mark several fields with `primary_key=True`. The key value
   is a tuple (`order.pk == (1, 7)`) and works in `get(pk=...)`, `filter(pk__in=...)`,
   `exclude()`, `order_by("pk")`, bulk operations and `update_or_create(pk=...)`.

@@ -246,7 +246,13 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             finally:
                 instance.restore_nested_models_json_fields(decoded=decoded)
         else:
-            fields_set = set(instance.ormar_config.pk.fields)
+            related_names = instance.extract_related_names()
+            fields_set = {
+                name
+                for name in kwargs
+                if name in instance.ormar_config.model_fields
+                and name not in related_names
+            }
             object.__setattr__(instance, "__dict__", new_kwargs)
             object.__setattr__(instance, "__pydantic_fields_set__", fields_set)
 
@@ -845,6 +851,25 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         """
         if self._orm_persisted and self._orm_persisted_key is None:
             object.__setattr__(self, "_orm_persisted_key", self.pk)
+
+    def reference_dict(self) -> dict[str, Any]:
+        """
+        Identify the model by the values it is referenced by, used where a
+        related model cannot be serialized in full (circular references): its
+        primary key fields, or for a model loaded only by a unique non-pk field
+        (``ForeignKey(to_field=...)``) the own fields it holds.
+
+        :return: identifying field values by field name
+        :rtype: dict[str, Any]
+        """
+        if self.pk is not None:
+            return self.ormar_config.pk.to_dict(value=self.pk)
+        own_fields = self.extract_db_own_fields()
+        return {
+            name: value
+            for name, value in self.__dict__.items()
+            if name in own_fields and value is not None
+        }
 
     @property
     def persisted(self) -> bool:
@@ -1616,12 +1641,13 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             relation_field = cast(
                 "ForeignKeyField", self.ormar_config.model_fields[field]
             )
-            self_fields.update(
-                relation_field.link.values_for(related=getattr(self, field))
-            )
-            if not relation_field.nullable and self_fields[field] is None:
+            related = getattr(self, field)
+            self_fields.update(relation_field.link.values_for(related=related))
+            if self_fields[field] is None and (
+                related is not None or not relation_field.nullable
+            ):
                 raise ModelPersistenceError(
                     f"You cannot save {relation_field.to.get_name()} "
-                    f"model without pk set!"
+                    f"model without {', '.join(relation_field.target_fields())} set!"
                 )
         return self_fields

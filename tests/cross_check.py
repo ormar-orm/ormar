@@ -13,7 +13,7 @@ the result the old way and fails if the two differ:
   sides
 - ``dump_for_save`` must return the same values as ``model_dump()``
 
-Tests that count built statements or constructed instances switch it off with
+Only tests that count built statements or constructed instances switch it off with
 ``monkeypatch.setattr(cross_check, "ENABLED", False)``.
 """
 
@@ -373,15 +373,15 @@ def checked_pk_select_template(model_cls: Any, pk: Any) -> StatementTemplate:
     return template
 
 
-def detached_copy(model: Any) -> Any:
+def bare_copy(model: Any) -> Any:
     """
-    Return a copy of a related model with the same field values and its own
-    relation manager, so relations registered on the copy do not reach the
-    model.
+    Return a copy of a model with the same field values and its own, empty
+    relation manager, so it has no relations and relations registered on the
+    copy do not reach the model.
 
-    :param model: related model
+    :param model: model to copy
     :type model: Any
-    :return: detached copy
+    :return: copy without relations
     :rtype: Any
     """
     copy = object.__new__(type(model))
@@ -395,6 +395,34 @@ def detached_copy(model: Any) -> Any:
         object.__setattr__(copy, name, getattr(model, name, None))
     object.__setattr__(copy, "__dict__", dict(model.__dict__))
     copy._initialize_internal_attributes()
+    return copy
+
+
+def detached_copy(model: Any) -> Any:
+    """
+    Return a copy of a related model with the same field values and its own
+    relation manager, so relations registered on the copy do not reach the
+    model.
+
+    The models the copy points at through its foreign keys are registered on
+    it as bare copies (one level), as a required foreign key, e.g. one in the
+    primary key, would otherwise read ``None`` and fail validation. Reverse
+    and many-to-many relations stay empty.
+
+    :param model: related model
+    :type model: Any
+    :return: detached copy
+    :rtype: Any
+    """
+    copy = bare_copy(model=model)
+    fields = type(model).ormar_config.model_fields
+    for name in type(model).extract_related_names():
+        field = fields[name]
+        if field.virtual or field.is_multi:
+            continue
+        related = model._orm.get(name)
+        if isinstance(related, ormar.Model):
+            field.expand_relationship(value=bare_copy(model=related), child=copy)
     return copy
 
 

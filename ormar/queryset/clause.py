@@ -312,8 +312,10 @@ def pk_filter_actions(
 
 def key_parts_of(key: "PrimaryKey", value: Any) -> dict[str, Any]:
     """
-    Split a key value used in a filter, rejecting composite values with a
-    ``None`` part (a key with a missing part identifies no row).
+    Split a key value used in a filter into raw parts (related models in
+    relation parts are replaced by the values they are referenced by),
+    rejecting composite values with a ``None`` part (a key with a missing part
+    identifies no row).
 
     :raises QueryDefinitionError: if the value doesn't match the key
     :param key: primary key filtered on
@@ -323,7 +325,10 @@ def key_parts_of(key: "PrimaryKey", value: Any) -> dict[str, Any]:
     :return: key parts by field name
     :rtype: dict[str, Any]
     """
-    parts = key.to_dict(value=value)
+    parts = {
+        field: key.part_value(field=field, value=part)
+        for field, part in key.to_dict(value=value).items()
+    }
     if key.is_composite and None in parts.values():
         raise QueryDefinitionError(
             f"{key.owner.__name__} composite primary key value cannot contain "
