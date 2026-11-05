@@ -21,6 +21,7 @@ from ormar.fields.base import BaseField
 from ormar.fields.key_only import key_only_instance, key_only_model_type
 from ormar.fields.link import ColumnPair, RelationLink, qualified_fk_reference
 from ormar.fields.referential_actions import ReferentialAction
+from ormar.fields.relation_kind import FOREIGN_KEY_KINDS, RelationKind
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar.models import Model, NewBaseModel, T
@@ -426,6 +427,14 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
             for pair in self.link.pairs
         ]
 
+    @property
+    def kind(self) -> RelationKind:
+        """
+        :return: forward or reverse side of a foreign key or one-to-one relation
+        :rtype: RelationKind
+        """
+        return FOREIGN_KEY_KINDS[(self.one_to_one, self.virtual)]
+
     def get_related_name(self) -> str:
         """
         Returns name to use for reverse relation.
@@ -756,7 +765,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :rtype: Optional[Union["Model", list["Model"]]]
         """
         if value is None:
-            return [] if self.kind is not None and self.kind.many else None
+            return [] if self.kind.many else None
         # Fast path: ``value`` is already a Model of ``self.to``. Dominant
         # case in row materialization and in user kwargs that pass
         # constructed Models directly. Skips the dispatch table and the

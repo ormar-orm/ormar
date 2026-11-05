@@ -1,12 +1,11 @@
-from typing import TYPE_CHECKING, Optional, Sequence, Union, cast
+from typing import TYPE_CHECKING, Optional, Sequence, Union
 from weakref import proxy
 
-from ormar.relations.relation import Relation, RelationType
+from ormar.relations.relation import RELATION_TYPE_BY_KIND, Relation
 from ormar.relations.utils import get_relations_sides_and_names
 
 if TYPE_CHECKING:  # pragma no cover
-    from ormar.fields import BaseField, ForeignKeyField
-    from ormar.fields.relation_kind import RelationKind
+    from ormar.fields import ForeignKeyField
     from ormar.models import Model, NewBaseModel
 
 
@@ -153,27 +152,10 @@ class RelationsManager:
             return None
         relation = Relation(
             manager=self,
-            type_=self._get_relation_type(field),
+            type_=RELATION_TYPE_BY_KIND[field.kind],
             field_name=field.name,
             to=field.to,
             through=getattr(field, "through", None),
         )
         self._relations[name] = relation
         return relation
-
-    def _get_relation_type(self, field: "BaseField") -> RelationType:
-        """
-        Returns type of the relation declared on a field.
-
-        :param field: field with relation declaration
-        :type field: BaseField
-        :return: type of the relation defined on field
-        :rtype: RelationType
-        """
-        if field.is_multi:
-            return RelationType.MULTIPLE
-        if field.is_through:
-            return RelationType.THROUGH
-        if field.virtual and cast("RelationKind", field.kind).many:
-            return RelationType.REVERSE
-        return RelationType.PRIMARY

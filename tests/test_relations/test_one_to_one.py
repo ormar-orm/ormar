@@ -5,6 +5,7 @@ import pytest
 import pytest_asyncio
 
 import ormar
+from ormar.fields.relation_kind import NOT_A_RELATION
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -59,7 +60,7 @@ def test_one_to_one_definition():
     assert Profile.ormar_config.model_fields["user"].kind.many is False
     assert User.ormar_config.model_fields["passport"].kind.many is False
     assert Passport.ormar_config.table.c.user.primary_key is True
-    assert Profile.ormar_config.model_fields["bio"].kind is None
+    assert Profile.ormar_config.model_fields["bio"].kind is NOT_A_RELATION
 
 
 @pytest.mark.asyncio

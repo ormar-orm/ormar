@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 from ormar.fields.base import BaseField
 from ormar.fields.foreign_key import ForeignKeyField
+from ormar.fields.relation_kind import THROUGH, RelationKind
 
 if TYPE_CHECKING:  # pragma no cover
     from pydantic.typing import ForwardRef
@@ -69,3 +70,11 @@ class ThroughField(ForeignKeyField):  # type: ignore[misc]
     """
     Field class used to access ManyToMany model through model.
     """
+
+    @property
+    def kind(self) -> RelationKind:
+        """
+        :return: ``THROUGH``, the field leading from a model to its link table
+        :rtype: RelationKind
+        """
+        return THROUGH
