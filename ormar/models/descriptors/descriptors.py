@@ -96,14 +96,12 @@ class PkDescriptor:
         :type instance: Model
         :param owner: model class
         :type owner: type[Model]
-        :return: key value of the instance; on the class the descriptor itself
-            for a composite key (a single key resolves to a field accessor
-            for python-style filters through the model metaclass)
+        :raises AttributeError: on class access, so the model metaclass resolves
+            ``Model.pk`` to a key accessor for python-style filters
+        :return: key value of the instance
         :rtype: Any
         """
         if instance is None:
-            if self.key.is_composite:
-                return self
             raise AttributeError("pk")
         return self.read(instance)
 

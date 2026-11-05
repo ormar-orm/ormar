@@ -5,7 +5,6 @@ import pytest_asyncio
 
 import ormar
 from ormar.exceptions import ModelPersistenceError
-from tests import cross_check
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -168,10 +167,7 @@ async def test_relations_to_a_model_keyed_by_a_foreign_key():
 
 
 @pytest.mark.asyncio
-async def test_reverse_select_related_into_models_keyed_by_a_foreign_key(monkeypatch):
-    # the cross-check's detached copies drop relations, and a foreign key in the
-    # primary key is required
-    monkeypatch.setattr(cross_check, "ENABLED", False)
+async def test_reverse_select_related_into_models_keyed_by_a_foreign_key():
     ann = await Student.objects.create(name="Ann")
     await Profile.objects.create(student=ann, bio="hi")
     math = await Course.objects.create(title="Math")

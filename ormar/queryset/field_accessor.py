@@ -20,11 +20,13 @@ class FieldAccessor:
         field: Optional["BaseField"] = None,
         model: Optional[type["Model"]] = None,
         access_chain: str = "",
+        is_key: bool = False,
     ) -> None:
         self._source_model = source_model
         self._field = field
         self._model = model
         self._access_chain = access_chain
+        self._is_key = is_key
 
     def __getattr__(self, item: str) -> Any:
         """
@@ -41,6 +43,13 @@ class FieldAccessor:
             and item == object.__getattribute__(self, "_field").name
         ):
             return self._field
+
+        if item == "pk" and object.__getattribute__(self, "_model"):
+            return key_accessor(
+                source_model=self._source_model,
+                model=cast(type["Model"], self._model),
+                prefix=self._access_chain + "__",
+            )
 
         if (
             object.__getattribute__(self, "_model")
@@ -63,7 +72,7 @@ class FieldAccessor:
         return object.__getattribute__(self, item)  # pragma: no cover
 
     def _check_field(self) -> None:
-        if self._field:
+        if self._field or self._is_key:
             return
         field = self._source_model.ormar_config.model_fields.get(self._access_chain)
         if field is not None and not field.virtual and not field.is_multi:
@@ -307,3 +316,36 @@ class FieldAccessor:
         if not isinstance(nulls_ordering, NullsOrdering):
             raise ValueError("Invalid option for ordering nulls values.")
         return nulls_ordering.value
+
+
+def key_accessor(
+    source_model: type["Model"], model: type["Model"], prefix: str
+) -> FieldAccessor:
+    """
+    Accessor for the primary key of ``model`` reached from ``source_model``
+    through ``prefix``, used by ``Model.pk`` and ``Model.relation.pk``.
+
+    A single column key resolves to the accessor of its field. A composite key
+    resolves to a key accessor whose ``==`` and ``in_()`` / ``<<`` filters
+    compile to row-value comparisons like ``filter(pk=...)`` and
+    ``filter(pk__in=...)``.
+
+    :param source_model: model the filter is built for
+    :type source_model: type[Model]
+    :param model: model owning the primary key
+    :type model: type[Model]
+    :param prefix: relation access chain leading to ``model``, ``""`` for the
+        source model itself
+    :type prefix: str
+    :return: accessor of the key
+    :rtype: FieldAccessor
+    """
+    key = model.ormar_config.pk
+    if key.is_composite:
+        return FieldAccessor(
+            source_model=source_model, access_chain=f"{prefix}pk", is_key=True
+        )
+    field = model.ormar_config.model_fields[key.fields[0]]
+    return FieldAccessor(
+        source_model=source_model, field=field, access_chain=prefix + field.name
+    )
