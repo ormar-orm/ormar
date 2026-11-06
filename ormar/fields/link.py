@@ -174,9 +174,12 @@ class RelationLink:
     def key_of(self, model: "Model") -> Any:
         """
         Read the value a source model holds for this link. A related model on
-        the source side is replaced by its value of the target field::
+        the source side is replaced by the raw value stored for it: the target
+        field's value for the link's own foreign key, the key part's value for
+        a primary key part that is a relation (mirrored links)::
 
             Track.album link, track.album == Album(id=4) -> 4
+            Ledger.entries link, ledger.tenant == Tenant(id=4) -> (4, 1)
 
         :param model: instance of the source model
         :type model: Model
@@ -187,15 +190,22 @@ class RelationLink:
         for pair in self.pairs:
             value = getattr(model, pair.source_field)
             if isinstance(value, ormar.Model):
-                value = referenced_value(related=value, field=pair.target_field)
+                key = model.ormar_config.pk
+                value = (
+                    key.part_value(field=pair.source_field, value=value)
+                    if pair.source_field in key.relation_parts
+                    else referenced_value(related=value, field=pair.target_field)
+                )
             values.append(value)
         return key_value(parts=tuple(values))
 
     def values_for(self, related: Any) -> dict[str, Any]:
         """
-        Turn a related value into the source-side field values that store it::
+        Turn a related value into the source-side values that store it, keyed
+        by ``source_keys()``::
 
             Track.album link: Album(id=2) | {"id": 2} | 2 -> {"album": 2}
+            OrderLine.order link: Order(1, 7) -> {"ord_tenant": 1, "ord_no": 7}
 
         A related model without its key yields ``None`` values; callers decide
         whether that is an error.
@@ -207,20 +217,27 @@ class RelationLink:
         :rtype: dict[str, Any]
         """
         if related is None:
-            return {pair.source_field: None for pair in self.pairs}
-        if isinstance(related, BaseModel):
-            return {
-                pair.source_field: referenced_value(
-                    related=related, field=pair.target_field
-                )
+            parts: tuple[Any, ...] = (None,) * len(self.pairs)
+        elif isinstance(related, BaseModel):
+            parts = tuple(
+                referenced_value(related=related, field=pair.target_field)
                 for pair in self.pairs
-            }
-        if isinstance(related, dict):
-            return {
-                pair.source_field: related.get(pair.target_field) for pair in self.pairs
-            }
-        parts = key_parts(value=related, size=len(self.pairs))
-        return {pair.source_field: part for pair, part in zip(self.pairs, parts)}
+            )
+        elif isinstance(related, dict):
+            parts = tuple(related.get(pair.target_field) for pair in self.pairs)
+        else:
+            parts = key_parts(value=related, size=len(self.pairs))
+        return dict(zip(self.source_keys(), parts))
+
+    def source_keys(self) -> tuple[str, ...]:
+        """
+        :return: keys the source side stores the link's values under in a model
+            dict: the relation field for a single column, the columns otherwise
+        :rtype: tuple[str, ...]
+        """
+        if len(self.pairs) == 1:
+            return (self.pairs[0].source_field,)
+        return self.source_columns()
 
     def key_getter(
         self, *, side: Literal["source", "target"], prefix: str = ""

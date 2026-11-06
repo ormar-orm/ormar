@@ -191,6 +191,7 @@ class Model(ModelRow):
                 k: v
                 for k, v in self_fields.items()
                 if k not in related_names
+                and k in self.ormar_config.model_fields
                 and (k not in current_values or current_values[k] is not v)
             }
         )
@@ -376,10 +377,15 @@ class Model(ModelRow):
             for field in key_fields:
                 self_fields.pop(field)
         if _columns:
+            selected = {
+                column
+                for name in _columns
+                for column in self.get_column_aliases(field_name=name)
+            }.union(_columns)
             self_fields = {
                 k: v
                 for k, v in self_fields.items()
-                if k in _columns
+                if k in selected
                 or k in self._onupdate_fields
                 or (key_moved and k in key_fields)
             }
@@ -468,7 +474,7 @@ class Model(ModelRow):
                 raise NoMatch(
                     "Instance was deleted from database and cannot be refreshed"
                 )
-            kwargs = self.translate_aliases_to_columns(dict(row))
+            kwargs = self.translate_row_to_fields(row=dict(row))
         self.update_from_dict(kwargs)
         self.set_save_status(True)
         self.__setattr_fields__.clear()

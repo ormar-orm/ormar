@@ -72,15 +72,7 @@ def test_explicit_autoincrement_on_composite_part_raises():
             b: int = ormar.Integer(primary_key=True)
 
 
-def test_relation_to_composite_key_model_raises_for_now():
-    with pytest.raises(ModelDefinitionError, match="composite primary key"):
-
-        class Line(ormar.Model):
-            ormar_config = base_ormar_config.copy(tablename="cpd_lines")
-
-            id: int = ormar.Integer(primary_key=True)
-            order: Optional[Order] = ormar.ForeignKey(Order)
-
+def test_many_to_many_to_composite_key_model_raises_for_now():
     with pytest.raises(ModelDefinitionError, match="composite primary key"):
 
         class Tag(ormar.Model):

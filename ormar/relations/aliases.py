@@ -89,6 +89,8 @@ def prefixed_table(alias: str, table: sqlalchemy.Table) -> NamedFromClause:
     Cached without a size limit, as filters and joins of one statement have to
     reference the same aliased table object, and the number of aliases is bounded
     by the relation paths of the defined models.
+    Call it with keyword arguments only: the cache keys keyword and positional
+    calls differently, and two aliased objects of one table break the query.
 
     :param alias: alias of given table
     :type alias: str

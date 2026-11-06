@@ -9,6 +9,7 @@ import ormar_rust_utils
 
 import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
+from ormar.queryset.actions.filter_action import KeyInFilterAction
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.queries.query import Query
 from ormar.queryset.utils import translate_list_to_dict
@@ -84,7 +85,18 @@ class Node(abc.ABC):
         :rtype: list["FilterAction"]
         """
         clause_target = self.relation_field.get_filter_clause_target()
-        (filter_column,) = link.target_columns()
+        target_columns = link.target_columns()
+        if len(target_columns) > 1:
+            return [
+                KeyInFilterAction(
+                    prefix="",
+                    values=list(ids),
+                    model_cls=clause_target,
+                    anchor=link.target_fields()[0],
+                    columns=target_columns,
+                )
+            ]
+        (filter_column,) = target_columns
         qryclause = QueryClause(
             model_cls=clause_target,
             select_related=[],

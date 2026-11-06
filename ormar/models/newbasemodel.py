@@ -944,6 +944,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 expand_reverse_relationship(model_field=field)
                 update_column_definition(model=cls, field=field)
         populate_config_sqlalchemy_table_if_required(config=cls.ormar_config)
+        cls.reset_column_caches()
         # super().update_forward_refs(**localns)
         cls.model_rebuild(
             force=True,
@@ -1057,6 +1058,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
     @staticmethod
     def _resolve_field_descent(  # noqa: CFQ002
         field: str,
+        relation_field: ForeignKeyField,
         nested_model: Union["Model", MutableSequence["Model"]],
         flatten_map: Optional[FlattenMap],
         relation_map: builtins.dict,
@@ -1075,6 +1077,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
 
         :param field: relation field name being processed
         :type field: str
+        :param relation_field: the relation field being processed
+        :type relation_field: ForeignKeyField
         :param nested_model: value of the relation on the current instance,
             null relations are handled by the caller
         :type nested_model: Union[Model, MutableSequence[Model]]
@@ -1099,9 +1103,9 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             return None
         if flatten_map is not None and flatten_map.is_field_flattened(field):
             value = (
-                [m.pk for m in nested_model]
+                [relation_field.flat_value(related=m) for m in nested_model]
                 if isinstance(nested_model, MutableSequence)
-                else nested_model.pk
+                else relation_field.flat_value(related=nested_model)
             )
             if dump_options["mode"] == "json":
                 value = to_jsonable_python(value)
@@ -1161,6 +1165,9 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                     continue
                 descent = self._resolve_field_descent(
                     field=field,
+                    relation_field=cast(
+                        ForeignKeyField, self.ormar_config.model_fields[field]
+                    ),
                     nested_model=nested_model,
                     flatten_map=flatten_map,
                     relation_map=relation_map,
@@ -1662,8 +1669,10 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 "ForeignKeyField", self.ormar_config.model_fields[field]
             )
             related = getattr(self, field)
-            self_fields.update(relation_field.link.values_for(related=related))
-            if self_fields[field] is None and (
+            values = relation_field.link.values_for(related=related)
+            self_fields.pop(field, None)
+            self_fields.update(values)
+            if None in values.values() and (
                 related is not None or not relation_field.nullable
             ):
                 raise ModelPersistenceError(

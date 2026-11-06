@@ -224,8 +224,33 @@ def _process_fields(
         if field.primary_key:
             pk_fields.append(field_name)
         if _is_db_field(field):
-            columns.append(field.get_column(field.get_alias()))
+            columns.extend(field.get_columns())
+    validate_unique_column_names(model=new_model, columns=columns)
     return tuple(pk_fields), columns
+
+
+def validate_unique_column_names(
+    model: Union[type["Model"], type["NewBaseModel"]], columns: list[sqlalchemy.Column]
+) -> None:
+    """
+    Check that no two fields of a model store the same database column, e.g.
+    a field named like a generated column of a foreign key stored in several
+    columns (``order_tenant_id``).
+
+    :raises ModelDefinitionError: if a column name is used twice
+    :param model: model the columns belong to
+    :type model: Union[type[Model], type[NewBaseModel]]
+    :param columns: columns of the model
+    :type columns: list[sqlalchemy.Column]
+    """
+    seen: set[str] = set()
+    for column in columns:
+        if column.name in seen:
+            raise ormar.ModelDefinitionError(
+                f"Column {column.name} of {model.__name__} is used by two fields, "
+                "rename one of them (name= / columns=)."
+            )
+        seen.add(column.name)
 
 
 def _is_through_model_not_set(field: "BaseField") -> bool:
@@ -378,6 +403,11 @@ def populate_config_sqlalchemy_table_if_required(config: "OrmarConfig") -> None:
             ),
             *config.columns,
             *config.constraints,
+            *(
+                constraint
+                for field in config.model_fields.values()
+                for constraint in field.construct_table_constraints()
+            ),
             schema=config.schema,
             comment=config.comment,
         )
@@ -440,6 +470,6 @@ def update_column_definition(
     columns = model.ormar_config.columns
     for ind, column in enumerate(columns):
         if column.name == field.get_alias():
-            new_column = field.get_column(field.get_alias())
-            columns[ind] = new_column
+            columns[ind : ind + 1] = field.get_columns()
+            validate_unique_column_names(model=model, columns=columns)
             break

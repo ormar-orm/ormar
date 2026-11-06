@@ -70,7 +70,7 @@ class ExcludableMixin(RelationMixin):
         if cached is not None:
             return cached
         pairs = [
-            (col.name, model.get_column_name_from_alias(col.name))
+            (col.name, model.get_field_name_of_column(column=col.name))
             for col in model.ormar_config.table.columns
         ]
         model._table_column_pairs = pairs  # type: ignore[union-attr]
