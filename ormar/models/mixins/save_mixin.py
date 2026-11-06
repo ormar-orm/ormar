@@ -161,7 +161,7 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         :type field_name: str
         """
         field = cls.ormar_config.model_fields[field_name]
-        if field.virtual or field.is_multi:
+        if not field.kind.holds_columns:
             model_dict.pop(field_name)
             return
         link = cast("ForeignKeyField", field).link

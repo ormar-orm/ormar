@@ -5,7 +5,7 @@ import pytest
 import pytest_asyncio
 
 import ormar
-from tests import cross_check
+from ormar.fields.relation_kind import NOT_A_RELATION
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -60,12 +60,11 @@ def test_one_to_one_definition():
     assert Profile.ormar_config.model_fields["user"].kind.many is False
     assert User.ormar_config.model_fields["passport"].kind.many is False
     assert Passport.ormar_config.table.c.user.primary_key is True
-    assert Profile.ormar_config.model_fields["bio"].kind is None
+    assert Profile.ormar_config.model_fields["bio"].kind is NOT_A_RELATION
 
 
 @pytest.mark.asyncio
-async def test_reverse_side_is_a_single_model(monkeypatch):
-    monkeypatch.setattr(cross_check, "ENABLED", False)
+async def test_reverse_side_is_a_single_model():
     ann = await User.objects.create(name="Ann")
     bob = await User.objects.create(name="Bob")
     await Profile.objects.create(bio="hi", user=ann)
@@ -124,8 +123,7 @@ def test_default_related_name_is_singular():
 
 
 @pytest.mark.asyncio
-async def test_dropped_reverse_model_does_not_break_the_target(monkeypatch):
-    monkeypatch.setattr(cross_check, "ENABLED", False)
+async def test_dropped_reverse_model_does_not_break_the_target():
     async with base_ormar_config.database:
         ann = await User.objects.create(name="Ann")
         await Profile.objects.create(user=ann, bio="x")
@@ -137,8 +135,7 @@ async def test_dropped_reverse_model_does_not_break_the_target(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_reverse_assignment_unlinks_the_previous_model(monkeypatch):
-    monkeypatch.setattr(cross_check, "ENABLED", False)
+async def test_reverse_assignment_unlinks_the_previous_model():
     ann = await User.objects.create(name="Ann")
     bob = await User.objects.create(name="Bob")
     old = await Profile.objects.create(user=ann, bio="old")

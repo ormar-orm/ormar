@@ -85,9 +85,7 @@ def get_nested_model_example(
     :rtype: Union[list, dict]
     """
     value = generate_model_example(field.to, relation_map=relation_map.get(name, {}))
-    new_value: Union[list, dict] = (
-        [value] if field.kind is not None and field.kind.many else value
-    )
+    new_value: Union[list, dict] = [value] if field.kind.many else value
     return new_value
 
 

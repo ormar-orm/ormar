@@ -60,7 +60,7 @@ def resolve_column(
     if field_name not in allowed:
         return None
     field = model_cls.ormar_config.model_fields.get(field_name)
-    if field is None or not field.is_relation or field.virtual or field.is_multi:
+    if field is None or not field.kind.holds_columns:
         return ReturnedColumn(name=field_name)
     pairs = cast("ForeignKeyField", field).link.pairs
     if len(pairs) == 1:

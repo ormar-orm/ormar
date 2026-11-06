@@ -16,6 +16,7 @@ from ormar.fields.foreign_key import (
 )
 from ormar.fields.key_only import key_only_model_type
 from ormar.fields.link import RelationLink
+from ormar.fields.relation_kind import MANY_TO_MANY, RelationKind
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar.models import Model, T
@@ -190,6 +191,14 @@ class ManyToManyField(  # type: ignore
             self.to: type["Model"]
             self.through: type["Model"]
         super().__init__(**kwargs)
+
+    @property
+    def kind(self) -> RelationKind:
+        """
+        :return: ``MANY_TO_MANY``, for both sides of the relation
+        :rtype: RelationKind
+        """
+        return MANY_TO_MANY
 
     def has_unresolved_forward_refs(self) -> bool:
         """

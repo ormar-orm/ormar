@@ -9,6 +9,7 @@ from ormar.exceptions import (
     QueryDefinitionError,
     RelationshipInstanceError,
 )
+from ormar.queryset.actions.order_action import order_actions_for
 from ormar.relations.aliases import alias_for, prefixed_columns, prefixed_table
 
 if TYPE_CHECKING:  # pragma no cover
@@ -278,10 +279,10 @@ class SqlJoin:
 
     def _set_default_primary_key_order_by(self) -> None:
         for order_by in self.next_model.ormar_config.orders_by:
-            clause = ormar.OrderAction(
+            for clause in order_actions_for(
                 order_str=order_by, model_cls=self.next_model, alias=self.next_alias
-            )
-            self.sorted_orders[clause] = clause.get_text_clause()
+            ):
+                self.sorted_orders[clause] = clause.get_text_clause()
 
     def _verify_allowed_order_field(self, order_by: str) -> None:
         """
@@ -332,11 +333,11 @@ class SqlJoin:
             current_table_sorted = True
             for order_by in self.target_field.orders_by:
                 alias, model = self._get_alias_and_model(order_by=order_by)
-                clause = ormar.OrderAction(
+                for clause in order_actions_for(
                     order_str=order_by, model_cls=model, alias=alias
-                )
-                self.sorted_orders[clause] = clause.get_text_clause()
-                self.already_sorted[f"{alias}_{model.get_name()}"] = clause
+                ):
+                    self.sorted_orders[clause] = clause.get_text_clause()
+                    self.already_sorted[f"{alias}_{model.get_name()}"] = clause
 
         if not current_table_sorted and not self.target_field.is_multi:
             self._set_default_primary_key_order_by()

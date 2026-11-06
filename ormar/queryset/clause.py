@@ -352,8 +352,7 @@ def multi_column_filter_actions(
         target = field.to
     if (
         field is None
-        or field.virtual
-        or field.is_multi
+        or not field.kind.holds_columns
         or len(cast("ForeignKeyField", field).link.pairs) == 1
     ):
         return None

@@ -31,6 +31,7 @@ from ormar.fields.link import (
     referenced_value,
 )
 from ormar.fields.referential_actions import ReferentialAction
+from ormar.fields.relation_kind import FOREIGN_KEY_KINDS, RelationKind
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar.models import Model, NewBaseModel, T
@@ -524,6 +525,14 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
             for pair in self.link.pairs
         ]
 
+    @property
+    def kind(self) -> RelationKind:
+        """
+        :return: forward or reverse side of a foreign key or one-to-one relation
+        :rtype: RelationKind
+        """
+        return FOREIGN_KEY_KINDS[(self.one_to_one, self.virtual)]
+
     def get_related_name(self) -> str:
         """
         Returns name to use for reverse relation.
@@ -666,8 +675,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :rtype: list
         """
         if (
-            self.virtual
-            or self.is_multi
+            not self.kind.holds_columns
             or self.has_unresolved_forward_refs()
             or self.owner.ormar_config.view
         ):
@@ -882,7 +890,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
             of a reverse or many-to-many relation
         :rtype: tuple[str, ...]
         """
-        if self.virtual or self.is_multi:
+        if not self.kind.holds_columns:
             return self.to.ormar_config.pk.fields
         return self.target_fields()
 
@@ -914,7 +922,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         fields = self.flat_fields()
         if len(fields) > 1:
             return key_dict_type(target=self.to, fields=fields)
-        if self.virtual or self.is_multi:
+        if not self.kind.holds_columns:
             return self.to.ormar_config.model_fields[fields[0]].__type__
         return self.target_value_type()
 
@@ -1009,7 +1017,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         :rtype: Optional[Union["Model", list["Model"]]]
         """
         if value is None:
-            return [] if self.kind is not None and self.kind.many else None
+            return [] if self.kind.many else None
         # Fast path: ``value`` is already a Model of ``self.to``. Dominant
         # case in row materialization and in user kwargs that pass
         # constructed Models directly. Skips the dispatch table and the
@@ -1018,7 +1026,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
             if to_register:
                 self.register_relation(model=value, child=cast("Model", child))
             return value
-        if value.__class__ is list and not self.virtual and not self.is_multi:
+        if value.__class__ is list and self.kind.holds_columns:
             # a key of several columns given as a JSON list
             value = tuple(value)
         return self._constructor_dispatch.get(
