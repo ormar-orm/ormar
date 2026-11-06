@@ -266,32 +266,112 @@ def _process_fields(
             pk_fields.append(field_name)
         if _is_db_field(field):
             columns.extend(field.get_columns())
-    validate_unique_column_names(model=new_model, columns=columns)
-    return tuple(pk_fields), columns
+    return tuple(pk_fields), merge_shared_columns(model=new_model, columns=columns)
 
 
-def validate_unique_column_names(
-    model: Union[type["Model"], type["NewBaseModel"]], columns: list[sqlalchemy.Column]
+def names_columns_explicitly(field: "BaseField") -> bool:
+    """
+    :param field: field storing a column
+    :type field: BaseField
+    :return: whether the field is a foreign key naming its columns itself
+        (``columns=`` / ``name=``), so a column it shares with another field
+        is meant, not a clash of generated names
+    :rtype: bool
+    """
+    return field.is_relation and (
+        cast("ForeignKeyField", field).columns is not None or bool(field.db_alias)
+    )
+
+
+def column_owners(
+    model: Union[type["Model"], type["NewBaseModel"]],
+) -> dict[str, list["BaseField"]]:
+    """
+    :param model: model whose fields are inspected
+    :type model: Union[type[Model], type[NewBaseModel]]
+    :return: fields storing each database column, in declaration order
+    :rtype: dict[str, list[BaseField]]
+    """
+    owners: dict[str, list["BaseField"]] = {}
+    for field in model.ormar_config.model_fields.values():
+        if _is_db_field(field):
+            for column in field.column_aliases():
+                owners.setdefault(column, []).append(field)
+    return owners
+
+
+def validate_shared_column(
+    model: Union[type["Model"], type["NewBaseModel"]],
+    name: str,
+    fields: list["BaseField"],
+    columns: list[sqlalchemy.Column],
 ) -> None:
     """
-    Check that no two fields of a model store the same database column, e.g.
-    a field named like a generated column of a foreign key stored in several
-    columns (``order_tenant_id``).
+    Check that a column stored by several fields may be shared: at most one
+    of them is a plain field, every foreign key among them names the column
+    itself, and they agree on its type.
 
-    :raises ModelDefinitionError: if a column name is used twice
-    :param model: model the columns belong to
+    :raises ModelDefinitionError: if the fields can't share the column
+    :param model: model the column belongs to
     :type model: Union[type[Model], type[NewBaseModel]]
-    :param columns: columns of the model
+    :param name: column name
+    :type name: str
+    :param fields: fields storing the column
+    :type fields: list[BaseField]
+    :param columns: the column as each field defines it
     :type columns: list[sqlalchemy.Column]
     """
-    seen: set[str] = set()
+    plain = [field for field in fields if not field.is_relation]
+    relations = [field for field in fields if field.is_relation]
+    if len(plain) > 1 or not all(
+        names_columns_explicitly(field=field) for field in relations
+    ):
+        raise ormar.ModelDefinitionError(
+            f"Column {name} of {model.__name__} is used by two fields, "
+            "rename one of them (name= / columns=)."
+        )
+    if len({column.type._type_affinity for column in columns}) > 1:
+        raise ormar.ModelDefinitionError(
+            f"Fields {[field.name for field in fields]} of {model.__name__} share "
+            f"column {name} but give it different types."
+        )
+
+
+def merge_shared_columns(
+    model: Union[type["Model"], type["NewBaseModel"]],
+    columns: list[sqlalchemy.Column],
+) -> list[sqlalchemy.Column]:
+    """
+    Keep one column per name when several fields store the same column (e.g.
+    a ``tenant_id`` shared by two foreign keys of a link table). The kept
+    column is part of the primary key when any of its fields is, and
+    nullable only when all of them are.
+
+    :raises ModelDefinitionError: if the fields can't share a column
+    :param model: model the columns belong to
+    :type model: Union[type[Model], type[NewBaseModel]]
+    :param columns: columns of the model's fields, in declaration order
+    :type columns: list[sqlalchemy.Column]
+    :return: columns with each name once
+    :rtype: list[sqlalchemy.Column]
+    """
+    by_name: dict[str, list[sqlalchemy.Column]] = {}
     for column in columns:
-        if column.name in seen:
-            raise ormar.ModelDefinitionError(
-                f"Column {column.name} of {model.__name__} is used by two fields, "
-                "rename one of them (name= / columns=)."
+        by_name.setdefault(column.name, []).append(column)
+    if all(len(same) == 1 for same in by_name.values()):
+        return columns
+    owners = column_owners(model=model)
+    merged = []
+    for name, same in by_name.items():
+        kept = same[0]
+        if len(same) > 1:
+            validate_shared_column(
+                model=model, name=name, fields=owners[name], columns=same
             )
-        seen.add(column.name)
+            kept.primary_key = any(column.primary_key for column in same)
+            kept.nullable = all(column.nullable for column in same)
+        merged.append(kept)
+    return merged
 
 
 def _is_through_model_not_set(field: "BaseField") -> bool:
@@ -505,5 +585,5 @@ def update_column_definition(
     for ind, column in enumerate(columns):
         if column.name == field.get_alias():
             columns[ind : ind + 1] = field.get_columns()
-            validate_unique_column_names(model=model, columns=columns)
+            columns[:] = merge_shared_columns(model=model, columns=columns)
             break

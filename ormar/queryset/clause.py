@@ -293,14 +293,16 @@ def pk_filter_actions(
         target = field.to
     key = target.ormar_config.pk
     if key.is_composite and operator in ("", "exact"):
-        key_value = tuple(key_parts_of(key=key, value=value).values())
+        key_value = key_parts_of(key=key, value=value)
         return [
             KeyInFilterAction(prefix=prefix, values=[key_value], model_cls=model_cls)
         ]
     if operator in ("", "exact"):
+        (part,) = key_parts_of(key=key, value=value)
         return [
-            FilterAction(filter_str=f"{prefix}{field}", value=part, model_cls=model_cls)
-            for field, part in key_parts_of(key=key, value=value).items()
+            FilterAction(
+                filter_str=f"{prefix}{key.fields[0]}", value=part, model_cls=model_cls
+            )
         ]
     if not key.is_composite:
         return [
@@ -315,7 +317,7 @@ def pk_filter_actions(
             f"Only pk=... and pk__in=... lookups are supported on the composite "
             f"primary key of {target.__name__}, got {name}."
         )
-    values = [tuple(key_parts_of(key=key, value=item).values()) for item in value]
+    values = [key_parts_of(key=key, value=item) for item in value]
     return [KeyInFilterAction(prefix=prefix, values=values, model_cls=model_cls)]
 
 
@@ -395,26 +397,23 @@ def multi_column_filter_actions(
     ]
 
 
-def key_parts_of(key: "PrimaryKey", value: Any) -> dict[str, Any]:
+def key_parts_of(key: "PrimaryKey", value: Any) -> tuple[Any, ...]:
     """
-    Split a key value used in a filter into raw parts (related models in
-    relation parts are replaced by the values they are referenced by),
-    rejecting composite values with a ``None`` part (a key with a missing part
-    identifies no row).
+    Split a key value used in a filter into the raw value of each key column
+    (related models in relation parts are replaced by the values they are
+    referenced by), rejecting composite values with a ``None`` part (a key
+    with a missing part identifies no row).
 
     :raises QueryDefinitionError: if the value doesn't match the key
     :param key: primary key filtered on
     :type key: PrimaryKey
     :param value: key value
     :type value: Any
-    :return: key parts by field name
-    :rtype: dict[str, Any]
+    :return: key parts in key column order
+    :rtype: tuple[Any, ...]
     """
-    parts = {
-        field: key.part_value(field=field, value=part)
-        for field, part in key.to_dict(value=value).items()
-    }
-    if key.is_composite and None in parts.values():
+    parts = key.flat_parts(value=value)
+    if key.is_composite and None in parts:
         raise QueryDefinitionError(
             f"{key.owner.__name__} composite primary key value cannot contain "
             f"None: {value!r}"

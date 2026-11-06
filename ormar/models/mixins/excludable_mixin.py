@@ -58,7 +58,8 @@ class ExcludableMixin(RelationMixin):
         model: Union[type["Model"], type["ModelRow"]],
     ) -> list[tuple[str, str]]:
         """
-        Returns cached list of (col_name, field_name) tuples for the model's table.
+        Returns cached list of (col_name, field_name) tuples for the model's table,
+        one per field storing the column (several for a shared column).
         Built once per model class and cached to avoid repeated SA column iteration.
 
         :param model: model to get column pairs for
@@ -70,8 +71,9 @@ class ExcludableMixin(RelationMixin):
         if cached is not None:
             return cached
         pairs = [
-            (col.name, model.get_field_name_of_column(column=col.name))
+            (col.name, field_name)
             for col in model.ormar_config.table.columns
+            for field_name in model.get_field_names_of_column(column=col.name)
         ]
         model._table_column_pairs = pairs  # type: ignore[union-attr]
         return pairs
@@ -124,7 +126,9 @@ class ExcludableMixin(RelationMixin):
                 continue
             if has_exclude and model_excludable.is_excluded(field_name):
                 continue
-            columns.append(col_name if use_alias else field_name)
+            name = col_name if use_alias else field_name
+            if name not in columns:
+                columns.append(name)
 
         # always has to return pk column for ormar to work
         if add_pk_columns:

@@ -1671,7 +1671,9 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             related = getattr(self, field)
             values = relation_field.link.values_for(related=related)
             self_fields.pop(field, None)
-            self_fields.update(values)
+            self.merge_relation_values(
+                target=self_fields, values=values, field_name=field
+            )
             if None in values.values() and (
                 related is not None or not relation_field.nullable
             ):
