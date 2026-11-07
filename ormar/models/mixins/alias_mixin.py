@@ -1,8 +1,39 @@
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import ormar_rust_utils
 
 from ormar.exceptions import ModelPersistenceError
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ormar.fields import ForeignKeyField
+
+
+class SharedKey(NamedTuple):
+    """
+    Where the value of a column several fields share is kept in a model dict.
+
+    :ivar kept: key the column's value is kept under (the plain field's name
+        when one stores it, else the first field's key)
+    :ivar column: the shared column
+    """
+
+    kept: str
+    column: str
+
+
+class SharedPlainField(NamedTuple):
+    """
+    A plain field storing a column foreign keys share, and where those
+    foreign keys hold the column's value.
+
+    :ivar field: name of the plain field
+    :ivar sources: ``(foreign key name, key of the column in its
+        RelationLink.values_for)`` of every foreign key sharing the column, in
+        declaration order
+    """
+
+    field: str
+    sources: tuple[tuple[str, str], ...]
 
 
 class AliasMixin:
@@ -20,7 +51,8 @@ class AliasMixin:
     _column_to_field_map: dict[str, str]
     _multi_column_fields: tuple[tuple[str, tuple[str, ...]], ...]
     _column_owners_map: dict[str, tuple[str, ...]]
-    _shared_value_keys: dict[str, tuple[str, str]]
+    _shared_value_keys: dict[str, SharedKey]
+    _shared_plain_fields: tuple[SharedPlainField, ...]
 
     @classmethod
     def _build_alias_cache(cls) -> None:
@@ -61,25 +93,25 @@ class AliasMixin:
             column: tuple(names) for column, names in owners.items()
         }
         cls._shared_value_keys = cls._build_shared_value_keys(owners=owners)
+        cls._shared_plain_fields = cls._build_shared_plain_fields(owners=owners)
 
     @classmethod
     def _build_shared_value_keys(
         cls, owners: dict[str, list[str]]
-    ) -> dict[str, tuple[str, str]]:
+    ) -> dict[str, SharedKey]:
         """
         For every column stored by several fields, map the key each of them
         stores its value under in a model dict (the field name, or the column
-        for a foreign key stored in several columns) to the key the column's
-        value is kept under (the plain field's name when one stores it, else
-        the first field's key) and the column.
+        for a foreign key stored in several columns) to where the column's
+        value is kept.
 
         :param owners: fields storing each column
         :type owners: dict[str, list[str]]
-        :return: ``{value key: (kept key, column)}``
-        :rtype: dict[str, tuple[str, str]]
+        :return: ``{value key: SharedKey}``
+        :rtype: dict[str, SharedKey]
         """
         model_fields = cls.ormar_config.model_fields
-        shared: dict[str, tuple[str, str]] = {}
+        shared: dict[str, SharedKey] = {}
         for column, names in owners.items():
             if len(names) == 1:
                 continue
@@ -89,8 +121,35 @@ class AliasMixin:
             ]
             plain = [name for name in names if not model_fields[name].is_relation]
             kept = plain[0] if plain else keys[0]
-            shared.update({key: (kept, column) for key in keys})
+            shared.update({key: SharedKey(kept=kept, column=column) for key in keys})
         return shared
+
+    @classmethod
+    def _build_shared_plain_fields(
+        cls, owners: dict[str, list[str]]
+    ) -> tuple[SharedPlainField, ...]:
+        """
+        :param owners: fields storing each column
+        :type owners: dict[str, list[str]]
+        :return: the plain fields storing a column foreign keys share
+        :rtype: tuple[SharedPlainField, ...]
+        """
+        model_fields = cls.ormar_config.model_fields
+        plain_fields = []
+        for column, names in owners.items():
+            plain = [name for name in names if not model_fields[name].is_relation]
+            if len(names) == 1 or not plain:
+                continue
+            sources = tuple(
+                (
+                    name,
+                    column if len(model_fields[name].column_aliases()) > 1 else name,
+                )
+                for name in names
+                if model_fields[name].is_relation
+            )
+            plain_fields.append(SharedPlainField(field=plain[0], sources=sources))
+        return tuple(plain_fields)
 
     @classmethod
     def reset_column_caches(cls) -> None:
@@ -106,6 +165,7 @@ class AliasMixin:
             "_multi_column_fields",
             "_column_owners_map",
             "_shared_value_keys",
+            "_shared_plain_fields",
             "_table_column_pairs",
         ):
             if name in cls.__dict__:
@@ -170,18 +230,49 @@ class AliasMixin:
         return owners.get(column, (cls.get_field_name_of_column(column=column),))
 
     @classmethod
-    def shared_value_keys(cls) -> dict[str, tuple[str, str]]:
+    def shared_value_keys(cls) -> dict[str, SharedKey]:
         """
         :return: for the keys of columns several fields share, the key the
             column's value is kept under and the column (see
             ``_build_shared_value_keys``)
-        :rtype: dict[str, tuple[str, str]]
+        :rtype: dict[str, SharedKey]
         """
         try:
             return cls._shared_value_keys
         except AttributeError:
             cls._build_alias_cache()
             return cls._shared_value_keys
+
+    @classmethod
+    def fill_shared_plain_fields(cls, kwargs: dict[str, Any]) -> None:
+        """
+        Fill an unset plain field storing a column foreign keys share from
+        the first of those foreign keys holding a value for the column, so a
+        new model's plain field, ``model_dump()`` and ``pk`` agree before it
+        is saved.
+
+        :param kwargs: keyword arguments of a model being initialized, with
+            relations already expanded, updated in place
+        :type kwargs: dict[str, Any]
+        """
+        try:
+            plain_fields = cls._shared_plain_fields
+        except AttributeError:
+            cls._build_alias_cache()
+            plain_fields = cls._shared_plain_fields
+        model_fields = cls.ormar_config.model_fields
+        for plain in plain_fields:
+            if kwargs.get(plain.field) is not None:
+                continue
+            for field_name, key in plain.sources:
+                related = kwargs.get(field_name)
+                if related is None:
+                    continue
+                link = cast("ForeignKeyField", model_fields[field_name]).link
+                value = link.values_for(related=related)[key]
+                if value is not None:
+                    kwargs[plain.field] = value
+                    break
 
     @classmethod
     def value_keys(cls, field_name: str) -> tuple[str, ...]:
@@ -197,7 +288,7 @@ class AliasMixin:
         field = cls.ormar_config.model_fields[field_name]
         columns = field.column_aliases()
         keys = columns if field.is_relation and len(columns) > 1 else (field_name,)
-        return tuple(shared.get(key, (key, ""))[0] for key in keys)
+        return tuple(shared[key].kept if key in shared else key for key in keys)
 
     @classmethod
     def merge_relation_values(

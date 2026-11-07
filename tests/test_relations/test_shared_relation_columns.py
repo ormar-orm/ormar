@@ -1,6 +1,7 @@
 import itertools
 from typing import ForwardRef, Optional
 
+import pydantic
 import pytest
 import pytest_asyncio
 import sqlalchemy
@@ -64,6 +65,18 @@ class Badge(ormar.Model):
         primary_key=True,
         columns={"tenant_id": "tenant_id", "login": "member_login"},
         related_name="badges",
+    )
+
+
+class Ticket(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="src_tickets")
+
+    id: int = ormar.Integer(primary_key=True)
+    tenant_id: int = ormar.Integer()
+    assignee: Optional[Member] = ormar.ForeignKey(
+        Member,
+        columns={"tenant_id": "tenant_id", "login": "assignee_login"},
+        related_name="tickets",
     )
 
 
@@ -162,6 +175,7 @@ class OrderedNames(set):
 async def data():
     async with base_ormar_config.database:
         for model in (
+            Ticket,
             IndexedFirst,
             IndexedLast,
             SingleFirst,
@@ -433,3 +447,37 @@ async def test_bulk_create_fills_a_plain_shared_key_part(data):
     _, _, alice, _ = data
     await Badge.objects.bulk_create([Badge(member=alice)])
     assert [badge.pk for badge in await Badge.objects.all()] == [(1, "alice")]
+
+
+@pytest.mark.asyncio
+async def test_unset_plain_shared_field_is_filled_at_init(data):
+    _, _, alice, _ = data
+    ticket = Ticket(assignee=alice)
+    assert ticket.tenant_id == 1
+    assert ticket.model_dump()["tenant_id"] == 1
+    await ticket.save()
+    assert (await Ticket.objects.get()).tenant_id == 1
+    from_dict = Ticket(assignee={"tenant_id": 1, "login": "alice"})
+    assert from_dict.tenant_id == 1
+    with pytest.raises(ModelPersistenceError, match="tenant_id"):
+        await Ticket(tenant_id=2, assignee=alice).save()
+    with pytest.raises(pydantic.ValidationError, match="tenant_id"):
+        Ticket(assignee=None)
+
+    badge = Badge(member=alice)
+    assert badge.tenant == 1
+    assert badge.model_dump()["tenant"] == 1
+    assert badge.pk == (1, "alice")
+    assert Badge(member={"login": "alice"}).tenant is None
+
+
+@pytest.mark.asyncio
+async def test_excluding_one_field_of_a_shared_column(data):
+    _, _, alice, _ = data
+    await Ticket.objects.create(assignee=alice)
+    excluded = await Ticket.objects.exclude_fields("tenant_id").get()
+    assert excluded.tenant_id is None
+    assert excluded.assignee.pk == (1, "alice")
+    plain_only = await Ticket.objects.fields(["id", "tenant_id"]).get()
+    assert plain_only.tenant_id == 1
+    assert plain_only.assignee is None

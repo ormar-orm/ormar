@@ -428,7 +428,16 @@ await Membership.objects.get(member=alice, team=core)  # the same row
   check the rest.
 * Setting a foreign key that shares a column to `None` writes `NULL` to its own
   columns and leaves the shared column as it is. The relation then reads as `None`.
-* A plain field sharing the column that isn't set is filled in from the foreign keys.
+* A plain field sharing the column that isn't set is filled in from the foreign keys
+  when the model is created (`Membership(member=alice, team=core).tenant_id == 1`, so
+  `model_dump()` and `pk` agree before saving), which also lets a required plain field
+  be left out. A foreign key assigned later fills the plain field on `save()`.
+* `exclude_fields()` / `fields()` work per field: excluding the plain field leaves it
+  `None` on loaded models (even a required one) while its foreign keys still read the
+  column, and excluding a foreign key leaves the plain field loaded.
+* `update(_columns=[...])` writes only the listed columns: updating the shared column
+  alone leaves the other columns of its foreign keys as they are, so the database's
+  foreign keys reject a pair that no longer exists.
 * Only columns named explicitly (`columns=` / `name=`) are shared. A field whose name
   clashes with a generated column name (`<field>_<column>`) still raises
   `ModelDefinitionError`, as do two plain fields on one column and fields giving a

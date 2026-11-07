@@ -707,6 +707,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                     represent_as_string=model_fields[k].represent_as_base64_str,
                 )
             new_kwargs[k] = v
+        if has_relations:
+            cls.fill_shared_plain_fields(kwargs=new_kwargs)
         return new_kwargs, through_tmp_dict
 
     def _initialize_internal_attributes(self) -> None:
