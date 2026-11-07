@@ -114,6 +114,17 @@
 * Python 3.15 is now supported and tested in CI, and the CI matrix now also
   covers Python 3.14.
 
+### ⚡ Performance
+
+* Reverse relations no longer create a full copy of the related model class for
+  every reverse field. Each copy compiled its own pydantic validator and
+  serializer and showed up as a separate model in every later schema, so memory
+  grew roughly with the square of the number of related models. Importing 60
+  models with dense relations now takes 107 MiB instead of 306 MiB (25 MiB
+  instead of 38 MiB with `defer_build`), and a real 45-model application went
+  from 158 MiB to 61 MiB. The annotation of a reverse relation field now refers
+  to the related model itself.
+
 ### 🐛 Fixes
 
 * `values()` / `values_list()` return fields with a custom database column `name=`
