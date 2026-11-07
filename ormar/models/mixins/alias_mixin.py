@@ -199,40 +199,53 @@ class AliasMixin:
 
     @classmethod
     def merge_relation_values(
-        cls, target: dict, values: dict[str, Any], field_name: str
+        cls, target: dict, relation_values: dict[str, dict[str, Any]]
     ) -> None:
         """
-        Put the values a foreign key stores (``RelationLink.values_for``) into
-        a model dict about to be written. A column the foreign key shares
-        with other fields keeps one value: a ``None`` is not written to it (a
-        shared column is never cleared through one of its foreign keys), an
-        unset plain field sharing the column is filled in, and two different
-        values are an error.
+        Put the values foreign keys store (``RelationLink.values_for``) into a
+        model dict about to be written. The foreign keys' own entries are
+        dropped from the dict first, then their values are merged in the
+        order the fields are declared, so the result never depends on the
+        order the foreign keys were processed in.
 
-        :raises ModelPersistenceError: if the shared column gets two values
+        A column several fields share keeps one value: a ``None`` is not
+        written to it (a shared column is never cleared through one of its
+        foreign keys), an unset plain field sharing the column is filled in,
+        and two different values are an error.
+
+        :raises ModelPersistenceError: if a shared column gets two values
         :param target: model dict being prepared, updated in place
         :type target: dict
-        :param values: values of the foreign key by key
-        :type values: dict[str, Any]
-        :param field_name: name of the foreign key
-        :type field_name: str
+        :param relation_values: values of each foreign key by key, by foreign
+            key name
+        :type relation_values: dict[str, dict[str, Any]]
         """
+        for field_name in relation_values:
+            target.pop(field_name, None)
         shared = cls.shared_value_keys()
-        for key, value in values.items():
-            if key not in shared:
-                target[key] = value
+        if not shared:
+            for values in relation_values.values():
+                target.update(values)
+            return
+        for field_name in cls.ormar_config.model_fields:
+            field_values = relation_values.get(field_name)
+            if field_values is None:
                 continue
-            kept, column = shared[key]
-            current = target.get(kept)
-            if value is None:
-                continue
-            if current is None:
-                target[kept] = value
-            elif value != current:
-                raise ModelPersistenceError(
-                    f"{cls.__name__}.{field_name} stores {value!r} in column "
-                    f"{column}, which another field sets to {current!r}."
-                )
+            for key, value in field_values.items():
+                if key not in shared:
+                    target[key] = value
+                    continue
+                kept, column = shared[key]
+                current = target.get(kept)
+                if value is None:
+                    continue
+                if current is None:
+                    target[kept] = value
+                elif value != current:
+                    raise ModelPersistenceError(
+                        f"{cls.__name__}.{field_name} stores {value!r} in column "
+                        f"{column}, which another field sets to {current!r}."
+                    )
 
     @classmethod
     def get_column_alias(cls, field_name: str) -> str:

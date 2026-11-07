@@ -1664,16 +1664,13 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             for k, v in self_fields.items()
             if self.get_column_alias(field_name=k) in self.ormar_config.table.columns
         }
+        relation_values: dict[str, dict[str, Any]] = {}
         for field in self._extract_db_related_names():
             relation_field = cast(
                 "ForeignKeyField", self.ormar_config.model_fields[field]
             )
             related = getattr(self, field)
             values = relation_field.link.values_for(related=related)
-            self_fields.pop(field, None)
-            self.merge_relation_values(
-                target=self_fields, values=values, field_name=field
-            )
             if None in values.values() and (
                 related is not None or not relation_field.nullable
             ):
@@ -1681,4 +1678,6 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                     f"You cannot save {relation_field.to.get_name()} "
                     f"model without {', '.join(relation_field.target_fields())} set!"
                 )
+            relation_values[field] = values
+        self.merge_relation_values(target=self_fields, relation_values=relation_values)
         return self_fields
