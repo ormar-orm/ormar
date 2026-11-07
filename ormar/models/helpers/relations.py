@@ -23,6 +23,7 @@ from ormar.fields.relation_kind import (
     RelationKind,
 )
 from ormar.models.descriptors import RelationDescriptor
+from ormar.models.helpers.rebuild import mark_for_rebuild
 from ormar.models.helpers.sqlalchemy import adjust_through_many_to_many_model
 
 if TYPE_CHECKING:  # pragma no cover
@@ -264,21 +265,7 @@ def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
         add_field_serializer_for_reverse_relations(
             to_model=model_field.to, related_name=related_name
         )
-        # The metaclass marks finished models incomplete; pydantic >= 2.14 only
-        # drops the cached schema on a forced rebuild of a complete model, so
-        # restore the flag or the new reverse field is silently ignored.
-        model_field.to.__pydantic_complete__ = True  # type: ignore[attr-defined]
-        model_field.to.model_rebuild(
-            force=True,
-            _types_namespace={
-                **{model_field.owner.__name__: model_field.owner},
-                **{
-                    field.to.__name__: field.to
-                    for field in related_model_fields.values()
-                    if field.is_relation and field.to.__class__ != ForwardRef
-                },
-            },
-        )
+        mark_for_rebuild(model=model_field.to)
         setattr(model_field.to, related_name, RelationDescriptor(name=related_name))
 
 

@@ -124,6 +124,16 @@
   instead of 38 MiB with `defer_build`), and a real 45-model application went
   from 158 MiB to 61 MiB. The annotation of a reverse relation field now refers
   to the related model itself.
+* Registering a reverse relation (or a many to many through model field) no
+  longer rebuilds the pydantic schema of the target model right away, once per
+  relation (a hub model with 44 related models was compiled 44 times, ignoring
+  `defer_build`). The model is marked as pending and rebuilt once, with its final
+  fields, when its schema, validator or serializer is first needed: on
+  validation, serialization, `model_json_schema()`, or when FastAPI or another
+  pydantic model / `TypeAdapter` builds a schema containing it. Importing 60
+  models with dense relations now takes 13 MiB and 0.13 s instead of 107 MiB and
+  0.61 s (16 MiB once every model is used; with `defer_build` 11 MiB and 0.12 s
+  instead of 25 MiB and 0.37 s, 45 MiB instead of 35 MiB once every model is used).
 
 ### 🐛 Fixes
 

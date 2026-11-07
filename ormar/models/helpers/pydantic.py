@@ -7,6 +7,7 @@ from pydantic.fields import FieldInfo
 
 from ormar.exceptions import ModelDefinitionError  # noqa: I100, I202
 from ormar.fields import BaseField
+from ormar.models.helpers.rebuild import mark_for_rebuild
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
@@ -33,9 +34,7 @@ def create_pydantic_field(
         annotation=Optional[model],  # type: ignore
         default=None,
     )
-    model_field.through.model_rebuild(
-        force=True, _types_namespace={model_field.owner.__name__: model_field.owner}
-    )
+    mark_for_rebuild(model=model_field.through)
 
 
 def populate_pydantic_default_values(attrs: dict) -> tuple[dict, dict]:
