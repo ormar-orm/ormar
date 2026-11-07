@@ -99,6 +99,12 @@
   (`order=...`, `order__in=...`, `order__isnull=...`), bulk operations,
   `values()` / `values_list()` and flattened dumps. See
   [foreign keys to several columns](relations/foreign-key.md#foreign-keys-to-several-columns).
+* Foreign keys stored in several columns can be part of a primary key, and fields
+  can share a column named in `columns=`, so link tables like
+  `PRIMARY KEY (tenant_id, member_login, team_code)` map directly and work as
+  `ManyToMany` `through` models. Different values for a shared column raise
+  `ModelPersistenceError`. See
+  [link tables keyed by foreign keys to several columns](relations/foreign-key.md#link-tables-keyed-by-foreign-keys-to-several-columns).
 * `ManyToMany` relations to and from models with a composite key: the generated
   through table stores each key in several columns, and a `through` link table can
   declare such foreign keys itself. See

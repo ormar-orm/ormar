@@ -215,15 +215,6 @@ def test_composite_foreign_key_definition_errors():
                 related_name="bad_both",
             )
 
-    with pytest.raises(ModelDefinitionError, match="primary key"):
-
-        class BadKey(ormar.Model):
-            ormar_config = base_ormar_config.copy(tablename="cfk_bad_key")
-
-            order: Order = ormar.ForeignKey(
-                Order, primary_key=True, related_name="bad_key"
-            )
-
     with pytest.raises(ModelDefinitionError, match="unique"):
 
         class BadToField(ormar.Model):

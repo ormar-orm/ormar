@@ -141,6 +141,10 @@ class Model(ModelRow):
             name
             for name in key.fields
             if self_fields.get(name) is None
+            and any(
+                self_fields.get(value_key) is None
+                for value_key in self.value_keys(field_name=name)
+            )
             and model_fields[name].server_default is None
         ]
         if missing:
@@ -371,11 +375,15 @@ class Model(ModelRow):
 
         await self._emit_signal("pre_update", instance=self, passed_args=kwargs)
         self_fields = self._extract_model_db_fields()
-        key_fields = set(self.ormar_config.pk.fields)
+        key_fields = {
+            value_key
+            for field in self.ormar_config.pk.fields
+            for value_key in self.value_keys(field_name=field)
+        }
         key_moved = self.persisted_key != self.pk
         if not key_moved:
             for field in key_fields:
-                self_fields.pop(field)
+                self_fields.pop(field, None)
         if _columns:
             selected = {
                 column

@@ -194,6 +194,7 @@ class RelationLink:
                 value = (
                     key.part_value(field=pair.source_field, value=value)
                     if pair.source_field in key.relation_parts
+                    and not key.is_multi_column_part(field=pair.source_field)
                     else referenced_value(related=value, field=pair.target_field)
                 )
             values.append(value)

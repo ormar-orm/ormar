@@ -9,17 +9,59 @@ primary key field name, so the same code serves single-column keys and
 
 import abc
 import operator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, cast
 
 import sqlalchemy
 from pydantic import BaseModel
 
 from ormar.exceptions import QueryDefinitionError
+from ormar.fields.link import referenced_value
 from ormar.queryset.templates.slots import PK_SLOT
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.fields import ForeignKeyField
     from ormar.models import Model, NewBaseModel
+
+
+@dataclass(frozen=True)
+class KeyColumn:
+    """
+    One database column of a primary key and the key fields storing it.
+
+    :ivar column: database column name
+    :ivar sources: ``(field, referenced field)`` of every key field storing
+        the column, in key order: the referenced field is ``None`` for a field
+        storing its own value (plain fields, foreign keys of one column) and
+        the related model's field for a foreign key stored in several columns
+    """
+
+    column: str
+    sources: tuple[tuple[str, Optional[str]], ...]
+
+
+def relation_column_value(value: Any, referenced: str, position: int) -> Any:
+    """
+    Read one column's value out of the value a foreign key stored in several
+    columns holds: a related model, a dict of its fields or a tuple in link
+    order.
+
+    :param value: value held by the foreign key
+    :type value: Any
+    :param referenced: related model's field stored in the column
+    :type referenced: str
+    :param position: index of the column in the link
+    :type position: int
+    :return: the column's value, ``None`` when not set
+    :rtype: Any
+    """
+    if value is None:
+        return None
+    if isinstance(value, BaseModel):
+        return referenced_value(related=value, field=referenced)
+    if isinstance(value, dict):
+        return value.get(referenced)
+    return tuple(value)[position]
 
 
 class PrimaryKey(abc.ABC):
@@ -88,14 +130,75 @@ class PrimaryKey(abc.ABC):
         :rtype: bool
         """
 
+    def is_multi_column_part(self, field: str) -> bool:
+        """
+        :param field: key field name
+        :type field: str
+        :return: whether the field is a foreign key stored in several columns
+            (a relation to an unresolved forward reference counts as one)
+        :rtype: bool
+        """
+        return len(self.owner.ormar_config.model_fields[field].column_aliases()) > 1
+
+    def key_columns(self) -> tuple[KeyColumn, ...]:
+        """
+        The key's database columns: one per plain field or foreign key of one
+        column, one per link column of a foreign key stored in several
+        columns. A column several key fields share (e.g. a ``tenant_id`` of two
+        foreign keys) is listed once, where it first appears.
+
+        :return: key columns in key order
+        :rtype: tuple[KeyColumn, ...]
+        """
+        sources: dict[str, list[tuple[str, Optional[str]]]] = {}
+        for field in self.fields:
+            relation_field = self.relation_parts.get(field)
+            if self.is_multi_column_part(field=field):
+                for pair in cast("ForeignKeyField", relation_field).link.pairs:
+                    sources.setdefault(pair.source_column, []).append(
+                        (field, pair.target_field)
+                    )
+            else:
+                column = self.owner.get_column_alias(field_name=field)
+                sources.setdefault(column, []).append((field, None))
+        return tuple(
+            KeyColumn(column=column, sources=tuple(owners))
+            for column, owners in sources.items()
+        )
+
+    def column_parts(self, data: Mapping[str, Any]) -> tuple[Any, ...]:
+        """
+        :param data: values by key field name (e.g. a model dict)
+        :type data: Mapping[str, Any]
+        :return: the value of each key column, ``None`` for missing ones; a
+            shared column takes the first value set
+        :rtype: tuple[Any, ...]
+        """
+        parts = []
+        for key_column in self.key_columns():
+            part = None
+            for field, referenced in key_column.sources:
+                value = data.get(field)
+                if referenced is None:
+                    part = self.part_value(field=field, value=value)
+                else:
+                    link = self.relation_parts[field].link
+                    part = relation_column_value(
+                        value=value,
+                        referenced=referenced,
+                        position=link.target_fields().index(referenced),
+                    )
+                if part is not None:
+                    break
+            parts.append(part)
+        return tuple(parts)
+
     def column_aliases(self) -> tuple[str, ...]:
         """
-        :return: database column names of the key fields, in key order
+        :return: database column names of the key, in key order
         :rtype: tuple[str, ...]
         """
-        return tuple(
-            self.owner.get_column_alias(field_name=field) for field in self.fields
-        )
+        return tuple(key_column.column for key_column in self.key_columns())
 
     def columns(self) -> tuple[sqlalchemy.Column, ...]:
         """
@@ -222,6 +325,17 @@ class PrimaryKey(abc.ABC):
         :rtype: Callable[[Mapping[str, Any]], Any]
         """
 
+    def item_reader(self) -> Callable[[Mapping[str, Any]], Any]:
+        """
+        :return: callable reading the key value out of a model dict (values
+            by field name, a foreign key stored in several columns holding
+            the tuple of its columns)
+        :rtype: Callable[[Mapping[str, Any]], Any]
+        """
+        if len(self.key_columns()) != len(self.fields):
+            return self.value_from
+        return self.getter(keys=self.fields)
+
     @abc.abstractmethod
     def value_from(self, data: Mapping[str, Any]) -> Any:
         """
@@ -229,6 +343,15 @@ class PrimaryKey(abc.ABC):
         :type data: Mapping[str, Any]
         :return: key value held in the mapping, ``None`` when not set
         :rtype: Any
+        """
+
+    @abc.abstractmethod
+    def flat_parts(self, value: Any) -> tuple[Any, ...]:
+        """
+        :param value: key value
+        :type value: Any
+        :return: the raw value of each key column, in key order
+        :rtype: tuple[Any, ...]
         """
 
     @abc.abstractmethod
@@ -315,6 +438,15 @@ class SingleColumnKey(PrimaryKey):
             return self.part_value(field=self.field, value=value)
         return value
 
+    def flat_parts(self, value: Any) -> tuple[Any, ...]:
+        """
+        :param value: key value
+        :type value: Any
+        :return: ``(value,)``, a related model replaced by its raw value
+        :rtype: tuple[Any, ...]
+        """
+        return (self.part_value(field=self.field, value=value),)
+
     def bind_params(self, value: Any) -> dict[str, Any]:
         """
         :param value: key value
@@ -398,15 +530,40 @@ class CompositeKey(PrimaryKey):
         :return: tuple of the key parts, ``None`` when any part is not set
         :rtype: Any
         """
-        parts = tuple(
-            self.part_value(field=field, value=data.get(field)) for field in self.fields
-        )
+        parts = self.column_parts(data=data)
         return None if None in parts else parts
+
+    def flat_parts(self, value: Any) -> tuple[Any, ...]:
+        """
+        Turn a key value given as a tuple/list of the key columns or as a dict
+        of exactly the key fields into the raw value of each key column
+        (related models in relation parts replaced by the values they are
+        referenced by).
+
+        :raises QueryDefinitionError: if the value does not match the key
+        :param value: key value
+        :type value: Any
+        :return: the value of each key column, in key order
+        :rtype: tuple[Any, ...]
+        """
+        if isinstance(value, dict) and set(value) == set(self.fields):
+            return self.column_parts(data=value)
+        key_columns = self.key_columns()
+        if isinstance(value, (tuple, list)) and len(value) == len(key_columns):
+            return tuple(
+                self.part_value(field=key_column.sources[0][0], value=part)
+                for key_column, part in zip(key_columns, value)
+            )
+        raise QueryDefinitionError(
+            f"{self.owner.__name__} primary key has fields {self.fields} "
+            f"(columns {self.column_aliases()}), got {value!r}"
+        )
 
     def to_dict(self, value: Any) -> dict[str, Any]:
         """
-        Split a key value given as a tuple/list in key order or as a dict of
-        exactly the key fields.
+        Split a key value given as a tuple/list of the key columns or as a dict
+        of exactly the key fields into the value of each key field: a foreign
+        key stored in several columns gets the tuple of its columns.
 
         :raises QueryDefinitionError: if the value does not match the key
         :param value: key value
@@ -414,13 +571,17 @@ class CompositeKey(PrimaryKey):
         :return: key parts by field name
         :rtype: dict[str, Any]
         """
-        if isinstance(value, dict) and set(value) == set(self.fields):
-            return {field: value[field] for field in self.fields}
-        if isinstance(value, (tuple, list)) and len(value) == len(self.fields):
-            return dict(zip(self.fields, value))
-        raise QueryDefinitionError(
-            f"{self.owner.__name__} primary key has fields {self.fields}, got {value!r}"
-        )
+        by_column = dict(zip(self.column_aliases(), self.flat_parts(value=value)))
+        values: dict[str, Any] = {}
+        for field in self.fields:
+            if self.is_multi_column_part(field=field):
+                values[field] = tuple(
+                    by_column[column]
+                    for column in self.relation_parts[field].link.source_columns()
+                )
+            else:
+                values[field] = by_column[self.owner.get_column_alias(field_name=field)]
+        return values
 
     def getter(self, keys: tuple[str, ...]) -> Callable[[Mapping[str, Any]], Any]:
         """
@@ -436,7 +597,7 @@ class CompositeKey(PrimaryKey):
         :return: ``ormar_pk_0``, ``ormar_pk_1``, ... one per key column
         :rtype: tuple[str, ...]
         """
-        return tuple(f"{PK_SLOT}_{index}" for index in range(len(self.fields)))
+        return tuple(f"{PK_SLOT}_{index}" for index in range(len(self.key_columns())))
 
     def bind_params(self, value: Any) -> dict[str, Any]:
         """
@@ -445,7 +606,7 @@ class CompositeKey(PrimaryKey):
         :return: parameters binding the parts to ``bind_slots()``
         :rtype: dict[str, Any]
         """
-        return dict(zip(self.bind_slots(), self.to_dict(value=value).values()))
+        return dict(zip(self.bind_slots(), self.flat_parts(value=value)))
 
 
 def build_primary_key(*, owner: type["Model"], fields: tuple[str, ...]) -> PrimaryKey:
@@ -459,6 +620,9 @@ def build_primary_key(*, owner: type["Model"], fields: tuple[str, ...]) -> Prima
     :return: primary key of the model
     :rtype: PrimaryKey
     """
-    if len(fields) > 1:
+    if (
+        len(fields) > 1
+        or len(owner.ormar_config.model_fields[fields[0]].column_aliases()) > 1
+    ):
         return CompositeKey(owner=owner, fields=fields)
     return SingleColumnKey(owner=owner, fields=fields)

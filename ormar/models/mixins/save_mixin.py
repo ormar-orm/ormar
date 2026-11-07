@@ -135,14 +135,20 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
                             f"model without pk set!"
                         )
                     model_dict.pop(field)
-                    model_dict.update(values)
+                    cls.merge_relation_values(
+                        target=model_dict, values=values, field_name=field
+                    )
                 elif isinstance(field_value, list) and field_value:
                     model_dict[field] = [
                         target_key.value_from(data=target) for target in field_value
                     ]
                 elif isinstance(field_value, dict) and field_value:
                     model_dict.pop(field)
-                    model_dict.update(target_field.link.values_for(related=field_value))
+                    cls.merge_relation_values(
+                        target=model_dict,
+                        values=target_field.link.values_for(related=field_value),
+                        field_name=field,
+                    )
                 else:
                     model_dict.pop(field, None)
         return model_dict
@@ -167,7 +173,11 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         link = cast("ForeignKeyField", field).link
         if len(link.pairs) > 1:
             model_dict.pop(field_name)
-            model_dict.update(link.values_for(related=None))
+            cls.merge_relation_values(
+                target=model_dict,
+                values=link.values_for(related=None),
+                field_name=field_name,
+            )
 
     @classmethod
     def reconvert_str_to_bytes(cls, model_dict: dict) -> dict:
@@ -329,10 +339,11 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         validators = cls._build_individual_schema_validator()
         foreign_keys = cls._extract_db_related_names()
         validated: dict = {}
+        related_values = {}
         for key, value in new_kwargs.items():
             if key in foreign_keys:
-                validated.update(
-                    cls._related_values_for_update(field_name=key, value=value)
+                related_values[key] = cls._related_values_for_update(
+                    field_name=key, value=value
                 )
             elif key in cls._json_fields:
                 validated[key] = validators[key].validate_python(encode_json(value))
@@ -340,6 +351,10 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
                 if key in validators:
                     validators[key].validate_python(value)
                 validated[key] = value
+        for field_name, values in related_values.items():
+            cls.merge_relation_values(
+                target=validated, values=values, field_name=field_name
+            )
         return validated
 
     @classmethod

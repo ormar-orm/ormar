@@ -12,6 +12,7 @@ import ormar  # noqa: I100
 from ormar.fields import BaseField
 from ormar.fields.foreign_key import (
     ForeignKeyField,
+    validate_key_target,
     validate_not_allowed_fields,
 )
 from ormar.fields.key_only import key_only_model_type
@@ -39,6 +40,7 @@ def populate_m2m_params_based_on_to_model(
     :return: tuple[list, Any]
     :rtype: tuple with target pydantic type and target col type
     """
+    validate_key_target(to=to)
     key = to.ormar_config.pk
     to_field = to.ormar_config.model_fields[key.fields[0]]
     pk_only_model = key_only_model_type(target=to, fields=key.fields)

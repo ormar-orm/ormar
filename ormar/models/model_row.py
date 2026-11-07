@@ -757,7 +757,12 @@ class ModelRow(NewBaseModel):
         multi_column_keys = tuple(
             (
                 field_name,
-                tuple(column for column, name in all_mappings if name == field_name),
+                tuple(
+                    f"{column_prefix}{column}"
+                    for column in cls.ormar_config.model_fields[
+                        field_name
+                    ].column_aliases()
+                ),
             )
             for field_name, count in column_counts.items()
             if count > 1
@@ -766,14 +771,17 @@ class ModelRow(NewBaseModel):
             cls.get_names_to_exclude(excludable=excludable, alias=table_prefix)
         )
         key = cls.ormar_config.pk
-        column_by_field = {field_name: column for column, field_name in mappings}
         pk_columns: Optional[tuple[str, ...]] = None
         read_pk_from_row = None
         read_pk_from_item = None
-        if all(field in column_by_field for field in key.fields):
-            pk_columns = tuple(column_by_field[field] for field in key.fields)
+        selected = {column for column, _ in all_mappings}
+        key_columns = tuple(
+            f"{column_prefix}{column}" for column in key.column_aliases()
+        )
+        if all(column in selected for column in key_columns):
+            pk_columns = key_columns
             read_pk_from_row = key.getter(keys=pk_columns)
-            read_pk_from_item = key.getter(keys=key.fields)
+            read_pk_from_item = key.item_reader()
         model_fields = cls.ormar_config.model_fields
         foreign_key_names = tuple(
             field_name

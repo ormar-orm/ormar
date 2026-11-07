@@ -1887,7 +1887,7 @@ class QuerySet(Generic[T]):
         )
         if keys_moved:
             for row, persisted in zip(ready_objects, persisted_keys):
-                parts = key.to_dict(value=persisted).values()
+                parts = key.flat_parts(value=persisted)
                 row.update(
                     {
                         f"old_{alias}": part
