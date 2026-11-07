@@ -451,8 +451,8 @@ await Membership.objects.get(member=alice, team=core)  # the same row
 * A link table like this can be the `through` model of a `ManyToMany` (see
   [many to many](many-to-many.md#models-with-a-composite-primary-key)).
 * Relations **to** a model whose primary key holds a foreign key to several columns
-  (a `ForeignKey` or `ManyToMany` to `Membership`) aren't supported yet and raise
-  `ModelDefinitionError`.
+  (a `ForeignKey` or `ManyToMany` to `Membership`), and a `ManyToMany` declared **on**
+  such a model, aren't supported yet and raise `ModelDefinitionError`.
 
 ## Relation Setup
 

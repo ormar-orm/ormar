@@ -481,3 +481,29 @@ async def test_excluding_one_field_of_a_shared_column(data):
     plain_only = await Ticket.objects.fields(["id", "tenant_id"]).get()
     assert plain_only.tenant_id == 1
     assert plain_only.assignee is None
+
+
+def test_many_to_many_declared_on_a_link_table_raises():
+    with pytest.raises(ModelDefinitionError, match="StaffedSeat.labels"):
+
+        class Label(ormar.Model):
+            ormar_config = base_ormar_config.copy(tablename="src_labels")
+
+            id: int = ormar.Integer(primary_key=True)
+
+        class StaffedSeat(ormar.Model):
+            ormar_config = base_ormar_config.copy(tablename="src_staffed_seats")
+
+            member: Member = ormar.ForeignKey(
+                Member,
+                primary_key=True,
+                columns={"tenant_id": "tenant_id", "login": "member_login"},
+                related_name="staffed_seats",
+            )
+            team: Team = ormar.ForeignKey(
+                Team,
+                primary_key=True,
+                columns={"tenant_id": "tenant_id", "code": "team_code"},
+                related_name="staffed_seats",
+            )
+            labels = ormar.ManyToMany(Label, related_name="staffed_seats")

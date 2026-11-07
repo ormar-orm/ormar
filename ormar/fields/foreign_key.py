@@ -67,6 +67,18 @@ def to_field_names(
     return tuple(to_field)
 
 
+def keyed_by_multi_column_relation(model: type["Model"]) -> bool:
+    """
+    :param model: model to check
+    :type model: type[Model]
+    :return: whether the model's primary key holds a foreign key stored in
+        several columns (e.g. a link table keyed by two such foreign keys)
+    :rtype: bool
+    """
+    key = model.ormar_config.pk
+    return any(len(field.column_aliases()) > 1 for field in key.relation_parts.values())
+
+
 def validate_key_target(to: type["Model"]) -> None:
     """
     A relation can't lead to a model whose primary key holds a foreign key
@@ -77,8 +89,7 @@ def validate_key_target(to: type["Model"]) -> None:
     :param to: target model
     :type to: type[Model]
     """
-    key = to.ormar_config.pk
-    if any(len(field.column_aliases()) > 1 for field in key.relation_parts.values()):
+    if keyed_by_multi_column_relation(model=to):
         raise ModelDefinitionError(
             f"Relations to {to.__name__}, whose primary key holds a foreign key "
             "stored in several columns, are not supported yet."
