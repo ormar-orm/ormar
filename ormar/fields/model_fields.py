@@ -3,7 +3,7 @@ import decimal
 import uuid
 from enum import Enum as E
 from enum import EnumMeta
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import pydantic
 import sqlalchemy
@@ -166,6 +166,8 @@ class String(ModelFieldFactory, str):
         regex: Optional[str] = None,
         **kwargs: Any,
     ) -> Self:  # type: ignore
+        choices = kwargs.get("choices")
+        nullable = kwargs.get("nullable")
         kwargs = {
             **kwargs,
             **{
@@ -174,6 +176,11 @@ class String(ModelFieldFactory, str):
                 if k not in ["cls", "__class__", "kwargs"]
             },
         }
+        overwrite_pydantic_type = cls._get_choices_pydantic_type(choices)
+        if overwrite_pydantic_type is not None:
+            if nullable is True:
+                overwrite_pydantic_type = Optional[overwrite_pydantic_type]
+            kwargs["overwrite_pydantic_type"] = overwrite_pydantic_type
         return super().__new__(cls, **kwargs)
 
     @classmethod
@@ -201,6 +208,14 @@ class String(ModelFieldFactory, str):
             raise ModelDefinitionError(
                 "Parameter max_length is required for field String"
             )
+
+    @staticmethod
+    def _get_choices_pydantic_type(choices: Any) -> Any:
+        if choices is None:
+            return None
+        if any(not isinstance(choice, str) for choice in choices):
+            raise ModelDefinitionError("String Field choices must be strings")
+        return Literal.__getitem__(tuple(choices))
 
 
 class Integer(ModelFieldFactory, int):
