@@ -396,3 +396,33 @@ def test_shared_column_definition_conflicts():
                 columns={"tenant_id": "tenant_id", "login": "member_login"},
                 related_name="big_tenants",
             )
+
+
+def test_key_layout_is_built_once(monkeypatch):
+    key = Seat.ormar_config.pk
+    layout = key.layout()
+    assert not layout.simple
+    assert Member.ormar_config.pk.layout().simple
+
+    monkeypatch.setattr(key, "build_layout", None)
+    seat = Seat(tenant={"id": 1}, member=(1, "alice"), team=(1, "core"))
+    assert seat.pk == (1, "alice", "core")
+    assert key.bind_params(value=seat.pk) == {
+        "ormar_pk_0": 1,
+        "ormar_pk_1": "alice",
+        "ormar_pk_2": "core",
+    }
+    assert key.column_aliases() == ("tenant_id", "member_login", "team_code")
+    assert key.layout() is layout
+    monkeypatch.undo()
+
+    Seat.reset_column_caches()
+    rebuilt = key.layout()
+    assert rebuilt is not layout
+    assert rebuilt.sources == layout.sources
+
+
+def test_key_reader_of_a_key_sharing_a_column():
+    reader = Badge.ormar_config.pk.item_reader()
+    assert reader({"tenant": 1, "member": (1, "alice")}) == (1, "alice")
+    assert reader({"tenant": None, "member": (1, "alice")}) == (1, "alice")

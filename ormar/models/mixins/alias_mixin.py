@@ -95,8 +95,9 @@ class AliasMixin:
     @classmethod
     def reset_column_caches(cls) -> None:
         """
-        Drop the cached column mappings of the model, e.g. after forward
-        references are resolved and a foreign key's columns are known.
+        Drop the cached column mappings of the model and the layout of its
+        primary key, e.g. after forward references are resolved and a foreign
+        key's columns are known.
         """
         for name in (
             "_field_to_alias_map",
@@ -109,6 +110,7 @@ class AliasMixin:
         ):
             if name in cls.__dict__:
                 delattr(cls, name)
+        cls.ormar_config.pk.cached_layout = None
 
     @classmethod
     def get_field_name_of_column(cls, column: str) -> str:
