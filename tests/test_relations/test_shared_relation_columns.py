@@ -8,7 +8,11 @@ import sqlalchemy
 from sqlalchemy.schema import CreateTable
 
 import ormar
-from ormar.exceptions import ModelDefinitionError, ModelPersistenceError
+from ormar.exceptions import (
+    ModelDefinitionError,
+    ModelPersistenceError,
+    QueryDefinitionError,
+)
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -484,26 +488,51 @@ async def test_excluding_one_field_of_a_shared_column(data):
 
 
 def test_many_to_many_declared_on_a_link_table_raises():
+    class LinkMember(ormar.Model):
+        ormar_config = base_ormar_config.copy(tablename="src_link_members")
+
+        tenant_id: int = ormar.Integer(primary_key=True)
+        login: str = ormar.String(max_length=20, primary_key=True)
+
+    class Label(ormar.Model):
+        ormar_config = base_ormar_config.copy(tablename="src_labels")
+
+        id: int = ormar.Integer(primary_key=True)
+
     with pytest.raises(ModelDefinitionError, match="StaffedSeat.labels"):
-
-        class Label(ormar.Model):
-            ormar_config = base_ormar_config.copy(tablename="src_labels")
-
-            id: int = ormar.Integer(primary_key=True)
 
         class StaffedSeat(ormar.Model):
             ormar_config = base_ormar_config.copy(tablename="src_staffed_seats")
 
-            member: Member = ormar.ForeignKey(
-                Member,
+            tenant_id: int = ormar.Integer(primary_key=True)
+            member: LinkMember = ormar.ForeignKey(
+                LinkMember,
                 primary_key=True,
                 columns={"tenant_id": "tenant_id", "login": "member_login"},
-                related_name="staffed_seats",
             )
-            team: Team = ormar.ForeignKey(
-                Team,
-                primary_key=True,
-                columns={"tenant_id": "tenant_id", "code": "team_code"},
-                related_name="staffed_seats",
-            )
-            labels = ormar.ManyToMany(Label, related_name="staffed_seats")
+            labels = ormar.ManyToMany(Label)
+
+
+@pytest.mark.asyncio
+async def test_key_values_need_one_value_per_column(data):
+    first, _, alice, core = data
+    await Seat.objects.create(tenant=first, member=alice, team=core)
+    assert (await Seat.objects.get(pk=(first, "alice", "core"))).pk == (
+        1,
+        "alice",
+        "core",
+    )
+    for value in (
+        (1, (1, "alice"), (1, "core")),
+        (1, alice, "core"),
+        (1, ["alice"], "core"),
+        (1, "alice", {"code": "core"}),
+        {"tenant": 1, "member": [[1, "alice"]], "team": (1, "core")},
+        {"tenant": 1, "member": (1, ["alice"]), "team": (1, "core")},
+    ):
+        with pytest.raises(QueryDefinitionError, match="one value per column"):
+            await Seat.objects.get(pk=value)
+    with pytest.raises(QueryDefinitionError, match="one value per column"):
+        await Seat.objects.filter(pk__in=[(1, (1, "alice"), "core")]).count()
+    with pytest.raises(QueryDefinitionError, match="one value per column"):
+        Seat.ormar_config.pk.to_dict(value=(1, "alice"))

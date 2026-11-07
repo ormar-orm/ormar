@@ -23,6 +23,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from ormar.fields import ForeignKeyField
     from ormar.models import Model, NewBaseModel
 
+NOT_SCALAR = (tuple, list, dict, BaseModel)
+
 
 @dataclass(frozen=True)
 class ColumnSource:
@@ -65,6 +67,20 @@ class KeyLayout:
     multi_column_parts: frozenset[str]
     simple: bool
     bind_slots: tuple[str, ...]
+
+
+def not_scalar(parts: tuple[Any, ...]) -> bool:
+    """
+    :param parts: values of the key columns
+    :type parts: tuple[Any, ...]
+    :return: whether any column got a tuple, list, dict or model instead of
+        a single value
+    :rtype: bool
+    """
+    for part in parts:
+        if isinstance(part, NOT_SCALAR):
+            return True
+    return False
 
 
 def relation_column_value(value: Any, referenced: str, position: int) -> Any:
@@ -618,23 +634,59 @@ class CompositeKey(PrimaryKey):
         (related models in relation parts replaced by the values they are
         referenced by).
 
+        :raises QueryDefinitionError: if the value does not match the key or a
+            column gets a tuple, list, dict or model instead of a single value
+        :param value: key value
+        :type value: Any
+        :return: the value of each key column, in key order
+        :rtype: tuple[Any, ...]
+        """
+        parts = self.split_value(value=value)
+        if not_scalar(parts=parts):
+            raise self.mismatch_error(value=value)
+        return parts
+
+    def split_value(self, value: Any) -> tuple[Any, ...]:
+        """
+        ``flat_parts`` without checking that each column gets a single value,
+        for key values ormar built itself (e.g. a model's ``pk``).
+
         :raises QueryDefinitionError: if the value does not match the key
         :param value: key value
         :type value: Any
         :return: the value of each key column, in key order
         :rtype: tuple[Any, ...]
         """
-        if isinstance(value, dict) and set(value) == set(self.fields):
-            return self.column_parts(data=value)
         layout = self.layout()
-        if isinstance(value, (tuple, list)) and len(value) == len(layout.sources):
+        if isinstance(value, dict) and set(value) == set(self.fields):
+            for field in layout.multi_column_parts:
+                part = value[field]
+                if isinstance(part, (tuple, list)) and len(part) != len(
+                    self.relation_parts[field].link.pairs
+                ):
+                    raise self.mismatch_error(value=value)
+            return self.column_parts(data=value)
+        sources = layout.sources
+        if isinstance(value, (tuple, list)) and len(value) == len(sources):
             return tuple(
-                self.part_value(field=sources[0].field, value=part)
-                for sources, part in zip(layout.sources, value)
+                self.part_value(field=column_sources[0].field, value=part)
+                if column_sources[0].referenced is None
+                else part
+                for column_sources, part in zip(sources, value)
             )
-        raise QueryDefinitionError(
+        raise self.mismatch_error(value=value)
+
+    def mismatch_error(self, value: Any) -> QueryDefinitionError:
+        """
+        :param value: key value that doesn't match the key
+        :type value: Any
+        :return: error describing the expected key value
+        :rtype: QueryDefinitionError
+        """
+        return QueryDefinitionError(
             f"{self.owner.__name__} primary key has fields {self.fields} "
-            f"(columns {layout.column_aliases}), got {value!r}"
+            f"(columns {self.column_aliases()}), got {value!r}; give one value "
+            "per column"
         )
 
     def to_dict(self, value: Any) -> dict[str, Any]:
@@ -687,7 +739,7 @@ class CompositeKey(PrimaryKey):
         :return: parameters binding the parts to ``bind_slots()``
         :rtype: dict[str, Any]
         """
-        return dict(zip(self.layout().bind_slots, self.flat_parts(value=value)))
+        return dict(zip(self.layout().bind_slots, self.split_value(value=value)))
 
 
 def build_primary_key(*, owner: type["Model"], fields: tuple[str, ...]) -> PrimaryKey:
