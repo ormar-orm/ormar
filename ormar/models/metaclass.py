@@ -28,6 +28,7 @@ from ormar.models.descriptors import (
 )
 from ormar.models.descriptors.descriptors import BytesDescriptor
 from ormar.models.helpers import (
+    building_schemas,
     check_required_config_parameters,
     config_field_not_set,
     expand_reverse_relationships,
@@ -731,16 +732,17 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
                     )(get_serializer())
                     attrs[f"serialize_{field_name}"] = decorator
 
-        new_model = super().__new__(
-            mcs,  # type: ignore
-            name,
-            bases,
-            attrs,
-            __pydantic_generic_metadata__=__pydantic_generic_metadata__,
-            __pydantic_reset_parent_namespace__=__pydantic_reset_parent_namespace__,
-            _create_model_module=_create_model_module,
-            **kwargs,
-        )
+        with building_schemas():
+            new_model = super().__new__(
+                mcs,  # type: ignore
+                name,
+                bases,
+                attrs,
+                __pydantic_generic_metadata__=__pydantic_generic_metadata__,
+                __pydantic_reset_parent_namespace__=__pydantic_reset_parent_namespace__,
+                _create_model_module=_create_model_module,
+                **kwargs,
+            )
 
         add_cached_properties(new_model)
 

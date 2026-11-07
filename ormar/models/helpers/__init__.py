@@ -10,6 +10,13 @@ from ormar.models.helpers.pydantic import (
     get_pydantic_base_orm_config,
     merge_or_generate_pydantic_config,
 )
+from ormar.models.helpers.rebuild import (
+    building_schemas,
+    mark_for_rebuild,
+    rebuild_model,
+    rebuild_pending_models,
+    schema_snapshot,
+)
 from ormar.models.helpers.relations import (
     expand_reverse_relationships,
 )
@@ -21,6 +28,11 @@ from ormar.models.helpers.sqlalchemy import (
 from ormar.models.helpers.validation import modify_schema_example
 
 __all__ = [
+    "building_schemas",
+    "mark_for_rebuild",
+    "rebuild_model",
+    "rebuild_pending_models",
+    "schema_snapshot",
     "expand_reverse_relationships",
     "extract_annotations_and_default_vals",
     "get_namespace_annotations",

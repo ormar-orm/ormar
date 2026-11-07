@@ -19,7 +19,7 @@ from typing import (
 
 import pydantic
 import typing_extensions
-from pydantic_core import to_jsonable_python
+from pydantic_core import CoreSchema, to_jsonable_python
 
 import ormar  # noqa I100
 from ormar.exceptions import (
@@ -37,6 +37,12 @@ from ormar.models.excludable import (
     normalize_to_dict,
     resolve_flatten_map,
     skip_ellipsis,
+)
+from ormar.models.helpers.rebuild import (
+    building_schemas_var,
+    rebuild_model,
+    rebuild_pending_models,
+    schema_snapshot,
 )
 from ormar.models.helpers.relations import expand_reverse_relationship
 from ormar.models.helpers.sqlalchemy import (
@@ -945,16 +951,34 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 update_column_definition(model=cls, field=field)
         populate_config_sqlalchemy_table_if_required(config=cls.ormar_config)
         cls.reset_column_caches()
-        # super().update_forward_refs(**localns)
-        cls.model_rebuild(
-            force=True,
-            _types_namespace={
-                field.to.__name__: field.to
-                for field in fields_to_check.values()
-                if field.is_relation
-            },
-        )
+        rebuild_model(model=cast(type["Model"], cls))
         cls.ormar_config.requires_ref_update = False
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source: Any, handler: pydantic.GetCoreSchemaHandler
+    ) -> CoreSchema:
+        """
+        Called by pydantic whenever it generates a schema that contains the
+        model: TypeAdapters (i.e. FastAPI request and response fields), other
+        pydantic models or the model itself.
+
+        Outside of ormar's own model building it first rebuilds pending models
+        connected to this one, so the schema is complete. While ormar builds
+        its models a pending model is embedded as its schema snapshot.
+
+        :param source: type for which the schema is generated
+        :type source: Any
+        :param handler: pydantic schema handler
+        :type handler: pydantic.GetCoreSchemaHandler
+        :return: core schema of the model
+        :rtype: CoreSchema
+        """
+        model = cast(type["Model"], cls)
+        if not building_schemas_var.get():
+            rebuild_pending_models(model=model)
+        snapshot = schema_snapshot(model=model)
+        return snapshot if snapshot is not None else handler(source)
 
     @staticmethod
     def _extract_nested_models_from_list(  # noqa: CFQ002
