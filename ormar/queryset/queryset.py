@@ -1766,8 +1766,9 @@ class QuerySet(Generic[T]):
         trusted = self.model.flat_row_model()
         for i, obj in enumerate(objects):
             values = dump_for_save(obj=obj) if trusted else obj.model_dump()
-            obj._verify_key_parts_set(self_fields=values)
-            ready_objects.append(obj.prepare_model_to_save(new_kwargs=values))
+            row = obj.prepare_model_to_save(new_kwargs=values)
+            obj._verify_key_parts_set(row=row)
+            ready_objects.append(row)
             if i % 100 == 99:  # pragma: no cover
                 await asyncio.sleep(0)
 

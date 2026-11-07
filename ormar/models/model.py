@@ -124,29 +124,28 @@ class Model(ModelRow):
             return await self.save()
         return await self.update(**kwargs)
 
-    def _verify_key_parts_set(self, self_fields: dict[str, Any]) -> None:
+    def _verify_key_parts_set(self, row: dict[str, Any]) -> None:
         """
-        Checks that every primary key part the database does not generate is
-        set before an insert.
+        Checks that every primary key column the database does not generate
+        is set before an insert.
 
         :raises ModelPersistenceError: if a key part is missing
-        :param self_fields: values about to be inserted
-        :type self_fields: dict[str, Any]
+        :param row: values about to be inserted, by column name
+        :type row: dict[str, Any]
         """
-        model_fields = self.ormar_config.model_fields
         key = self.ormar_config.pk
         if key.autoincrement:
             return
-        missing = [
-            name
-            for name in key.fields
-            if self_fields.get(name) is None
-            and any(
-                self_fields.get(value_key) is None
-                for value_key in self.value_keys(field_name=name)
-            )
-            and model_fields[name].server_default is None
-        ]
+        model_fields = self.ormar_config.model_fields
+        layout = key.layout()
+        missing: list[str] = []
+        for column, sources in zip(layout.column_aliases, layout.sources):
+            if row.get(column) is None and all(
+                model_fields[source.field].server_default is None for source in sources
+            ):
+                missing.extend(
+                    source.field for source in sources if source.field not in missing
+                )
         if missing:
             raise ModelPersistenceError(
                 f"{self.__class__.__name__} primary key parts must be set before "
@@ -185,7 +184,6 @@ class Model(ModelRow):
             for field in key.fields:
                 self_fields.pop(field, None)
         self_fields = self.populate_default_values(self_fields)
-        self._verify_key_parts_set(self_fields=self_fields)
         # Values taken from ``__dict__`` are already set, re-assigning them only
         # costs a validation and two hash recomputations per field.
         current_values = self.__dict__
@@ -201,6 +199,7 @@ class Model(ModelRow):
         )
 
         self_fields = self.translate_columns_to_aliases(self_fields)
+        self._verify_key_parts_set(row=self_fields)
         template = insert_template(model_cls=type(self), values=self_fields)
 
         pk_returned_from_insert = False

@@ -426,3 +426,10 @@ def test_key_reader_of_a_key_sharing_a_column():
     reader = Badge.ormar_config.pk.item_reader()
     assert reader({"tenant": 1, "member": (1, "alice")}) == (1, "alice")
     assert reader({"tenant": None, "member": (1, "alice")}) == (1, "alice")
+
+
+@pytest.mark.asyncio
+async def test_bulk_create_fills_a_plain_shared_key_part(data):
+    _, _, alice, _ = data
+    await Badge.objects.bulk_create([Badge(member=alice)])
+    assert [badge.pk for badge in await Badge.objects.all()] == [(1, "alice")]
