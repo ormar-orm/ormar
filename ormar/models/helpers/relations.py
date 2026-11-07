@@ -1,4 +1,3 @@
-import inspect
 import warnings
 from typing import (
     TYPE_CHECKING,
@@ -7,11 +6,9 @@ from typing import (
     Optional,
     Union,
     cast,
-    get_args,
-    get_origin,
 )
 
-from pydantic import BaseModel, create_model, field_serializer
+from pydantic import field_serializer
 from pydantic._internal._decorators import DecoratorInfos
 from pydantic.fields import FieldInfo
 from pydantic_core.core_schema import SerializerFunctionWrapHandler
@@ -75,7 +72,7 @@ def reverse_field_annotation(kind: RelationKind, annotation: Any) -> Any:
 
     :param kind: kind of the reverse relation field
     :type kind: RelationKind
-    :param annotation: annotation of the reverse field, models already copied
+    :param annotation: annotation of the reverse field
     :type annotation: Any
     :return: annotation to register on the related model
     :rtype: Any
@@ -259,9 +256,7 @@ def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
         reverse_field = related_model_fields[related_name]
         field_type = reverse_field_annotation(
             kind=reverse_field.kind,
-            annotation=replace_models_with_copy(
-                annotation=reverse_field.__type__, source_model_field=model_field.name
-            ),
+            annotation=reverse_field.__type__,
         )
         model_field.to.model_fields[related_name] = FieldInfo.from_annotated_attribute(
             annotation=field_type, default=None
@@ -339,51 +334,6 @@ def add_field_serializer_for_reverse_relations(
     prev_decorators.model_validators.update(new_decorators.model_validators)
     prev_decorators.computed_fields.update(new_decorators.computed_fields)
     setattr(to_model, "__pydantic_decorators__", prev_decorators)
-
-
-def replace_models_with_copy(
-    annotation: Any, source_model_field: Optional[str] = None
-) -> Any:
-    """
-    Replaces all models in annotation with their copies to avoid circular references.
-
-    :param annotation: annotation to replace models in
-    :type annotation: type
-    :return: annotation with replaced models
-    :rtype: type
-    """
-    if inspect.isclass(annotation) and issubclass(annotation, ormar.Model):
-        return create_copy_to_avoid_circular_references(model=annotation)
-
-    origin = get_origin(annotation)
-    if origin is list:
-        args = get_args(annotation)
-        if not args:
-            return annotation  # pragma: no cover
-        return list[  # type: ignore
-            replace_models_with_copy(
-                annotation=args[0],
-                source_model_field=source_model_field,
-            )
-        ]
-    elif origin is Union:
-        args = get_args(annotation)
-        new_args = [
-            replace_models_with_copy(
-                annotation=arg, source_model_field=source_model_field
-            )
-            for arg in args
-        ]
-        return Union[tuple(new_args)]
-    return annotation
-
-
-def create_copy_to_avoid_circular_references(model: type["Model"]) -> type["BaseModel"]:
-    new_model = create_model(
-        model.__name__,
-        __base__=model,
-    )
-    return new_model
 
 
 def register_through_shortcut_fields(model_field: "ManyToManyField") -> None:
