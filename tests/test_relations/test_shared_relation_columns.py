@@ -3,9 +3,11 @@ from typing import ForwardRef, Optional
 
 import pytest
 import pytest_asyncio
+import sqlalchemy
+from sqlalchemy.schema import CreateTable
 
 import ormar
-from ormar.exceptions import ModelPersistenceError
+from ormar.exceptions import ModelDefinitionError, ModelPersistenceError
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -65,6 +67,62 @@ class Badge(ormar.Model):
     )
 
 
+class CompositeFirst(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="src_composite_first")
+
+    id: int = ormar.Integer(primary_key=True)
+    member: Optional[Member] = ormar.ForeignKey(
+        Member,
+        columns={"tenant_id": "tenant_id", "login": "member_login"},
+        related_name="composite_firsts",
+    )
+    tenant: Optional[Tenant] = ormar.ForeignKey(
+        Tenant, name="tenant_id", related_name="composite_firsts"
+    )
+
+
+class SingleFirst(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="src_single_first")
+
+    id: int = ormar.Integer(primary_key=True)
+    tenant: Optional[Tenant] = ormar.ForeignKey(
+        Tenant, name="tenant_id", related_name="single_firsts"
+    )
+    member: Optional[Member] = ormar.ForeignKey(
+        Member,
+        columns={"tenant_id": "tenant_id", "login": "member_login"},
+        related_name="single_firsts",
+    )
+
+
+class IndexedLast(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="src_indexed_last")
+
+    id: int = ormar.Integer(primary_key=True)
+    member: Optional[Member] = ormar.ForeignKey(
+        Member,
+        columns={"tenant_id": "tenant_id", "login": "member_login"},
+        related_name="indexed_lasts",
+    )
+    tenant_id: int = ormar.Integer(
+        index=True, server_default="7", comment="tenant", nullable=False
+    )
+
+
+class IndexedFirst(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="src_indexed_first")
+
+    id: int = ormar.Integer(primary_key=True)
+    tenant_id: int = ormar.Integer(
+        index=True, server_default="7", comment="tenant", nullable=False
+    )
+    member: Optional[Member] = ormar.ForeignKey(
+        Member,
+        columns={"tenant_id": "tenant_id", "login": "member_login"},
+        related_name="indexed_firsts",
+    )
+
+
 NodeRef = ForwardRef("Node")
 
 
@@ -103,7 +161,18 @@ class OrderedNames(set):
 @pytest_asyncio.fixture(autouse=True)
 async def data():
     async with base_ormar_config.database:
-        for model in (Node, Badge, Seat, Team, Member, Tenant):
+        for model in (
+            IndexedFirst,
+            IndexedLast,
+            SingleFirst,
+            CompositeFirst,
+            Node,
+            Badge,
+            Seat,
+            Team,
+            Member,
+            Tenant,
+        ):
             await model.objects.delete(each=True)
         first = await Tenant.objects.create(id=1)
         second = await Tenant.objects.create(id=2)
@@ -228,3 +297,102 @@ def test_alias_translation_builds_its_cache():
     assert Seat.translate_columns_to_aliases(new_kwargs={"tenant": 1}) == {
         "tenant_id": 1
     }
+
+
+def foreign_keys(table: sqlalchemy.Table) -> set[tuple[tuple[str, ...], str]]:
+    return {
+        (
+            tuple(column.name for column in constraint.columns),
+            constraint.referred_table.name,
+        )
+        for constraint in table.foreign_key_constraints
+    }
+
+
+@pytest.mark.parametrize("model", [CompositeFirst, SingleFirst])
+def test_shared_column_keeps_the_single_column_foreign_key(model):
+    table = model.ormar_config.table
+    assert foreign_keys(table=table) == {
+        (("tenant_id", "member_login"), "src_members"),
+        (("tenant_id",), "src_tenants"),
+    }
+    assert table.c.tenant_id.nullable
+    ddl = str(CreateTable(table).compile(dialect=sqlalchemy.dialects.sqlite.dialect()))
+    assert "REFERENCES src_tenants (id)" in ddl
+
+
+@pytest.mark.parametrize("model", [IndexedLast, IndexedFirst])
+def test_shared_column_keeps_the_plain_field_options(model):
+    table = model.ormar_config.table
+    column = table.c.tenant_id
+    assert not column.nullable
+    assert column.server_default.arg == "7"
+    assert column.comment == "tenant"
+    assert [[indexed.name for indexed in index.columns] for index in table.indexes] == [
+        ["tenant_id"]
+    ]
+    assert foreign_keys(table=table) == {(("tenant_id", "member_login"), "src_members")}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [CompositeFirst, SingleFirst])
+async def test_shared_column_foreign_key_is_enforced(data, model):
+    first, _, alice, _ = data
+    saved = await model.objects.create(tenant=first, member=alice)
+    fetched = await model.objects.select_related(["tenant", "member"]).get(id=saved.id)
+    assert fetched.tenant.id == 1
+    assert fetched.member.login == "alice"
+    with pytest.raises(sqlalchemy.exc.IntegrityError):
+        await model.objects.create(tenant=Tenant(id=99))
+
+
+@pytest.mark.asyncio
+async def test_reflected_shared_column_matches_the_model(data):
+    def reflect(connection: sqlalchemy.Connection) -> dict:
+        inspector = sqlalchemy.inspect(connection)
+        return {
+            name: (
+                {
+                    tuple(fk["constrained_columns"])
+                    for fk in inspector.get_foreign_keys(name)
+                },
+                [index["column_names"] for index in inspector.get_indexes(name)],
+            )
+            for name in ("src_composite_first", "src_indexed_last")
+        }
+
+    engine = base_ormar_config.engine
+    async with engine.connect() as connection:
+        reflected = await connection.run_sync(reflect)
+    composite_fks, _ = reflected["src_composite_first"]
+    assert composite_fks == {("tenant_id", "member_login"), ("tenant_id",)}
+    _, indexes = reflected["src_indexed_last"]
+    assert ["tenant_id"] in indexes
+
+
+def test_shared_column_definition_conflicts():
+    with pytest.raises(ModelDefinitionError, match="different types"):
+
+        class ShortLogin(ormar.Model):
+            ormar_config = base_ormar_config.copy(tablename="src_short_login")
+
+            id: int = ormar.Integer(primary_key=True)
+            login: str = ormar.String(max_length=3, name="member_login")
+            member: Optional[Member] = ormar.ForeignKey(
+                Member,
+                columns={"tenant_id": "tenant_id", "login": "member_login"},
+                related_name="short_logins",
+            )
+
+    with pytest.raises(ModelDefinitionError, match="different types"):
+
+        class BigTenant(ormar.Model):
+            ormar_config = base_ormar_config.copy(tablename="src_big_tenant")
+
+            id: int = ormar.Integer(primary_key=True)
+            tenant_id: int = ormar.BigInteger()
+            member: Optional[Member] = ormar.ForeignKey(
+                Member,
+                columns={"tenant_id": "tenant_id", "login": "member_login"},
+                related_name="big_tenants",
+            )

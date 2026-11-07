@@ -432,7 +432,13 @@ await Membership.objects.get(member=alice, team=core)  # the same row
 * Only columns named explicitly (`columns=` / `name=`) are shared. A field whose name
   clashes with a generated column name (`<field>_<column>`) still raises
   `ModelDefinitionError`, as do two plain fields on one column and fields giving a
-  shared column different types.
+  shared column different types (`String(3)` and `String(20)`, or `BigInteger` and
+  `Integer`, differ too).
+* The shared column keeps the options of every field storing it on its own: the
+  foreign key constraint of a foreign key to one column (`name="tenant_id"`), and the
+  `index`, `unique`, `default`, `server_default` and `comment` of a plain field,
+  whichever field is declared first. It is part of the primary key when any of its
+  fields is, and nullable only when all of them are.
 * A link table like this can be the `through` model of a `ManyToMany` (see
   [many to many](many-to-many.md#models-with-a-composite-primary-key)).
 * Relations **to** a model whose primary key holds a foreign key to several columns
