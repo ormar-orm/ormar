@@ -12,7 +12,10 @@ from typing import TYPE_CHECKING, Any, cast
 from pydantic import BaseModel, create_model
 from typing_extensions import TypedDict
 
+from ormar.fields.link import key_value
+
 if TYPE_CHECKING:  # pragma: no cover
+    from ormar.fields import ForeignKeyField
     from ormar.models import Model
 
 
@@ -46,7 +49,7 @@ def key_only_instance(*, target: type["Model"], values: dict[str, Any]) -> "Mode
     """
     Create an instance of the target with only the given key fields set,
     skipping validation of the other fields. Required relations of the target
-    get placeholder instances keyed with ``-1``.
+    get placeholder instances keyed with ``-1`` (see ``placeholder_key``).
 
     :param target: model to instantiate
     :type target: type[Model]
@@ -57,17 +60,29 @@ def key_only_instance(*, target: type["Model"], values: dict[str, Any]) -> "Mode
     """
     init_dict = {
         **{
-            name: key_only_instance(
-                target=field.to, values=field.to.ormar_config.pk.to_dict(value=-1)
-            )
+            name: key_only_instance(target=field.to, values=placeholder_key(field.to))
             for name, field in target.ormar_config.model_fields.items()
-            if field.is_relation and not field.nullable and not field.virtual
+            if field.is_relation
+            and not field.nullable
+            and not field.virtual
+            and name not in values
         },
         **values,
     }
     return cast(
         "Model", target._internal_construct(_pk_only=True, _excluded=None, **init_dict)
     )
+
+
+def placeholder_key(target: type["Model"]) -> dict[str, Any]:
+    """
+    :param target: model a required relation leads to
+    :type target: type[Model]
+    :return: key fields of a placeholder key (``-1`` in every key column)
+    :rtype: dict[str, Any]
+    """
+    key = target.ormar_config.pk
+    return key.to_dict(value=key_value(parts=(-1,) * len(key.column_aliases())))
 
 
 @lru_cache(maxsize=1024)
@@ -84,12 +99,11 @@ def key_dict_type(target: type["Model"], fields: tuple[str, ...]) -> Any:
     :return: the typed dict class
     :rtype: Any
     """
-    key = target.ormar_config.pk
     model_fields = target.ormar_config.model_fields
     annotations = {
         field: (
-            key.part_type(field=field)
-            if field in key.fields
+            cast("ForeignKeyField", model_fields[field]).flat_value_type()
+            if model_fields[field].is_relation
             else model_fields[field].__type__
         )
         for field in fields

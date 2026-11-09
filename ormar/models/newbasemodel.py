@@ -1385,8 +1385,15 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             if relation_map is not None
             else translate_list_to_dict(self._iterate_related_models())
         )
-        pk_only = getattr(self, "__pk_only__", False)
-        if relation_map and not pk_only:
+        if relation_map and getattr(self, "__pk_only__", False):
+            # a key-only model holds no relations besides the ones in its key
+            key_relations = self.ormar_config.pk.relation_parts
+            relation_map = {
+                name: nested
+                for name, nested in relation_map.items()
+                if name in key_relations
+            }
+        if relation_map:
             dict_instance = self._extract_nested_models(
                 relation_map=relation_map,
                 dict_instance=dict_instance,

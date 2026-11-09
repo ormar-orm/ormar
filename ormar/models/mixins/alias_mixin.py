@@ -3,9 +3,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 import ormar_rust_utils
 
 from ormar.exceptions import ModelPersistenceError
+from ormar.fields.link import ColumnReader, column_reader
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.fields import ForeignKeyField
+    from ormar.models import Model
 
 
 class SharedKey(NamedTuple):
@@ -53,6 +55,7 @@ class AliasMixin:
     _column_owners_map: dict[str, tuple[str, ...]]
     _shared_value_keys: dict[str, SharedKey]
     _shared_plain_fields: tuple[SharedPlainField, ...]
+    _column_readers: dict[str, "ColumnReader"]
 
     @classmethod
     def _build_alias_cache(cls) -> None:
@@ -167,6 +170,7 @@ class AliasMixin:
             "_shared_value_keys",
             "_shared_plain_fields",
             "_table_column_pairs",
+            "_column_readers",
         ):
             if name in cls.__dict__:
                 delattr(cls, name)
@@ -227,7 +231,27 @@ class AliasMixin:
         except AttributeError:
             cls._build_alias_cache()
             owners = cls._column_owners_map
-        return owners.get(column, (cls.get_field_name_of_column(column=column),))
+        return owners.get(column) or (cls.get_field_name_of_column(column=column),)
+
+    @classmethod
+    def column_reader(cls, column: str) -> "ColumnReader":
+        """
+        :param column: column name in the database
+        :type column: str
+        :return: cached reader of the column's raw value out of an instance of
+            the model, its key-only model or a dict of its fields (see
+            ``ormar.fields.link.column_reader``)
+        :rtype: ColumnReader
+        """
+        readers = cls.__dict__.get("_column_readers")
+        if readers is None:
+            readers = {}
+            cls._column_readers = readers
+        reader = readers.get(column)
+        if reader is None:
+            reader = column_reader(model=cast("type[Model]", cls), column=column)
+            readers[column] = reader
+        return reader
 
     @classmethod
     def shared_value_keys(cls) -> dict[str, SharedKey]:

@@ -333,6 +333,11 @@ await core.members.add(alice)  # tenant_id stored once
 await core.members.add(carol)  # carol from another tenant: ModelPersistenceError
 ```
 
+Such a link table can also be the target of a `ManyToMany`, or declare one itself
+(e.g. `tags = ormar.ManyToMany(Tag)` on `Membership`): the generated through table
+stores its key in one column per key column (see
+[relations to link tables](foreign-key.md#relations-to-link-tables)).
+
 ## Overriding foreign key constraint names on the through model
 
 Auto-generated foreign key constraint names on the through model can be

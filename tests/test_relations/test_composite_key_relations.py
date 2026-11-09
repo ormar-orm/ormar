@@ -190,26 +190,6 @@ def test_shared_column_definition_errors():
             )
 
 
-def test_relations_to_a_model_keyed_by_a_foreign_key_of_several_columns_raise():
-    with pytest.raises(ModelDefinitionError, match="not supported yet"):
-
-        class BadForeignKey(ormar.Model):
-            ormar_config = base_ormar_config.copy(tablename="ckr_bad_fk")
-
-            id: int = ormar.Integer(primary_key=True)
-            membership: Optional[Membership] = ormar.ForeignKey(
-                Membership, related_name="bad_fks"
-            )
-
-    with pytest.raises(ModelDefinitionError, match="not supported yet"):
-
-        class BadManyToMany(ormar.Model):
-            ormar_config = base_ormar_config.copy(tablename="ckr_bad_m2m")
-
-            id: int = ormar.Integer(primary_key=True)
-            memberships = ormar.ManyToMany(Membership, related_name="bad_m2ms")
-
-
 @pytest.mark.asyncio
 async def test_link_table_crud(data):
     alice, bob, _, core, docs, _ = data

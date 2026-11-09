@@ -437,7 +437,7 @@ def test_key_layout_is_built_once(monkeypatch):
     Seat.reset_column_caches()
     rebuilt = key.layout()
     assert rebuilt is not layout
-    assert rebuilt.sources == layout.sources
+    assert rebuilt.column_fields == layout.column_fields
 
 
 def test_key_reader_of_a_key_sharing_a_column():
@@ -485,32 +485,6 @@ async def test_excluding_one_field_of_a_shared_column(data):
     plain_only = await Ticket.objects.fields(["id", "tenant_id"]).get()
     assert plain_only.tenant_id == 1
     assert plain_only.assignee is None
-
-
-def test_many_to_many_declared_on_a_link_table_raises():
-    class LinkMember(ormar.Model):
-        ormar_config = base_ormar_config.copy(tablename="src_link_members")
-
-        tenant_id: int = ormar.Integer(primary_key=True)
-        login: str = ormar.String(max_length=20, primary_key=True)
-
-    class Label(ormar.Model):
-        ormar_config = base_ormar_config.copy(tablename="src_labels")
-
-        id: int = ormar.Integer(primary_key=True)
-
-    with pytest.raises(ModelDefinitionError, match="StaffedSeat.labels"):
-
-        class StaffedSeat(ormar.Model):
-            ormar_config = base_ormar_config.copy(tablename="src_staffed_seats")
-
-            tenant_id: int = ormar.Integer(primary_key=True)
-            member: LinkMember = ormar.ForeignKey(
-                LinkMember,
-                primary_key=True,
-                columns={"tenant_id": "tenant_id", "login": "member_login"},
-            )
-            labels = ormar.ManyToMany(Label)
 
 
 @pytest.mark.asyncio
