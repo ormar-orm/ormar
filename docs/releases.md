@@ -1,17 +1,12 @@
 # Release notes
 
-## Unreleased
+## 0.28.0
 
 ### ✨ Breaking changes
 
 * **`upsert()` inserts never-saved models whose key is already set**
 
-    `upsert()` of a model that was never saved but has its primary key set (a uuid
-    `default`, a natural or a composite key) used to run an `UPDATE` that matched no
-    row and silently saved nothing (unless `__force_save__=True` was passed). It now
-    looks the row up and inserts it when it's missing. Loaded or saved models are
-    still updated directly. `__force_save__` is accepted and ignored.
-    [#1926](https://github.com/ormar-orm/ormar/pull/1926)
+    `upsert()` of a model that was never saved but has its primary key set (a uuid `default`, a natural or a composite key) used to run an `UPDATE` that matched no row and silently saved nothing (unless `__force_save__=True` was passed). It now looks the row up and inserts it when it's missing. Loaded or saved models are still updated directly. `__force_save__` is accepted and ignored. [#1926](https://github.com/ormar-orm/ormar/pull/1926)
 
     ```python
     country = Country(iso_code="PL", name="Poland")  # natural key, never saved
@@ -23,10 +18,7 @@
 
 * **`update()`, `delete()` and `load()` target the row the model was loaded with**
 
-    After changing a model's primary key, `update()` moves the row to the new key
-    (`UPDATE ... SET id = 5 WHERE id = 1`) instead of updating the row with the new
-    key, and `delete()` / `load()` use the original key.
-    [#1926](https://github.com/ormar-orm/ormar/pull/1926)
+    After changing a model's primary key, `update()` moves the row to the new key (`UPDATE ... SET id = 5 WHERE id = 1`) instead of updating the row with the new key, and `delete()` / `load()` use the original key. [#1926](https://github.com/ormar-orm/ormar/pull/1926)
 
     ```python
     album = await Album.objects.get(id=1)
@@ -36,18 +28,13 @@
     # after:  UPDATE albums SET id = 5, ... WHERE id = 1
     ```
 
-    To update another row, load it (`await Album.objects.get(id=5)`) or use
-    `Album.objects.filter(id=5).update(...)`.
+    To update another row, load it (`await Album.objects.get(id=5)`) or use `Album.objects.filter(id=5).update(...)`.
 
-* **`save()` raises `ModelPersistenceError` for a missing primary key value** that
-  the database doesn't generate (no autoincrement, no server default), before
-  sending the insert. [#1926](https://github.com/ormar-orm/ormar/pull/1926)
+* **`save()` raises `ModelPersistenceError` for a missing primary key value** that the database doesn't generate (no autoincrement, no server default), before sending the insert. [#1926](https://github.com/ormar-orm/ormar/pull/1926)
 
 * **Primary key and relation internals replaced**
 
-    The primary key of a model is now described by `ormar_config.pk` and the
-    columns connecting two models by `field.link`. Model definitions, queries,
-    generated SQL and DDL are unchanged; code using these internals needs updating:
+    The primary key of a model is now described by `ormar_config.pk` and the columns connecting two models by `field.link`. Model definitions, queries, generated SQL and DDL are unchanged; code using these internals needs updating:
 
     | Removed | Use instead |
     |---|---|
@@ -69,35 +56,21 @@
     (column,) = Album.ormar_config.pk.columns()
     ```
 
-    The statement builders `build_update`, `build_delete`, `build_pk_select` and
-    `build_bulk_update` take `primary_key=` instead of `pk_column=`, and
-    `count_statement` takes `pk_column_names=` (a tuple) instead of
-    `pk_column_name=`. [#1913](https://github.com/ormar-orm/ormar/pull/1913)
+    The statement builders `build_update`, `build_delete`, `build_pk_select` and `build_bulk_update` take `primary_key=` instead of `pk_column=`, and `count_statement` takes `pk_column_names=` (a tuple) instead of `pk_column_name=`. [#1913](https://github.com/ormar-orm/ormar/pull/1913)
 
 * **A dict with a primary key and nested relations builds a full related model**
 
-    A related model given as a dict with its primary key and nested relations, e.g.
-    `Writer(notes=[{"id": 2, "letter": {"id": 3}}])`, used to be built as a pk-only
-    model, which silently dropped the nested relations. It now builds a full model
-    with them, so its required fields have to be given, or a `ValidationError` is
-    raised. A dict with only the primary key (`{"id": 2}`) is still pk-only.
-    [#1957](https://github.com/ormar-orm/ormar/pull/1957)
+    A related model given as a dict with its primary key and nested relations, e.g. `Writer(notes=[{"id": 2, "letter": {"id": 3}}])`, used to be built as a pk-only model, which silently dropped the nested relations. It now builds a full model with them, so its required fields have to be given, or a `ValidationError` is raised. A dict with only the primary key (`{"id": 2}`) is still pk-only. [#1957](https://github.com/ormar-orm/ormar/pull/1957)
 
 * **Python 3.10 is no longer supported**
 
-    Python 3.10 reaches end-of-life in October 2026, and the fixes for the
-    `filelock` advisories (GHSA-567q-5qvw-pf92, GHSA-9vhv-jxww-xfm5,
-    GHSA-v4x8-3wr5-3wq8) require Python 3.11 or newer. ormar now requires
-    Python 3.11+. [#1904](https://github.com/ormar-orm/ormar/pull/1904)
+    Python 3.10 reaches end-of-life in October 2026, and the fixes for the `filelock` advisories (GHSA-567q-5qvw-pf92, GHSA-9vhv-jxww-xfm5, GHSA-v4x8-3wr5-3wq8) require Python 3.11 or newer. ormar now requires Python 3.11+. [#1904](https://github.com/ormar-orm/ormar/pull/1904)
 
 ### 🆕 Features
 
 * **Composite primary and foreign keys** ([#137](https://github.com/ormar-orm/ormar/issues/137))
 
-    ormar maps schemas it didn't design: keys of several columns, foreign keys in
-    primary keys, link tables keyed by their foreign keys and relations to such link
-    tables. Single-column models need no changes (see the breaking changes above for
-    `upsert()` and `update()`).
+    ormar maps schemas it didn't design: keys of several columns, foreign keys in primary keys, link tables keyed by their foreign keys and relations to such link tables. Single-column models need no changes (see the breaking changes above for `upsert()` and `update()`).
 
     ```python
     class Order(ormar.Model):  # PRIMARY KEY (tenant_id, number)
@@ -125,72 +98,19 @@
 
     What's included:
 
-    * Composite primary keys: mark several fields with `primary_key=True`. The key
-      value is a tuple (`order.pk == (1, 7)`) and works in `get(pk=...)`,
-      `filter(pk__in=...)`, `exclude()`, `order_by("pk")`, bulk operations and
-      `update_or_create(pk=...)`, and in Python-style filters
-      (`Order.pk == (1, 7)`, `Order.pk.in_([...])`, `Order.pk.desc()`, also through
-      relations: `Book.author.pk == 1`). See [primary keys](models/primary-keys.md).
-      [#1926](https://github.com/ormar-orm/ormar/pull/1926)
-    * Foreign keys in the primary key (`ForeignKey(..., primary_key=True)`) for link
-      tables keyed by their foreign keys and for shared primary keys
-      (`enrollment.pk == (student.id, course.id)`); `ForeignKey(..., to_field="iso_code")`
-      to reference a unique non-pk column; `ForeignKey(..., db_constraint=False)` to
-      skip the database `FOREIGN KEY` constraint. See
-      [foreign keys in the primary key](relations/foreign-key.md#foreign-keys-in-the-primary-key).
-      [#1927](https://github.com/ormar-orm/ormar/pull/1927)
-    * Foreign keys to models with a composite key, and to a set of unique columns
-      (`to_field=["tenant_id", "sku"]`), are stored in several columns (named with
-      `columns={...}` or `<field>_<column>` by default) under one composite
-      `FOREIGN KEY` constraint. They work in joins, prefetching, filters
-      (`order=...`, `order__in=...`, `order__isnull=...`), bulk operations,
-      `values()` / `values_list()` and flattened dumps. See
-      [foreign keys to several columns](relations/foreign-key.md#foreign-keys-to-several-columns).
-      [#1935](https://github.com/ormar-orm/ormar/pull/1935)
-    * A `ManyToMany` `through` model can declare its own foreign keys to both sides,
-      e.g. an existing link table keyed by them, and ormar uses those fields instead of
-      adding its own. See
-      [using an existing link table](relations/many-to-many.md#using-an-existing-link-table).
-      [#1930](https://github.com/ormar-orm/ormar/pull/1930)
-    * `ManyToMany` relations to and from models with a composite key: the generated
-      through table stores each key in several columns. See
-      [many to many](relations/many-to-many.md#models-with-a-composite-primary-key).
-      [#1938](https://github.com/ormar-orm/ormar/pull/1938)
-    * Foreign keys stored in several columns can be part of a primary key, and fields
-      can share a column named in `columns=`, so link tables like
-      `PRIMARY KEY (tenant_id, member_login, team_code)` map directly and work as
-      `ManyToMany` `through` models. Different values for a shared column raise
-      `ModelPersistenceError`; a shared column becomes `NULL` only when every field
-      storing it is `None`. See
-      [link tables keyed by foreign keys to several columns](relations/foreign-key.md#link-tables-keyed-by-foreign-keys-to-several-columns).
-      [#1939](https://github.com/ormar-orm/ormar/pull/1939),
-      [#1954](https://github.com/ormar-orm/ormar/pull/1954)
-    * `ForeignKey`, `OneToOne` and `ManyToMany` relations to such link tables, and
-      `ManyToMany` relations declared on them: the referencing side stores one column
-      per key column of the link table (a shared column once). See
-      [relations to link tables](relations/foreign-key.md#relations-to-link-tables).
-      [#1953](https://github.com/ormar-orm/ormar/pull/1953)
+    * Composite primary keys: mark several fields with `primary_key=True`. The key value is a tuple (`order.pk == (1, 7)`) and works in `get(pk=...)`, `filter(pk__in=...)`, `exclude()`, `order_by("pk")`, bulk operations and `update_or_create(pk=...)`, and in Python-style filters (`Order.pk == (1, 7)`, `Order.pk.in_([...])`, `Order.pk.desc()`, also through relations: `Book.author.pk == 1`). See [primary keys](models/primary-keys.md). [#1926](https://github.com/ormar-orm/ormar/pull/1926)
+    * Foreign keys in the primary key (`ForeignKey(..., primary_key=True)`) for link tables keyed by their foreign keys and for shared primary keys (`enrollment.pk == (student.id, course.id)`); `ForeignKey(..., to_field="iso_code")` to reference a unique non-pk column; `ForeignKey(..., db_constraint=False)` to skip the database `FOREIGN KEY` constraint. See [foreign keys in the primary key](relations/foreign-key.md#foreign-keys-in-the-primary-key). [#1927](https://github.com/ormar-orm/ormar/pull/1927)
+    * Foreign keys to models with a composite key, and to a set of unique columns (`to_field=["tenant_id", "sku"]`), are stored in several columns (named with `columns={...}` or `<field>_<column>` by default) under one composite `FOREIGN KEY` constraint. They work in joins, prefetching, filters (`order=...`, `order__in=...`, `order__isnull=...`), bulk operations, `values()` / `values_list()` and flattened dumps. See [foreign keys to several columns](relations/foreign-key.md#foreign-keys-to-several-columns). [#1935](https://github.com/ormar-orm/ormar/pull/1935)
+    * A `ManyToMany` `through` model can declare its own foreign keys to both sides, e.g. an existing link table keyed by them, and ormar uses those fields instead of adding its own. See [using an existing link table](relations/many-to-many.md#using-an-existing-link-table). [#1930](https://github.com/ormar-orm/ormar/pull/1930)
+    * `ManyToMany` relations to and from models with a composite key: the generated through table stores each key in several columns. See [many to many](relations/many-to-many.md#models-with-a-composite-primary-key). [#1938](https://github.com/ormar-orm/ormar/pull/1938)
+    * Foreign keys stored in several columns can be part of a primary key, and fields can share a column named in `columns=`, so link tables like `PRIMARY KEY (tenant_id, member_login, team_code)` map directly and work as `ManyToMany` `through` models. Different values for a shared column raise `ModelPersistenceError`; a shared column becomes `NULL` only when every field storing it is `None`. See [link tables keyed by foreign keys to several columns](relations/foreign-key.md#link-tables-keyed-by-foreign-keys-to-several-columns). [#1939](https://github.com/ormar-orm/ormar/pull/1939), [#1954](https://github.com/ormar-orm/ormar/pull/1954)
+    * `ForeignKey`, `OneToOne` and `ManyToMany` relations to such link tables, and `ManyToMany` relations declared on them: the referencing side stores one column per key column of the link table (a shared column once). See [relations to link tables](relations/foreign-key.md#relations-to-link-tables). [#1953](https://github.com/ormar-orm/ormar/pull/1953)
 
 * **Partial instance updates: `OrmarConfig(partial_updates=True)`**
 
-    `Model.update(**kwargs)` writes every column of the model from memory, so a row
-    changed in the database after the model was loaded (by another request or a
-    worker) has those changes silently reverted. With `partial_updates=True`
-    `update()` writes only the passed fields, the fields assigned since the model was
-    loaded or saved (also in `pre_update` signal handlers), `Json` fields mutated in
-    place and `on_update` fields; with nothing changed it still writes all columns.
-    `update(_partial=True | False)` overrides the setting per call.
+    `Model.update(**kwargs)` writes every column of the model from memory, so a row changed in the database after the model was loaded (by another request or a worker) has those changes silently reverted. With `partial_updates=True` `update()` writes only the passed fields, the fields assigned since the model was loaded or saved (also in `pre_update` signal handlers), `Json` fields mutated in place and `on_update` fields; with nothing changed it still writes all columns. `update(_partial=True | False)` overrides the setting per call.
 
-    The default, `partial_updates=None`, keeps writing all columns but emits a
-    `DeprecationWarning` when `update(**kwargs)` also writes columns that did not
-    change. **The default will change to partial updates in a future release**: set
-    `partial_updates=True` to opt in now, or `partial_updates=False` to keep the old
-    behaviour without the warning. `QuerySet.update_or_create()` and the relation
-    proxies' `update()` / `update_or_create()` (which load the row and update it right
-    away) always write only the changed fields. Closes
-    [#1948](https://github.com/ormar-orm/ormar/issues/1948), see
-    [partial updates](models/index.md#partial-updates).
-    [#1949](https://github.com/ormar-orm/ormar/pull/1949)
+    The default, `partial_updates=None`, keeps writing all columns but emits a `DeprecationWarning` when `update(**kwargs)` also writes columns that did not change. **The default will change to partial updates in a future release**: set `partial_updates=True` to opt in now, or `partial_updates=False` to keep the old behaviour without the warning. `QuerySet.update_or_create()` and the relation proxies' `update()` / `update_or_create()` (which load the row and update it right away) always write only the changed fields. Closes [#1948](https://github.com/ormar-orm/ormar/issues/1948), see [partial updates](models/index.md#partial-updates). [#1949](https://github.com/ormar-orm/ormar/pull/1949)
 
     ```python
     base_ormar_config = ormar.OrmarConfig(
@@ -204,107 +124,32 @@
     # after: UPDATE tracks SET name=..., position=... WHERE id = ...
     ```
 
-* `ormar.OneToOne(to, ...)` relation: a unique foreign key whose reverse side holds a
-  single model or `None`. Closes [#256](https://github.com/ormar-orm/ormar/issues/256).
-  See [OneToOne](relations/one-to-one.md).
-  [#1934](https://github.com/ormar-orm/ormar/pull/1934)
+* `ormar.OneToOne(to, ...)` relation: a unique foreign key whose reverse side holds a single model or `None`. Closes [#256](https://github.com/ormar-orm/ormar/issues/256). See [OneToOne](relations/one-to-one.md). [#1934](https://github.com/ormar-orm/ormar/pull/1934)
 
-* `ormar.Prefetch(relation, queryset=...)` in `prefetch_related()` filters, orders and
-  narrows prefetched models with a queryset of the related model. See
-  [prefetch with a queryset](queries/joins-and-subqueries.md#prefetch-with-a-queryset).
-  [#1933](https://github.com/ormar-orm/ormar/pull/1933)
+* `ormar.Prefetch(relation, queryset=...)` in `prefetch_related()` filters, orders and narrows prefetched models with a queryset of the related model. See [prefetch with a queryset](queries/joins-and-subqueries.md#prefetch-with-a-queryset). [#1933](https://github.com/ormar-orm/ormar/pull/1933)
 
-* Read-only models for database views: `OrmarConfig(view=True)`. They can be queried,
-  joined and prefetched; writes raise the new `ReadOnlyModelError`, and their tables
-  are kept out of `metadata.create_all()` / Alembic. Closes
-  [#970](https://github.com/ormar-orm/ormar/issues/970). See [views](models/views.md).
-  [#1932](https://github.com/ormar-orm/ormar/pull/1932)
+* Read-only models for database views: `OrmarConfig(view=True)`. They can be queried, joined and prefetched; writes raise the new `ReadOnlyModelError`, and their tables are kept out of `metadata.create_all()` / Alembic. Closes [#970](https://github.com/ormar-orm/ormar/issues/970). See [views](models/views.md). [#1932](https://github.com/ormar-orm/ormar/pull/1932)
 
-* Python 3.15 is now supported and tested in CI, and the CI matrix now also
-  covers Python 3.14. [#1904](https://github.com/ormar-orm/ormar/pull/1904)
+* Python 3.15 is now supported and tested in CI, and the CI matrix now also covers Python 3.14. [#1904](https://github.com/ormar-orm/ormar/pull/1904)
 
 ### ⚡ Performance
 
-* Reverse relations no longer create a full copy of the related model class for
-  every reverse field. Each copy compiled its own pydantic validator and
-  serializer and showed up as a separate model in every later schema, so memory
-  grew roughly with the square of the number of related models. Importing 60
-  models with dense relations now takes 107 MiB instead of 306 MiB (25 MiB
-  instead of 38 MiB with `defer_build`), and a real 45-model application went
-  from 158 MiB to 61 MiB. The annotation of a reverse relation field now refers
-  to the related model itself. [#1940](https://github.com/ormar-orm/ormar/pull/1940)
-* Registering a reverse relation (or a many to many through model field) no
-  longer rebuilds the pydantic schema of the target model right away, once per
-  relation (a hub model with 44 related models was compiled 44 times, ignoring
-  `defer_build`). The model is marked as pending and rebuilt once, with its final
-  fields, when its schema, validator or serializer is first needed: on
-  validation, serialization, `model_json_schema()`, or when FastAPI or another
-  pydantic model / `TypeAdapter` builds a schema containing it. Importing 60
-  models with dense relations now takes 13 MiB and 0.13 s instead of 107 MiB and
-  0.61 s (16 MiB once every model is used; with `defer_build` 11 MiB and 0.12 s
-  instead of 25 MiB and 0.37 s, 45 MiB instead of 35 MiB once every model is used).
-  [#1941](https://github.com/ormar-orm/ormar/pull/1941)
-* `model_dump()`, `bulk_create()`, `save_related()` and `get_pydantic()` no longer
-  rebuild the nested map of a model's relation paths on every call. The map is
-  built once per model class and reused, so dumping a model of a densely related
-  schema (91,000 relation paths) takes 0.01 ms instead of 165 ms, and
-  `bulk_create()` of 300 rows of a model with 12,000 relation paths 17 ms instead
-  of 5.6 s. The cached maps are rebuilt when a relation is registered later, which
-  also fixes `model_dump()`, `save_related()`, `select_all(follow=True)` and
-  `load_all(follow=True)` leaving out relations registered after the model was
-  first used (e.g. the reverse side of a foreign key declared by a model defined
-  later). [#1947](https://github.com/ormar-orm/ormar/pull/1947)
+* Reverse relations no longer create a full copy of the related model class for every reverse field. Each copy compiled its own pydantic validator and serializer and showed up as a separate model in every later schema, so memory grew roughly with the square of the number of related models. Importing 60 models with dense relations now takes 107 MiB instead of 306 MiB (25 MiB instead of 38 MiB with `defer_build`), and a real 45-model application went from 158 MiB to 61 MiB. The annotation of a reverse relation field now refers to the related model itself. [#1940](https://github.com/ormar-orm/ormar/pull/1940)
+* Registering a reverse relation (or a many to many through model field) no longer rebuilds the pydantic schema of the target model right away, once per relation (a hub model with 44 related models was compiled 44 times, ignoring `defer_build`). The model is marked as pending and rebuilt once, with its final fields, when its schema, validator or serializer is first needed: on validation, serialization, `model_json_schema()`, or when FastAPI or another pydantic model / `TypeAdapter` builds a schema containing it. Importing 60 models with dense relations now takes 13 MiB and 0.13 s instead of 107 MiB and 0.61 s (16 MiB once every model is used; with `defer_build` 11 MiB and 0.12 s instead of 25 MiB and 0.37 s, 45 MiB instead of 35 MiB once every model is used). [#1941](https://github.com/ormar-orm/ormar/pull/1941)
+* `model_dump()`, `bulk_create()`, `save_related()` and `get_pydantic()` no longer rebuild the nested map of a model's relation paths on every call. The map is built once per model class and reused, so dumping a model of a densely related schema (91,000 relation paths) takes 0.01 ms instead of 165 ms, and `bulk_create()` of 300 rows of a model with 12,000 relation paths 17 ms instead of 5.6 s. The cached maps are rebuilt when a relation is registered later, which also fixes `model_dump()`, `save_related()`, `select_all(follow=True)` and `load_all(follow=True)` leaving out relations registered after the model was first used (e.g. the reverse side of a foreign key declared by a model defined later). [#1947](https://github.com/ormar-orm/ormar/pull/1947)
 
 ### 🐛 Fixes
 
-* A model with both a concrete relation and a `ForwardRef` relation (e.g.
-  `ForeignKey(Author)` next to `ForeignKey(ForwardRef("Book"))`) no longer fails at
-  class creation with `PydanticUndefinedAnnotation`. The related models finish
-  building when `update_forward_refs()` resolves the reference; before that, other
-  models connected to them already work in `model_dump()`, `bulk_create()`,
-  `save_related()` and `get_pydantic()`, which skip the unresolved relation.
-  [#1931](https://github.com/ormar-orm/ormar/pull/1931),
-  [#1952](https://github.com/ormar-orm/ormar/pull/1952)
-* `pk` lookups other than `pk=` (`pk__in`, `pk__gt`, ...) failed with `KeyError`, and
-  ordering by `pk` (`order_by("pk")` / `order_by("-pk")`, `ormar_config`
-  `order_by=["-pk"]`, relation `orders_by` / `related_orders_by`) produced invalid
-  SQL. Both work for every model now. [#1926](https://github.com/ormar-orm/ormar/pull/1926)
-* The reverse side of a relation is registered when the related model has a field
-  named like the owner model, e.g. `Player.coach = ForeignKey(Coach)` next to
-  `Coach.fans = ManyToMany(Player, related_name="idols")`. `idols` was silently
-  skipped (`Player(idols=...)` raised `ModelError`, `coach.fans.add()` a
-  `KeyError`), a field with that name leading to another model raised a false
-  `ModelDefinitionError`, and with a `ForwardRef` the model failed with
-  `AttributeError: 'ForwardRef' object has no attribute 'ormar_config'`.
-  [#1958](https://github.com/ormar-orm/ormar/pull/1958)
-* A model created before `update_forward_refs()` resolved a `ForwardRef` of a related
-  model (failing with `PydanticUndefinedAnnotation`) works once the reference is
-  resolved. It failed with `RecursionError` on every later use.
-  [#1955](https://github.com/ormar-orm/ormar/pull/1955)
-* `values()` / `values_list()` return fields with a custom database column `name=`
-  (they were left out). [#1935](https://github.com/ormar-orm/ormar/pull/1935)
-* Self-referencing `ManyToMany` relations with explicit `through_relation_name` and
-  `through_reverse_relation_name` use the names as documented on both sides; the
-  primary side swapped them, so the reverse side of the relation returned nothing.
-  [#1930](https://github.com/ormar-orm/ormar/pull/1930)
-* Models inheriting the same foreign key from an abstract parent no longer share
-  one field object. Queries joining or filtering through that relation from any
-  child but the last one defined (e.g. `select_related("label")`) referenced
-  the other child's table and failed with `no such column`.
-  [#1913](https://github.com/ormar-orm/ormar/pull/1913)
-* Relations to a model whose primary key is `0` work: the foreign key keeps `0`
-  (it was replaced with `-1`), non-nullable foreign keys to it can be saved, and
-  `prefetch_related` loads its related rows.
-  [#1913](https://github.com/ormar-orm/ormar/pull/1913)
-* Pydantic-only fields (`pydantic.Field(...)` or plain defaults) on ormar models
-  no longer fail with `PydanticUserError: Field ... requires a type annotation`
-  on Python 3.14+, where class bodies no longer store `__annotations__`
-  (PEP 649). [#1904](https://github.com/ormar-orm/ormar/pull/1904)
-* A related model given as a dict with only its primary key and nested relations
-  (e.g. `Writer(notes=[{"id": 2, "letter": {"id": 3}}])`) keeps the nested
-  relations; it was built as a pk-only model, which dropped them. Such a dict now
-  builds a full model, so required fields of that model have to be given (see
-  Breaking changes). [#1957](https://github.com/ormar-orm/ormar/pull/1957)
+* A model with both a concrete relation and a `ForwardRef` relation (e.g. `ForeignKey(Author)` next to `ForeignKey(ForwardRef("Book"))`) no longer fails at class creation with `PydanticUndefinedAnnotation`. The related models finish building when `update_forward_refs()` resolves the reference; before that, other models connected to them already work in `model_dump()`, `bulk_create()`, `save_related()` and `get_pydantic()`, which skip the unresolved relation. [#1931](https://github.com/ormar-orm/ormar/pull/1931), [#1952](https://github.com/ormar-orm/ormar/pull/1952)
+* `pk` lookups other than `pk=` (`pk__in`, `pk__gt`, ...) failed with `KeyError`, and ordering by `pk` (`order_by("pk")` / `order_by("-pk")`, `ormar_config` `order_by=["-pk"]`, relation `orders_by` / `related_orders_by`) produced invalid SQL. Both work for every model now. [#1926](https://github.com/ormar-orm/ormar/pull/1926)
+* The reverse side of a relation is registered when the related model has a field named like the owner model, e.g. `Player.coach = ForeignKey(Coach)` next to `Coach.fans = ManyToMany(Player, related_name="idols")`. `idols` was silently skipped (`Player(idols=...)` raised `ModelError`, `coach.fans.add()` a `KeyError`), a field with that name leading to another model raised a false `ModelDefinitionError`, and with a `ForwardRef` the model failed with `AttributeError: 'ForwardRef' object has no attribute 'ormar_config'`. [#1958](https://github.com/ormar-orm/ormar/pull/1958)
+* A model created before `update_forward_refs()` resolved a `ForwardRef` of a related model (failing with `PydanticUndefinedAnnotation`) works once the reference is resolved. It failed with `RecursionError` on every later use. [#1955](https://github.com/ormar-orm/ormar/pull/1955)
+* `values()` / `values_list()` return fields with a custom database column `name=` (they were left out). [#1935](https://github.com/ormar-orm/ormar/pull/1935)
+* Self-referencing `ManyToMany` relations with explicit `through_relation_name` and `through_reverse_relation_name` use the names as documented on both sides; the primary side swapped them, so the reverse side of the relation returned nothing. [#1930](https://github.com/ormar-orm/ormar/pull/1930)
+* Models inheriting the same foreign key from an abstract parent no longer share one field object. Queries joining or filtering through that relation from any child but the last one defined (e.g. `select_related("label")`) referenced the other child's table and failed with `no such column`. [#1913](https://github.com/ormar-orm/ormar/pull/1913)
+* Relations to a model whose primary key is `0` work: the foreign key keeps `0` (it was replaced with `-1`), non-nullable foreign keys to it can be saved, and `prefetch_related` loads its related rows. [#1913](https://github.com/ormar-orm/ormar/pull/1913)
+* Pydantic-only fields (`pydantic.Field(...)` or plain defaults) on ormar models no longer fail with `PydanticUserError: Field ... requires a type annotation` on Python 3.14+, where class bodies no longer store `__annotations__` (PEP 649). [#1904](https://github.com/ormar-orm/ormar/pull/1904)
+* A related model given as a dict with only its primary key and nested relations (e.g. `Writer(notes=[{"id": 2, "letter": {"id": 3}}])`) keeps the nested relations; it was built as a pk-only model, which dropped them. Such a dict now builds a full model, so required fields of that model have to be given (see Breaking changes). [#1957](https://github.com/ormar-orm/ormar/pull/1957)
 
 ## 0.27.0
 
