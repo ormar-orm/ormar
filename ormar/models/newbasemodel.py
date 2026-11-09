@@ -41,6 +41,7 @@ from ormar.models.excludable import (
 from ormar.models.helpers.relations import expand_reverse_relationship
 from ormar.models.helpers.sqlalchemy import (
     populate_config_sqlalchemy_table_if_required,
+    rebuild_primary_key,
     update_column_definition,
 )
 from ormar.models.metaclass import ModelMetaclass
@@ -947,6 +948,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 update_column_definition(model=cls, field=field)
         populate_config_sqlalchemy_table_if_required(config=cls.ormar_config)
         cls.reset_column_caches()
+        rebuild_primary_key(model=cls)
         # super().update_forward_refs(**localns)
         cls.model_rebuild(
             force=True,
