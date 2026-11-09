@@ -102,21 +102,36 @@ def rebuild_model(model: type["Model"]) -> None:
     Rebuilds pydantic schema, validator and serializer of the model with its
     current fields and clears its pending rebuild mark.
 
+    If the rebuild fails (i.e. a related model still has an unresolved
+    ForwardRef) the pending mark, snapshot and rebuild mocks are restored, so
+    the rebuild is retried once the reference is resolved.
+
     :param model: model to rebuild
     :type model: Model class
     """
-    pending = PENDING_ATTR in model.__dict__
-    for attr in (PENDING_ATTR, SNAPSHOT_ATTR):
-        if attr in model.__dict__:
-            delattr(model, attr)
+    marks = {
+        attr: model.__dict__[attr]
+        for attr in (PENDING_ATTR, SNAPSHOT_ATTR)
+        if attr in model.__dict__
+    }
+    for attr in marks:
+        delattr(model, attr)
+    pending = PENDING_ATTR in marks
     types_namespace = {
         related.__name__: related for related in related_models(model=model)
     }
     types_namespace[model.__name__] = model
     # A pending model is already mocked, so a plain rebuild regenerates it and
     # can reuse the compiled validators of nested models rebuilt before it.
-    with building_schemas():
-        model.model_rebuild(force=not pending, _types_namespace=types_namespace)
+    try:
+        with building_schemas():
+            model.model_rebuild(force=not pending, _types_namespace=types_namespace)
+    except Exception:
+        if pending:
+            for attr, value in marks.items():
+                setattr(model, attr, value)
+            set_rebuild_mocks(model=model)
+        raise
 
 
 def rebuild_pending_models(model: type["Model"]) -> None:
@@ -205,11 +220,12 @@ def set_rebuild_mocks(model: type["Model"]) -> None:
 
             :param kwargs: pydantic rebuild options, not used
             :type kwargs: Any
-            :return: rebuilt attribute or None if the model is still pending
+            :return: rebuilt attribute or None if the model is still not built
             :rtype: Optional[T]
             """
             rebuild_pending_models(model=model)
-            return None if PENDING_ATTR in model.__dict__ else getter()
+            value = getter()
+            return None if isinstance(value, (MockCoreSchema, MockValSer)) else value
 
         return attempt_rebuild
 
