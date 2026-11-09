@@ -152,7 +152,7 @@ In example `response_model_exclude={"category__priority", "category__other_field
 
 !!!Note
     Note that apart from `response_model_exclude` parameter `fastapi` supports also other parameters inherited from `pydantic`.
-    All of them works also with ormar, but can have some nuances so best to read [dict](../models/methods.md#dict) part of the documentation.
+    All of them works also with ormar, but can have some nuances so best to read [model_dump](../models/methods.md#model_dump) part of the documentation.
 
 ### Exclude in `Model.model_dump()`
 

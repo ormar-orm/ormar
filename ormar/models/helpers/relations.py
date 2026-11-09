@@ -374,6 +374,10 @@ def verify_related_name_dont_duplicate(
     auto generated) is already used on related model, but is connected with other model
     than the one that we connect right now.
 
+    A field still leading to an unresolved ForwardRef cannot be compared yet, so the
+    check is deferred and repeated by ``verify_deferred_related_names`` once the
+    field is resolved.
+
     :raises ModelDefinitionError: if name is already used but lead to different related
     model
     :param related_name:
@@ -385,6 +389,11 @@ def verify_related_name_dont_duplicate(
     """
     fk_field = model_field.to.ormar_config.model_fields.get(related_name)
     if not fk_field:  # pragma: no cover
+        return
+    if fk_field.has_unresolved_forward_refs():
+        cast("ForeignKeyField", fk_field).deferred_related_name_checks.append(
+            model_field
+        )
         return
     if (
         fk_field.to != model_field.owner
@@ -402,9 +411,30 @@ def verify_related_name_dont_duplicate(
         )
 
 
+def verify_deferred_related_names(model_field: "ForeignKeyField") -> None:
+    """
+    Repeats the related_name checks deferred while given field was leading to an
+    unresolved ForwardRef, now that its target model is known.
+
+    :raises ModelDefinitionError: if the field's name was used as related_name by a
+    relation leading from a different model
+    :param model_field: just resolved relation field
+    :type model_field: relation Field
+    :return: None
+    :rtype: None
+    """
+    deferred = model_field.deferred_related_name_checks
+    model_field.deferred_related_name_checks = []
+    for claiming_field in deferred:
+        verify_related_name_dont_duplicate(
+            related_name=model_field.name, model_field=claiming_field
+        )
+
+
 def reverse_field_not_already_registered(model_field: "ForeignKeyField") -> bool:
     """
-    Checks if child is already registered in parents pydantic fields.
+    Checks if the reverse side of the relation is not yet registered on the
+    related model, i.e. no field named as the relation's related_name exists there.
 
     :raises ModelDefinitionError: if related name is already used but lead to different
     related model
@@ -414,18 +444,9 @@ def reverse_field_not_already_registered(model_field: "ForeignKeyField") -> bool
     :rtype: bool
     """
     related_name = model_field.get_related_name()
-    check_result = related_name not in model_field.to.ormar_config.model_fields
-    check_result2 = (
-        model_field.owner.get_name() not in model_field.to.ormar_config.model_fields
+    if related_name not in model_field.to.ormar_config.model_fields:
+        return True
+    verify_related_name_dont_duplicate(
+        related_name=related_name, model_field=model_field
     )
-
-    if not check_result:
-        verify_related_name_dont_duplicate(
-            related_name=related_name, model_field=model_field
-        )
-    if not check_result2:
-        verify_related_name_dont_duplicate(
-            related_name=model_field.owner.get_name(), model_field=model_field
-        )
-
-    return check_result and check_result2
+    return False

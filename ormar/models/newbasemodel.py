@@ -45,7 +45,10 @@ from ormar.models.helpers.rebuild import (
     rebuild_pending_models,
     schema_snapshot,
 )
-from ormar.models.helpers.relations import expand_reverse_relationship
+from ormar.models.helpers.relations import (
+    expand_reverse_relationship,
+    verify_deferred_related_names,
+)
 from ormar.models.helpers.sqlalchemy import (
     populate_config_sqlalchemy_table_if_required,
     rebuild_primary_key,
@@ -1006,6 +1009,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 if field.is_multi and not field.through:
                     field = cast(ormar.ManyToManyField, field)
                     field.create_default_through_model()
+                verify_deferred_related_names(model_field=field)
                 expand_reverse_relationship(model_field=field)
                 update_column_definition(model=cls, field=field)
         populate_config_sqlalchemy_table_if_required(config=cls.ormar_config)

@@ -305,7 +305,7 @@ select related etc related models directly from parent model.
 
 ### get
 
-Works exactly the same as [get](./#get) function above but allows you to fetch related
+Works exactly the same as [get](#get) function above but allows you to fetch related
 objects from other side of the relation.
 
 !!!tip 
@@ -321,7 +321,7 @@ Exact equivalent of get described above but instead of raising the exception ret
 
 ### get_or_create
 
-Works exactly the same as [get_or_create](./#get_or_create) function above but allows
+Works exactly the same as [get_or_create](#get_or_create) function above but allows
 you to query or create related objects from other side of the relation.
 
 !!!tip 
@@ -329,7 +329,7 @@ you to query or create related objects from other side of the relation.
 
 ### first
 
-Works exactly the same as [first](./#first) function above but allows you to query
+Works exactly the same as [first](#first) function above but allows you to query
 related objects from other side of the relation.
 
 !!!tip 
@@ -337,7 +337,7 @@ related objects from other side of the relation.
 
 ### first_or_none
 
-Works exactly the same as [first_or_none](./#first_or_none) function above but
+Works exactly the same as [first_or_none](#first_or_none) function above but
 returns `None` instead of raising `NoMatch`, and works on the relation side.
 
 !!!tip
@@ -345,7 +345,7 @@ returns `None` instead of raising `NoMatch`, and works on the relation side.
 
 ### last
 
-Works exactly the same as [last](./#last) function above but allows you to query
+Works exactly the same as [last](#last) function above but allows you to query
 related objects from other side of the relation.
 
 !!!tip
@@ -353,7 +353,7 @@ related objects from other side of the relation.
 
 ### last_or_none
 
-Works exactly the same as [last_or_none](./#last_or_none) function above but
+Works exactly the same as [last_or_none](#last_or_none) function above but
 returns `None` instead of raising `NoMatch`, and works on the relation side.
 
 !!!tip
@@ -361,7 +361,7 @@ returns `None` instead of raising `NoMatch`, and works on the relation side.
 
 ### all
 
-Works exactly the same as [all](./#all) function above but allows you to query related
+Works exactly the same as [all](#all) function above but allows you to query related
 objects from other side of the relation.
 
 !!!tip 

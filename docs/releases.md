@@ -74,6 +74,15 @@
     `count_statement` takes `pk_column_names=` (a tuple) instead of
     `pk_column_name=`. [#1913](https://github.com/ormar-orm/ormar/pull/1913)
 
+* **A dict with a primary key and nested relations builds a full related model**
+
+    A related model given as a dict with its primary key and nested relations, e.g.
+    `Writer(notes=[{"id": 2, "letter": {"id": 3}}])`, used to be built as a pk-only
+    model, which silently dropped the nested relations. It now builds a full model
+    with them, so its required fields have to be given, or a `ValidationError` is
+    raised. A dict with only the primary key (`{"id": 2}`) is still pk-only.
+    [#1957](https://github.com/ormar-orm/ormar/pull/1957)
+
 * **Python 3.10 is no longer supported**
 
     Python 3.10 reaches end-of-life in October 2026, and the fixes for the
@@ -260,6 +269,18 @@
   ordering by `pk` (`order_by("pk")` / `order_by("-pk")`, `ormar_config`
   `order_by=["-pk"]`, relation `orders_by` / `related_orders_by`) produced invalid
   SQL. Both work for every model now. [#1926](https://github.com/ormar-orm/ormar/pull/1926)
+* The reverse side of a relation is registered when the related model has a field
+  named like the owner model, e.g. `Player.coach = ForeignKey(Coach)` next to
+  `Coach.fans = ManyToMany(Player, related_name="idols")`. `idols` was silently
+  skipped (`Player(idols=...)` raised `ModelError`, `coach.fans.add()` a
+  `KeyError`), a field with that name leading to another model raised a false
+  `ModelDefinitionError`, and with a `ForwardRef` the model failed with
+  `AttributeError: 'ForwardRef' object has no attribute 'ormar_config'`.
+  [#1958](https://github.com/ormar-orm/ormar/pull/1958)
+* A model created before `update_forward_refs()` resolved a `ForwardRef` of a related
+  model (failing with `PydanticUndefinedAnnotation`) works once the reference is
+  resolved. It failed with `RecursionError` on every later use.
+  [#1955](https://github.com/ormar-orm/ormar/pull/1955)
 * `values()` / `values_list()` return fields with a custom database column `name=`
   (they were left out). [#1935](https://github.com/ormar-orm/ormar/pull/1935)
 * Self-referencing `ManyToMany` relations with explicit `through_relation_name` and
@@ -279,6 +300,11 @@
   no longer fail with `PydanticUserError: Field ... requires a type annotation`
   on Python 3.14+, where class bodies no longer store `__annotations__`
   (PEP 649). [#1904](https://github.com/ormar-orm/ormar/pull/1904)
+* A related model given as a dict with only its primary key and nested relations
+  (e.g. `Writer(notes=[{"id": 2, "letter": {"id": 3}}])`) keeps the nested
+  relations; it was built as a pk-only model, which dropped them. Such a dict now
+  builds a full model, so required fields of that model have to be given (see
+  Breaking changes). [#1957](https://github.com/ormar-orm/ormar/pull/1957)
 
 ## 0.27.0
 

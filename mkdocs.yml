@@ -49,6 +49,15 @@ nav:
   - Release Notes: releases.md
   - Api (BETA): api/
 
+watch:
+  - ormar
+
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
 repo_name: ormar-orm/ormar
 repo_url: https://github.com/ormar-orm/ormar
 theme:
@@ -95,14 +104,15 @@ plugins:
     nav_file: SUMMARY.md
 - section-index
 - mkdocstrings:
-    watch:
-      - ormar
     handlers:
       python:
-        selection:
+        options:
           docstring_style: sphinx
-        rendering:
-          show_submodules: no
+          # griffe reports every `:type x:` that repeats a signature annotation
+          # as "Duplicate parameter information", which would fail --strict.
+          docstring_options:
+            warnings: false
+          show_submodules: false
 extra:
   analytics:
     provider: google

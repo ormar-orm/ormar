@@ -29,3 +29,5 @@ jobs:
         POETRY_VIRTUALENVS_CREATE: false
     - name: Test docs
       run: bash scripts/test_docs.sh
+    - name: Build docs (strict)
+      run: mkdocs build --strict
