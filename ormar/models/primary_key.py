@@ -16,7 +16,7 @@ import sqlalchemy
 from pydantic import BaseModel
 
 from ormar.exceptions import QueryDefinitionError
-from ormar.fields.link import referenced_value
+from ormar.fields.link import column_value, key_value
 from ormar.queryset.templates.slots import PK_SLOT
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -27,24 +27,6 @@ NOT_SCALAR = (tuple, list, dict, BaseModel)
 
 
 @dataclass(frozen=True)
-class ColumnSource:
-    """
-    A key field storing a key column, and where the column's value is read
-    from in a model dict.
-
-    :ivar field: key field storing the column
-    :ivar referenced: related model's field stored in the column for a
-        foreign key stored in several columns, ``None`` for a field storing
-        its own value
-    :ivar position: index of the column in the foreign key's link
-    """
-
-    field: str
-    referenced: Optional[str]
-    position: int
-
-
-@dataclass(frozen=True)
 class KeyLayout:
     """
     The columns of a primary key, resolved once (and again after the owner's
@@ -52,9 +34,7 @@ class KeyLayout:
 
     :ivar key: primary key the layout belongs to
     :ivar column_aliases: database column names in key order
-    :ivar sources: per key column, every key field storing it in key order
-    :ivar multi_column_parts: key fields that are foreign keys stored in
-        several columns
+    :ivar column_fields: per key column, the first key field storing it
     :ivar simple: whether every key field stores exactly one column of its
         own (no foreign key of several columns, no shared column), so the
         key value has one part per key field
@@ -63,8 +43,7 @@ class KeyLayout:
 
     key: "PrimaryKey"
     column_aliases: tuple[str, ...]
-    sources: tuple[tuple[ColumnSource, ...], ...]
-    multi_column_parts: frozenset[str]
+    column_fields: tuple[str, ...]
     simple: bool
     bind_slots: tuple[str, ...]
 
@@ -81,30 +60,6 @@ def not_scalar(parts: tuple[Any, ...]) -> bool:
         if isinstance(part, NOT_SCALAR):
             return True
     return False
-
-
-def relation_column_value(value: Any, referenced: str, position: int) -> Any:
-    """
-    Read one column's value out of the value a foreign key stored in several
-    columns holds: a related model, a dict of its fields or a tuple in link
-    order.
-
-    :param value: value held by the foreign key
-    :type value: Any
-    :param referenced: related model's field stored in the column
-    :type referenced: str
-    :param position: index of the column in the link
-    :type position: int
-    :return: the column's value, ``None`` when not set
-    :rtype: Any
-    """
-    if value is None:
-        return None
-    if isinstance(value, BaseModel):
-        return referenced_value(related=value, field=referenced)
-    if isinstance(value, dict):
-        return value.get(referenced)
-    return tuple(value)[position]
 
 
 class PrimaryKey(abc.ABC):
@@ -154,7 +109,9 @@ class PrimaryKey(abc.ABC):
         relation_field = self.relation_parts.get(field)
         if relation_field is None or not isinstance(value, BaseModel):
             return value
-        return relation_field.link.values_for(related=value)[field]
+        return column_value(
+            model=self.owner, data={field: value}, column=relation_field.get_alias()
+        )
 
     def part_type(self, field: str) -> Any:
         """
@@ -195,44 +152,27 @@ class PrimaryKey(abc.ABC):
 
     def build_layout(self) -> KeyLayout:
         """
-        Resolve the key's database columns: one per plain field or foreign key
-        of one column, one per link column of a foreign key stored in several
-        columns. A column several key fields share (e.g. a ``tenant_id`` of two
-        foreign keys) is listed once, where it first appears.
+        Resolve the key's database columns: the columns of each key field in
+        key order (all link columns of a foreign key), each column several
+        key fields share (e.g. a ``tenant_id`` of two foreign keys) listed
+        once, where it first appears.
 
         :return: the key's columns
         :rtype: KeyLayout
         """
         model_fields = self.owner.ormar_config.model_fields
-        multi_column_parts = frozenset(
-            field
-            for field in self.fields
-            if len(model_fields[field].column_aliases()) > 1
-        )
-        sources: dict[str, list[ColumnSource]] = {}
-        for field in self.fields:
-            if field in multi_column_parts:
-                pairs = self.relation_parts[field].link.pairs
-                for position, pair in enumerate(pairs):
-                    sources.setdefault(pair.source_column, []).append(
-                        ColumnSource(
-                            field=field,
-                            referenced=pair.target_field,
-                            position=position,
-                        )
-                    )
-            else:
-                column = self.owner.get_column_alias(field_name=field)
-                sources.setdefault(column, []).append(
-                    ColumnSource(field=field, referenced=None, position=0)
-                )
-        column_aliases = tuple(sources)
+        field_columns = [model_fields[field].column_aliases() for field in self.fields]
+        column_fields: dict[str, str] = {}
+        for field, columns in zip(self.fields, field_columns):
+            for column in columns:
+                column_fields.setdefault(column, field)
+        column_aliases = tuple(column_fields)
         return KeyLayout(
             key=self,
             column_aliases=column_aliases,
-            sources=tuple(tuple(owners) for owners in sources.values()),
-            multi_column_parts=multi_column_parts,
-            simple=not multi_column_parts and len(column_aliases) == len(self.fields),
+            column_fields=tuple(column_fields.values()),
+            simple=len(column_aliases) == len(self.fields)
+            and all(len(columns) == 1 for columns in field_columns),
             bind_slots=self.slot_names(count=len(column_aliases)),
         )
 
@@ -245,41 +185,19 @@ class PrimaryKey(abc.ABC):
         """
         return (PK_SLOT,)
 
-    def is_multi_column_part(self, field: str) -> bool:
+    def column_parts(self, data: Any) -> tuple[Any, ...]:
         """
-        :param field: key field name
-        :type field: str
-        :return: whether the field is a foreign key stored in several columns
-            (a relation to an unresolved forward reference counts as one)
-        :rtype: bool
-        """
-        return field in self.layout().multi_column_parts
-
-    def column_parts(self, data: Mapping[str, Any]) -> tuple[Any, ...]:
-        """
-        :param data: values by key field name (e.g. a model dict)
-        :type data: Mapping[str, Any]
-        :return: the value of each key column, ``None`` for missing ones; a
-            shared column takes the first value set
+        :param data: an instance of the owner, or its values by field name
+            (e.g. a model dict)
+        :type data: Any
+        :return: the value of each key column, ``None`` for missing ones (see
+            ``column_value``)
         :rtype: tuple[Any, ...]
         """
-        parts = []
-        for sources in self.layout().sources:
-            part = None
-            for source in sources:
-                value = data.get(source.field)
-                if source.referenced is None:
-                    part = self.part_value(field=source.field, value=value)
-                else:
-                    part = relation_column_value(
-                        value=value,
-                        referenced=source.referenced,
-                        position=source.position,
-                    )
-                if part is not None:
-                    break
-            parts.append(part)
-        return tuple(parts)
+        return tuple(
+            column_value(model=self.owner, data=data, column=column)
+            for column in self.column_aliases()
+        )
 
     def column_aliases(self) -> tuple[str, ...]:
         """
@@ -657,22 +575,21 @@ class CompositeKey(PrimaryKey):
         :return: the value of each key column, in key order
         :rtype: tuple[Any, ...]
         """
-        layout = self.layout()
         if isinstance(value, dict) and set(value) == set(self.fields):
-            for field in layout.multi_column_parts:
-                part = value[field]
+            for field, part in value.items():
                 if isinstance(part, (tuple, list)) and len(part) != len(
-                    self.relation_parts[field].link.pairs
+                    self.owner.ormar_config.model_fields[field].column_aliases()
                 ):
                     raise self.mismatch_error(value=value)
             return self.column_parts(data=value)
-        sources = layout.sources
-        if isinstance(value, (tuple, list)) and len(value) == len(sources):
+        layout = self.layout()
+        if isinstance(value, (tuple, list)) and len(value) == len(layout.column_fields):
+            model_fields = self.owner.ormar_config.model_fields
             return tuple(
-                self.part_value(field=column_sources[0].field, value=part)
-                if column_sources[0].referenced is None
+                self.part_value(field=field, value=part)
+                if len(model_fields[field].column_aliases()) == 1
                 else part
-                for column_sources, part in zip(sources, value)
+                for field, part in zip(layout.column_fields, value)
             )
         raise self.mismatch_error(value=value)
 
@@ -701,18 +618,16 @@ class CompositeKey(PrimaryKey):
         :return: key parts by field name
         :rtype: dict[str, Any]
         """
-        layout = self.layout()
-        by_column = dict(zip(layout.column_aliases, self.flat_parts(value=value)))
-        values: dict[str, Any] = {}
-        for field in self.fields:
-            if field in layout.multi_column_parts:
-                values[field] = tuple(
-                    by_column[column]
-                    for column in self.relation_parts[field].link.source_columns()
+        by_column = dict(zip(self.column_aliases(), self.flat_parts(value=value)))
+        model_fields = self.owner.ormar_config.model_fields
+        return {
+            field: key_value(
+                parts=tuple(
+                    by_column[column] for column in model_fields[field].column_aliases()
                 )
-            else:
-                values[field] = by_column[self.owner.get_column_alias(field_name=field)]
-        return values
+            )
+            for field in self.fields
+        }
 
     def getter(self, keys: tuple[str, ...]) -> Callable[[Mapping[str, Any]], Any]:
         """

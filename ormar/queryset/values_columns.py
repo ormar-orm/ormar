@@ -22,12 +22,12 @@ class ValuesColumns:
     :ivar names: ``(query column label, returned name)`` pairs in query
         order; the columns of a foreign key stored in several columns share
         one name, a column several fields share is listed once per field
-    :ivar key_parts: target field by ``(label, name)``, for the columns of
+    :ivar key_parts: resolved column by ``(label, name)``, for the columns of
         foreign keys stored in several columns
     """
 
     names: tuple[tuple[str, str], ...]
-    key_parts: dict[tuple[str, str], str]
+    key_parts: dict[tuple[str, str], "ReturnedColumn"]
 
 
 @dataclass(frozen=True)
@@ -36,12 +36,14 @@ class ReturnedColumn:
     A field of the query columns resolved for ``values()``.
 
     :ivar name: name of the field
-    :ivar part: target field of the column, for a foreign key stored in
-        several columns
+    :ivar relation: the field, for a foreign key stored in several columns
+    :ivar part: target column the column stores, for such a foreign key
+        (empty otherwise)
     """
 
     name: str
-    part: Optional[str] = None
+    relation: Optional["ForeignKeyField"] = None
+    part: str = ""
 
 
 def resolve_column(
@@ -68,12 +70,19 @@ def resolve_column(
             if field is not None and field.kind.holds_columns
             else ()
         )
-        part = (
-            next(pair.target_field for pair in pairs if pair.source_column == column)
-            if len(pairs) > 1
-            else None
-        )
-        resolved.append(ReturnedColumn(name=field_name, part=part))
+        if len(pairs) > 1:
+            part = next(
+                pair.target_column for pair in pairs if pair.source_column == column
+            )
+            resolved.append(
+                ReturnedColumn(
+                    name=field_name,
+                    relation=cast("ForeignKeyField", field),
+                    part=part,
+                )
+            )
+        else:
+            resolved.append(ReturnedColumn(name=field_name))
     return resolved
 
 
@@ -208,7 +217,7 @@ def values_column_map(
         )
     )
     names: list[tuple[str, str]] = []
-    key_parts: dict[tuple[str, str], str] = dict()
+    key_parts: dict[tuple[str, str], ReturnedColumn] = dict()
     for column_name in column_names:
         prefix, _, column = column_name.partition("_")
         if prefix in tables:
@@ -225,8 +234,8 @@ def values_column_map(
         for returned in resolved:
             entry = (column_name, f"{name_prefix}{returned.name}")
             names.append(entry)
-            if returned.part is not None:
-                key_parts[entry] = returned.part
+            if returned.relation is not None:
+                key_parts[entry] = returned
     return ValuesColumns(names=tuple(names), key_parts=key_parts)
 
 
@@ -317,13 +326,13 @@ def group_value(
     :return: the value of the returned name
     :rtype: Any
     """
-    if (labels[0], name) not in columns.key_parts:
+    first = columns.key_parts.get((labels[0], name))
+    if first is None:
         return row[labels[0]]
-    parts = tuple(row[label] for label in labels)
-    if None in parts:
+    values = {columns.key_parts[(label, name)].part: row[label] for label in labels}
+    if None in values.values():
         return None
+    relation = cast("ForeignKeyField", first.relation)
     if as_dict:
-        return {
-            columns.key_parts[(label, name)]: part for label, part in zip(labels, parts)
-        }
-    return parts
+        return relation.flat_from_columns(values=values)
+    return tuple(values[column] for column in relation.link.target_columns())

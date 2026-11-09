@@ -26,9 +26,9 @@ from ormar.fields.key_only import (
 from ormar.fields.link import (
     ColumnPair,
     RelationLink,
+    column_value,
     key_parts,
     qualified_fk_reference,
-    referenced_value,
 )
 from ormar.fields.referential_actions import ReferentialAction
 from ormar.fields.relation_kind import FOREIGN_KEY_KINDS, RelationKind
@@ -67,33 +67,25 @@ def to_field_names(
     return tuple(to_field)
 
 
-def keyed_by_multi_column_relation(model: type["Model"]) -> bool:
+def referenced_columns(
+    to: type["Model"], to_field: Union[str, list[str], tuple[str, ...], None]
+) -> dict[str, str]:
     """
-    :param model: model to check
-    :type model: type[Model]
-    :return: whether the model's primary key holds a foreign key stored in
-        several columns (e.g. a link table keyed by two such foreign keys)
-    :rtype: bool
-    """
-    key = model.ormar_config.pk
-    return any(len(field.column_aliases()) > 1 for field in key.relation_parts.values())
-
-
-def validate_key_target(to: type["Model"]) -> None:
-    """
-    A relation can't lead to a model whose primary key holds a foreign key
-    stored in several columns (e.g. a link table keyed by two such foreign
-    keys) yet.
-
-    :raises ModelDefinitionError: if the target's key holds such a foreign key
     :param to: target model
     :type to: type[Model]
+    :param to_field: referenced field(s), ``None`` for the primary key
+    :type to_field: Union[str, list[str], tuple[str, ...], None]
+    :return: database columns of the target a foreign key references, each
+        with the target field storing it: the ``to_field`` columns or the
+        primary key columns (a key holding foreign keys contributes their
+        columns, each shared column once)
+    :rtype: dict[str, str]
     """
-    if keyed_by_multi_column_relation(model=to):
-        raise ModelDefinitionError(
-            f"Relations to {to.__name__}, whose primary key holds a foreign key "
-            "stored in several columns, are not supported yet."
-        )
+    names = to_field_names(to_field=to_field)
+    if names is None:
+        layout = to.ormar_config.pk.layout()
+        return dict(zip(layout.column_aliases, layout.column_fields))
+    return {to.get_column_alias(field_name=name): name for name in names}
 
 
 def populate_fk_params_based_on_to_model(
@@ -118,8 +110,6 @@ def populate_fk_params_based_on_to_model(
     :return: annotation, column type and key-only model of the relation
     :rtype: FkParams
     """
-    if not virtual:
-        validate_key_target(to=to)
     key = to.ormar_config.pk
     names = to_field_names(to_field=to_field)
     if names is None:
@@ -147,6 +137,74 @@ def populate_fk_params_based_on_to_model(
     )
 
 
+def column_type(model: type["Model"], field: str, column: str) -> Any:
+    """
+    :param model: model the column belongs to
+    :type model: type[Model]
+    :param field: field of the model storing the column
+    :type field: str
+    :param column: database column
+    :type column: str
+    :return: SQLAlchemy type of the column: the field's own type, the type
+        of the referenced column for a foreign key
+    :rtype: Any
+    """
+    model_field = model.ormar_config.model_fields[field]
+    if not model_field.is_relation:
+        return model_field.column_type
+    pair = next(
+        pair
+        for pair in cast("ForeignKeyField", model_field).link.pairs
+        if pair.source_column == column
+    )
+    return column_type(
+        model=model_field.to, field=pair.target_field, column=pair.target_column
+    )
+
+
+def flat_field_from_columns(
+    model: type["Model"], field: str, values: dict[str, Any]
+) -> Any:
+    """
+    :param model: model the field belongs to
+    :type model: type[Model]
+    :param field: referenced field
+    :type field: str
+    :param values: values of the model's columns by column name
+    :type values: dict[str, Any]
+    :return: the field's value in flattened output: a relation's own
+        flattened value (see ``ForeignKeyField.flat_from_columns``), else the
+        value of its column
+    :rtype: Any
+    """
+    model_field = model.ormar_config.model_fields[field]
+    if not model_field.is_relation:
+        return values[model.get_column_alias(field_name=field)]
+    relation = cast("ForeignKeyField", model_field)
+    return relation.flat_from_columns(
+        values={
+            pair.target_column: values[pair.source_column]
+            for pair in relation.link.pairs
+        }
+    )
+
+
+def flat_field_type(model: type["Model"], field: str) -> Any:
+    """
+    :param model: model the field belongs to
+    :type model: type[Model]
+    :param field: referenced field
+    :type field: str
+    :return: python type of the field in flattened output (see
+        ``flat_field_from_columns``)
+    :rtype: Any
+    """
+    model_field = model.ormar_config.model_fields[field]
+    if model_field.is_relation:
+        return cast("ForeignKeyField", model_field).flat_value_type()
+    return model_field.__type__
+
+
 def validate_link_columns(
     to: type["Model"],
     to_field: Union[str, list[str], tuple[str, ...], None],
@@ -168,8 +226,7 @@ def validate_link_columns(
     :param name: single local column name
     :type name: Optional[str]
     """
-    names = to_field_names(to_field=to_field) or to.ormar_config.pk.fields
-    referenced = {to.get_column_alias(field_name=field) for field in names}
+    referenced = set(referenced_columns(to=to, to_field=to_field))
     if columns is not None and set(columns) != referenced:
         raise ModelDefinitionError(
             f"columns= must map every referenced column of {to.__name__} "
@@ -180,7 +237,7 @@ def validate_link_columns(
             f"columns= is for foreign keys to several columns of {to.__name__}, "
             "use name= to name the column."
         )
-    if len(names) > 1 and name is not None:
+    if len(referenced) > 1 and name is not None:
         raise ModelDefinitionError(
             f"A foreign key to several columns of {to.__name__} needs columns= "
             "instead of name=."
@@ -614,6 +671,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         if self.virtual:
             forward = self.to.ormar_config.model_fields[self.get_related_name()]
             return cast("ForeignKeyField", forward).link.mirrored()
+        columns = referenced_columns(to=self.to, to_field=self.to_field)
         return RelationLink(
             source=self.owner,
             target=self.to,
@@ -621,12 +679,12 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
                 ColumnPair(
                     source_field=self.name,
                     source_column=self.local_column(
-                        target_column=self.to.get_column_alias(field_name=field)
+                        target_column=column, several=len(columns) > 1
                     ),
                     target_field=field,
-                    target_column=self.to.get_column_alias(field_name=field),
+                    target_column=column,
                 )
-                for field in self.target_fields()
+                for column, field in columns.items()
             ),
         )
 
@@ -641,10 +699,12 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
             return names
         return self.to.ormar_config.pk.fields
 
-    def local_column(self, target_column: str) -> str:
+    def local_column(self, target_column: str, several: bool) -> str:
         """
         :param target_column: referenced column of the related model's table
         :type target_column: str
+        :param several: whether the foreign key references several columns
+        :type several: bool
         :return: name of the owner's column storing it: from ``columns=``, the
             field's own column for a single-column key, or
             ``<field>_<referenced column>`` for keys of several columns
@@ -652,7 +712,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         """
         if self.columns is not None:
             return self.columns[target_column]
-        if len(self.target_fields()) == 1:
+        if not several:
             return self.get_alias()
         return f"{self.name}_{target_column}"
 
@@ -668,11 +728,12 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         pairs = self.link.pairs
         if len(pairs) == 1:
             return [self.get_column(pairs[0].source_column)]
-        target_fields = self.to.ormar_config.model_fields
         return [
             sqlalchemy.Column(
                 name=pair.source_column,
-                type_=cast(Any, target_fields[pair.target_field].column_type),
+                type_=column_type(
+                    model=self.to, field=pair.target_field, column=pair.target_column
+                ),
                 nullable=self.sql_nullable,
                 primary_key=self.primary_key,
                 autoincrement=False,
@@ -923,18 +984,48 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
             Track.album -> 4
             Address.country (to_field="iso_code") -> "PL"
             OrderLine.order (two columns) -> {"tenant_id": 1, "number": 7}
+            Shift.membership -> {"tenant_id": 1, "member": {...}, "team": {...}}
+
+        A referenced field that is itself a relation (a key holding a foreign
+        key) is represented by its own flattened value.
 
         :param related: related model
         :type related: Model
         :return: the referenced value, a dict of them for several fields
         :rtype: Any
         """
+        return self.flat_from_columns(
+            values={
+                column: column_value(model=self.to, data=related, column=column)
+                for column in self.flat_columns()
+            }
+        )
+
+    def flat_columns(self) -> tuple[str, ...]:
+        """
+        :return: columns of the related model holding ``flat_fields``
+        :rtype: tuple[str, ...]
+        """
+        if not self.kind.holds_columns:
+            return self.to.ormar_config.pk.column_aliases()
+        return self.link.target_columns()
+
+    def flat_from_columns(self, values: dict[str, Any]) -> Any:
+        """
+        Build the flattened representation of a related model (see
+        ``flat_value``) out of the values of its ``flat_columns``.
+
+        :param values: values of the related model's columns by column name
+        :type values: dict[str, Any]
+        :return: the referenced value, a dict of them for several fields
+        :rtype: Any
+        """
         fields = self.flat_fields()
-        if len(fields) == 1:
-            return referenced_value(related=related, field=fields[0])
-        return {
-            field: referenced_value(related=related, field=field) for field in fields
+        flat = {
+            field: flat_field_from_columns(model=self.to, field=field, values=values)
+            for field in fields
         }
+        return flat[fields[0]] if len(fields) == 1 else flat
 
     def flat_value_type(self) -> Any:
         """
@@ -944,9 +1035,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         fields = self.flat_fields()
         if len(fields) > 1:
             return key_dict_type(target=self.to, fields=fields)
-        if not self.kind.holds_columns:
-            return self.to.ormar_config.model_fields[fields[0]].__type__
-        return self.target_value_type()
+        return flat_field_type(model=self.to, field=fields[0])
 
     def target_value_type(self) -> Any:
         """

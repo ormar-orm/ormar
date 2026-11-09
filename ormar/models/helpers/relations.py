@@ -20,7 +20,6 @@ import ormar
 from ormar import ForeignKey, ManyToMany
 from ormar.exceptions import ModelDefinitionError
 from ormar.fields import Through
-from ormar.fields.foreign_key import keyed_by_multi_column_relation
 from ormar.fields.relation_kind import (
     REVERSE_FOREIGN_KEY,
     REVERSE_ONE_TO_ONE,
@@ -208,25 +207,6 @@ def resolve_through_side(
         setattr(model_field, attribute, candidates[0])
 
 
-def validate_many_to_many_owner(model_field: "ForeignKeyField") -> None:
-    """
-    A many-to-many relation can't be declared on a model whose primary key
-    holds a foreign key stored in several columns (e.g. on a link table keyed
-    by two such foreign keys) yet.
-
-    :raises ModelDefinitionError: if the owner's key holds such a foreign key
-    :param model_field: many-to-many field
-    :type model_field: ForeignKeyField
-    """
-    owner = model_field.owner
-    if keyed_by_multi_column_relation(model=owner):
-        raise ModelDefinitionError(
-            f"ManyToMany field {owner.__name__}.{model_field.name} can't be declared "
-            f"on {owner.__name__}, whose primary key holds a foreign key stored in "
-            "several columns, yet."
-        )
-
-
 def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
     """
     Registers reverse ForeignKey field on related model.
@@ -242,7 +222,6 @@ def register_reverse_model_fields(model_field: "ForeignKeyField") -> None:
     reset_relation_caches(model=model_field.to)
     related_model_fields = model_field.to.ormar_config.model_fields
     if model_field.is_multi:
-        validate_many_to_many_owner(model_field=model_field)
         resolve_through_fields(model_field=cast("ManyToManyField", model_field))
         related_model_fields[related_name] = ManyToMany(  # type: ignore
             model_field.owner,

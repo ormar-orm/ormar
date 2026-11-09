@@ -41,6 +41,7 @@ from ormar.models.excludable import (
 from ormar.models.helpers.relations import expand_reverse_relationship
 from ormar.models.helpers.sqlalchemy import (
     populate_config_sqlalchemy_table_if_required,
+    rebuild_primary_key,
     update_column_definition,
 )
 from ormar.models.metaclass import ModelMetaclass
@@ -947,6 +948,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 update_column_definition(model=cls, field=field)
         populate_config_sqlalchemy_table_if_required(config=cls.ormar_config)
         cls.reset_column_caches()
+        rebuild_primary_key(model=cls)
         # super().update_forward_refs(**localns)
         cls.model_rebuild(
             force=True,
@@ -1383,8 +1385,15 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             if relation_map is not None
             else translate_list_to_dict(self._iterate_related_models())
         )
-        pk_only = getattr(self, "__pk_only__", False)
-        if relation_map and not pk_only:
+        if relation_map and getattr(self, "__pk_only__", False):
+            # a key-only model holds no relations besides the ones in its key
+            key_relations = self.ormar_config.pk.relation_parts
+            relation_map = {
+                name: nested
+                for name, nested in relation_map.items()
+                if name in key_relations
+            }
+        if relation_map:
             dict_instance = self._extract_nested_models(
                 relation_map=relation_map,
                 dict_instance=dict_instance,

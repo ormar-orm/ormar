@@ -137,15 +137,17 @@ class Model(ModelRow):
         if key.autoincrement:
             return
         model_fields = self.ormar_config.model_fields
-        layout = key.layout()
         missing: list[str] = []
-        for column, sources in zip(layout.column_aliases, layout.sources):
+        for column in key.column_aliases():
+            owners = [
+                name
+                for name in self.get_field_names_of_column(column=column)
+                if name in key.fields
+            ]
             if row.get(column) is None and all(
-                model_fields[source.field].server_default is None for source in sources
+                model_fields[name].server_default is None for name in owners
             ):
-                missing.extend(
-                    source.field for source in sources if source.field not in missing
-                )
+                missing.extend(name for name in owners if name not in missing)
         if missing:
             raise ModelPersistenceError(
                 f"{self.__class__.__name__} primary key parts must be set before "
