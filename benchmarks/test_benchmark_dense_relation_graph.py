@@ -61,7 +61,7 @@ def test_dense_graph_has_many_relation_paths():
     assert len(Leaf._iterate_related_models()) == 9240
 
 
-@pytest.mark.parametrize("num_models", [10, 50])
+@pytest.mark.parametrize("num_models", [1, 10, 50])
 async def test_dumping_models_with_dense_relation_graph(aio_benchmark, num_models: int):
     leaves = [Leaf(id=i, name=f"leaf {i}") for i in range(num_models)]
 
@@ -70,6 +70,31 @@ async def test_dumping_models_with_dense_relation_graph(aio_benchmark, num_model
         return [leaf.model_dump() for leaf in leaves]
 
     assert len(dump()) == num_models
+
+
+@pytest.mark.parametrize(
+    "dump_kwargs",
+    [
+        {"include": {"id", "name"}},
+        {"exclude": {"link_0_dense_graph_0", "link_1_dense_graph_0"}},
+        {"exclude": {"link_0_dense_graph_0": {"links_0_from_1"}}},
+        {"include": {"id": ..., "link_0_dense_graph_0": {"id", "name"}}},
+    ],
+    ids=["include", "exclude", "nested-exclude", "nested-include"],
+)
+async def test_dumping_with_include_exclude_on_dense_relation_graph(
+    aio_benchmark, dump_kwargs: dict
+):
+    root = GRAPH[0](id=1, name="root")
+    leaves = [
+        Leaf(id=i, name=f"leaf {i}", link_0_dense_graph_0=root) for i in range(10)
+    ]
+
+    @aio_benchmark
+    async def dump():
+        return [leaf.model_dump(**dump_kwargs) for leaf in leaves]
+
+    assert len(dump()) == 10
 
 
 @pytest.mark.parametrize("num_models", [10, 50])

@@ -132,9 +132,10 @@ def test_tree_is_built_once_per_class_across_dumps(monkeypatch):
     monkeypatch.setattr(relation_mixin, "translate_list_to_dict", counting)
     RelationGraph.changed()
     comment = build_comment()
-    for _ in range(50):
-        comment.model_dump()
-        comment.post.model_dump(exclude={"author"})
+    for _ in range(20):
+        for options in DUMP_OPTIONS:
+            comment.model_dump(**options)
+            comment.post.model_dump(**options)
     assert len(calls) == 2
 
 
