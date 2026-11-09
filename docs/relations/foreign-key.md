@@ -428,6 +428,8 @@ await Membership.objects.get(member=alice, team=core)  # the same row
   check the rest.
 * Setting a foreign key that shares a column to `None` writes `NULL` to its own
   columns and leaves the shared column as it is. The relation then reads as `None`.
+  The shared column becomes `NULL` only when every foreign key storing it is `None`
+  and no plain field stores it.
 * A plain field sharing the column that isn't set is filled in from the foreign keys
   when the model is created (`Membership(member=alice, team=core).tenant_id == 1`, so
   `model_dump()` and `pk` agree before saving), which also lets a required plain field

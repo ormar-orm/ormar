@@ -536,3 +536,24 @@ async def test_key_values_need_one_value_per_column(data):
         await Seat.objects.filter(pk__in=[(1, (1, "alice"), "core")]).count()
     with pytest.raises(QueryDefinitionError, match="one value per column"):
         Seat.ormar_config.pk.to_dict(value=(1, "alice"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [CompositeFirst, SingleFirst])
+async def test_clearing_every_foreign_key_clears_the_shared_column(data, model):
+    first, _, alice, _ = data
+    row = await model.objects.create(tenant=first, member=alice)
+    row.member = None
+    await row.update()
+    kept = await model.objects.get(id=row.id)
+    assert kept.member is None
+    assert kept.tenant.id == 1
+
+    row.tenant = None
+    await row.update()
+    cleared = await model.objects.get(id=row.id)
+    assert cleared.member is None
+    assert cleared.tenant is None
+    await model.objects.filter(id=row.id).update(tenant=first, member=alice)
+    await model.objects.filter(id=row.id).update(tenant=None, member=None)
+    assert (await model.objects.get(id=row.id)).tenant is None
