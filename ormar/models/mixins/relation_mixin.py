@@ -174,8 +174,12 @@ class RelationMixin:
         relations = sorted(cls.extract_related_names())
         processed_relations: list[str] = []
         for relation in relations:
+            field = cls.ormar_config.model_fields[relation]
+            # a relation to a forward reference joins the paths once resolved
+            if field.has_unresolved_forward_refs():
+                continue
             if not current_node.visited(relation):
-                target_model = cls.ormar_config.model_fields[relation].to
+                target_model = field.to
                 node_list.add(
                     node_class=target_model,
                     relation_name=relation,
