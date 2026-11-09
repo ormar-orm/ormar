@@ -105,6 +105,11 @@
   `ManyToMany` `through` models. Different values for a shared column raise
   `ModelPersistenceError`. See
   [link tables keyed by foreign keys to several columns](relations/foreign-key.md#link-tables-keyed-by-foreign-keys-to-several-columns).
+* `ForeignKey`, `OneToOne` and `ManyToMany` relations to such link tables, and
+  `ManyToMany` relations declared on them, store one column per key column of the
+  link table (a shared column once). Flattened output and `values()` represent a
+  foreign key inside the referenced key by its own flattened value. See
+  [relations to link tables](relations/foreign-key.md#relations-to-link-tables).
 * `ManyToMany` relations to and from models with a composite key: the generated
   through table stores each key in several columns, and a `through` link table can
   declare such foreign keys itself. See

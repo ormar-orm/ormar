@@ -9,13 +9,13 @@ prefetch and relation proxies never derive the columns themselves.
 
 import operator
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping
+from functools import cached_property
+from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping, cast
 
 from pydantic import BaseModel
 
-import ormar
-
 if TYPE_CHECKING:  # pragma: no cover
+    from ormar.fields import BaseField, ForeignKeyField
     from ormar.models import Model
 
 
@@ -65,25 +65,107 @@ def key_parts(value: Any, size: int) -> tuple[Any, ...]:
     return (value,) if size == 1 else tuple(value)
 
 
-def referenced_value(related: BaseModel, field: str) -> Any:
+ColumnReader = Callable[[Any], Any]
+
+
+def column_value(model: type["Model"], data: Any, column: str) -> Any:
     """
-    Read the value a foreign key stores for a related model: its value of the
-    referenced field, resolved to a raw value when that field is itself a
-    relation (a model keyed by a foreign key)::
+    Read the value one of a model's columns stores out of an instance of the
+    model, its key-only pydantic model or a dict of its fields (see
+    ``column_reader``).
 
-        Profile keyed by ForeignKey(Student) -> profile.student.id
-
-    :param related: related model or its key-only pydantic model
-    :type related: BaseModel
-    :param field: referenced field of the related model
-    :type field: str
-    :return: raw referenced value, ``None`` when not set
+    :param model: model the column belongs to
+    :type model: type[Model]
+    :param data: instance of the model, its key-only model or a dict of its
+        fields
+    :type data: Any
+    :param column: database column of the model
+    :type column: str
+    :return: raw value of the column, ``None`` when not set
     :rtype: Any
     """
-    value = getattr(related, field, None)
-    if isinstance(value, BaseModel) and isinstance(related, ormar.Model):
-        return related.ormar_config.pk.part_value(field=field, value=value)
-    return value
+    return model.column_reader(column=column)(data)
+
+
+def column_reader(model: type["Model"], column: str) -> ColumnReader:
+    """
+    Build the reader of one of a model's columns. A column stored by a
+    relation is read out of the related value (a model, a dict of its fields
+    or a raw key), recursively, so a key holding foreign keys is read column
+    by column like any other::
+
+        Track, "album" -> track.album.id
+        Membership, "member_login" -> membership.member.login
+        {"member": (1, "alice")}, "member_login" -> "alice"
+
+    A column several fields share is read from the first one holding a value.
+
+    :param model: model the column belongs to
+    :type model: type[Model]
+    :param column: database column of the model
+    :type column: str
+    :return: callable reading the column's raw value out of an instance of the
+        model, its key-only model or a dict of its fields (``None`` when not
+        set)
+    :rtype: ColumnReader
+    """
+    model_fields = model.ormar_config.model_fields
+    readers = [
+        field_reader(name=name, field=model_fields[name], column=column)
+        for name in model.get_field_names_of_column(column=column)
+    ]
+    if len(readers) == 1:
+        return readers[0]
+
+    def read_first_set(data: Any) -> Any:
+        for reader in readers:
+            value = reader(data)
+            if value is not None:
+                return value
+        return None
+
+    return read_first_set
+
+
+def field_reader(name: str, field: "BaseField", column: str) -> ColumnReader:
+    """
+    :param name: name of the field storing the column
+    :type name: str
+    :param field: the field
+    :type field: BaseField
+    :param column: database column the field stores
+    :type column: str
+    :return: callable reading the column's raw value out of the field's value
+        (see ``column_reader``)
+    :rtype: ColumnReader
+    """
+    if not field.is_relation:
+
+        def read_plain(data: Any) -> Any:
+            if isinstance(data, dict):
+                return data.get(name)
+            return getattr(data, name, None)
+
+        return read_plain
+    link = cast("ForeignKeyField", field).link
+    position = link.source_columns().index(column)
+    single = len(link.pairs) == 1
+    target = link.target
+    target_column = link.pairs[position].target_column
+    # resolved on first use: a self-referencing key reaches its own reader
+    related: list[ColumnReader] = []
+
+    def read_relation(data: Any) -> Any:
+        value = data.get(name) if isinstance(data, dict) else getattr(data, name, None)
+        if value is None:
+            return None
+        if isinstance(value, (BaseModel, dict)):
+            if not related:
+                related.append(target.column_reader(column=target_column))
+            return related[0](value)
+        return value if single else tuple(value)[position]
+
+    return read_relation
 
 
 @dataclass(frozen=True)
@@ -173,10 +255,8 @@ class RelationLink:
 
     def key_of(self, model: "Model") -> Any:
         """
-        Read the value a source model holds for this link. A related model on
-        the source side is replaced by the raw value stored for it: the target
-        field's value for the link's own foreign key, the key part's value for
-        a primary key part that is a relation (mirrored links)::
+        Read the value a source model holds for this link, column by column
+        (see ``column_value``)::
 
             Track.album link, track.album == Album(id=4) -> 4
             Ledger.entries link, ledger.tenant == Tenant(id=4) -> (4, 1)
@@ -186,19 +266,10 @@ class RelationLink:
         :return: the value, a tuple for links of several columns
         :rtype: Any
         """
-        values = []
-        for pair in self.pairs:
-            value = getattr(model, pair.source_field)
-            if isinstance(value, ormar.Model):
-                key = model.ormar_config.pk
-                value = (
-                    key.part_value(field=pair.source_field, value=value)
-                    if pair.source_field in key.relation_parts
-                    and not key.is_multi_column_part(field=pair.source_field)
-                    else referenced_value(related=value, field=pair.target_field)
-                )
-            values.append(value)
-        return key_value(parts=tuple(values))
+        readers = self.source_readers
+        if len(readers) == 1:
+            return readers[0](model)
+        return tuple([read(model) for read in readers])
 
     def values_for(self, related: Any) -> dict[str, Any]:
         """
@@ -219,16 +290,31 @@ class RelationLink:
         """
         if related is None:
             parts: tuple[Any, ...] = (None,) * len(self.pairs)
-        elif isinstance(related, BaseModel):
-            parts = tuple(
-                referenced_value(related=related, field=pair.target_field)
-                for pair in self.pairs
-            )
-        elif isinstance(related, dict):
-            parts = tuple(related.get(pair.target_field) for pair in self.pairs)
+        elif isinstance(related, (BaseModel, dict)):
+            parts = tuple([read(related) for read in self.target_readers])
         else:
             parts = key_parts(value=related, size=len(self.pairs))
         return dict(zip(self.source_keys(), parts))
+
+    @cached_property
+    def source_readers(self) -> tuple[ColumnReader, ...]:
+        """
+        :return: readers of the source columns (see ``column_reader``)
+        :rtype: tuple[ColumnReader, ...]
+        """
+        return tuple(
+            self.source.column_reader(column=pair.source_column) for pair in self.pairs
+        )
+
+    @cached_property
+    def target_readers(self) -> tuple[ColumnReader, ...]:
+        """
+        :return: readers of the target columns (see ``column_reader``)
+        :rtype: tuple[ColumnReader, ...]
+        """
+        return tuple(
+            self.target.column_reader(column=pair.target_column) for pair in self.pairs
+        )
 
     def source_keys(self) -> tuple[str, ...]:
         """

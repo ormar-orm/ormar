@@ -3,9 +3,11 @@ from typing import TYPE_CHECKING, Any, NamedTuple, cast
 import ormar_rust_utils
 
 from ormar.exceptions import ModelPersistenceError
+from ormar.fields.link import ColumnReader, column_reader
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.fields import ForeignKeyField
+    from ormar.models import Model
 
 
 class SharedKey(NamedTuple):
@@ -53,6 +55,7 @@ class AliasMixin:
     _column_owners_map: dict[str, tuple[str, ...]]
     _shared_value_keys: dict[str, SharedKey]
     _shared_plain_fields: tuple[SharedPlainField, ...]
+    _column_readers: dict[str, "ColumnReader"]
 
     @classmethod
     def _build_alias_cache(cls) -> None:
@@ -167,6 +170,7 @@ class AliasMixin:
             "_shared_value_keys",
             "_shared_plain_fields",
             "_table_column_pairs",
+            "_column_readers",
         ):
             if name in cls.__dict__:
                 delattr(cls, name)
@@ -227,7 +231,27 @@ class AliasMixin:
         except AttributeError:
             cls._build_alias_cache()
             owners = cls._column_owners_map
-        return owners.get(column, (cls.get_field_name_of_column(column=column),))
+        return owners.get(column) or (cls.get_field_name_of_column(column=column),)
+
+    @classmethod
+    def column_reader(cls, column: str) -> "ColumnReader":
+        """
+        :param column: column name in the database
+        :type column: str
+        :return: cached reader of the column's raw value out of an instance of
+            the model, its key-only model or a dict of its fields (see
+            ``ormar.fields.link.column_reader``)
+        :rtype: ColumnReader
+        """
+        readers = cls.__dict__.get("_column_readers")
+        if readers is None:
+            readers = {}
+            cls._column_readers = readers
+        reader = readers.get(column)
+        if reader is None:
+            reader = column_reader(model=cast("type[Model]", cls), column=column)
+            readers[column] = reader
+        return reader
 
     @classmethod
     def shared_value_keys(cls) -> dict[str, SharedKey]:
@@ -302,9 +326,10 @@ class AliasMixin:
         order the foreign keys were processed in.
 
         A column several fields share keeps one value: a ``None`` is not
-        written to it (a shared column is never cleared through one of its
-        foreign keys), an unset plain field sharing the column is filled in,
-        and two different values are an error.
+        written to it while another of its fields holds a value (a shared
+        column is cleared only when every foreign key storing it is cleared
+        and no plain field stores it), an unset plain field sharing the
+        column is filled in, and two different values are an error.
 
         :raises ModelPersistenceError: if a shared column gets two values
         :param target: model dict being prepared, updated in place
@@ -320,6 +345,7 @@ class AliasMixin:
             for values in relation_values.values():
                 target.update(values)
             return
+        cleared: dict[str, int] = {}
         for field_name in cls.ormar_config.model_fields:
             field_values = relation_values.get(field_name)
             if field_values is None:
@@ -331,6 +357,7 @@ class AliasMixin:
                 kept, column = shared[key]
                 current = target.get(kept)
                 if value is None:
+                    cleared[kept] = cleared.get(kept, 0) + 1
                     continue
                 if current is None:
                     target[kept] = value
@@ -339,6 +366,31 @@ class AliasMixin:
                         f"{cls.__name__}.{field_name} stores {value!r} in column "
                         f"{column}, which another field sets to {current!r}."
                     )
+        cls.clear_shared_columns(target=target, cleared=cleared)
+
+    @classmethod
+    def clear_shared_columns(cls, target: dict, cleared: dict[str, int]) -> None:
+        """
+        Write ``None`` to a shared column no plain field stores when every key
+        storing it was cleared (e.g. two nullable foreign keys sharing a
+        ``tenant_id`` both set to ``None``).
+
+        :param target: model dict being prepared, updated in place
+        :type target: dict
+        :param cleared: number of ``None`` values given per kept key
+        :type cleared: dict[str, int]
+        """
+        if not cleared:
+            return
+        shared = cls.shared_value_keys()
+        model_fields = cls.ormar_config.model_fields
+        for kept, count in cleared.items():
+            stored_by_plain = (
+                kept in model_fields and not model_fields[kept].is_relation
+            )
+            sharing = sum(1 for value in shared.values() if value.kept == kept)
+            if not stored_by_plain and target.get(kept) is None and count == sharing:
+                target[kept] = None
 
     @classmethod
     def get_column_alias(cls, field_name: str) -> str:
