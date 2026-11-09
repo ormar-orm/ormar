@@ -6,6 +6,9 @@ import pytest_asyncio
 
 import ormar
 from ormar.exceptions import ModelDefinitionError
+from ormar.models.helpers.validation import generate_model_example
+from ormar.models.mixins.relation_mixin import RelationMixin
+from ormar.queryset.utils import translate_list_to_dict
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -405,3 +408,67 @@ async def test_foreign_key_to_a_model_keyed_by_one_foreign_key_of_several_column
     assert await Mention.objects.filter(profile__member__login="alice").count() == 1
     back = await Profile.objects.prefetch_related("mentions").get()
     assert len(back.mentions) == 1
+
+
+def fresh_tree(cls: type[ormar.Model]) -> dict:
+    return translate_list_to_dict(list_to_trans=cls._iterate_related_models())
+
+
+async def dump_bulk_create_and_select_related() -> tuple[list, list]:
+    membership = await Membership.objects.get(pk=(1, "alice", "core"))
+    await Shift.objects.bulk_create(
+        [Shift(membership=membership, hours=hours) for hours in (1, 2)]
+    )
+    shifts = (
+        await Shift.objects.select_related(["membership__member", "membership__team"])
+        .order_by("hours")
+        .all()
+    )
+    created = [shift.model_dump(exclude={"id"}) for shift in shifts]
+    selected = await Membership.objects.select_related(["shifts", "member"]).get(
+        pk=membership.pk
+    )
+    joined = shifts[0].membership
+    assert joined is not None
+    dumps = [
+        selected.model_dump(exclude={"shifts": {"id"}}),
+        joined.model_dump(exclude={"shifts": {"id"}}),
+        Membership(**selected.model_dump()).model_dump(exclude={"shifts"}),
+    ]
+    dumps.append(Shift.get_pydantic().model_json_schema())
+    dumps.extend(
+        generate_model_example(model=model) for model in (Shift, Membership, Seniority)
+    )
+    await Shift.objects.delete(each=True)
+    return created, dumps
+
+
+def test_relation_tree_holds_relations_to_and_from_link_tables():
+    for model in (Shift, Review, Seniority, Project, Membership, Member, Mention):
+        assert model._relation_tree() == fresh_tree(cls=model)
+    membership_tree = Shift._relation_tree()["membership"]
+    assert {"member", "team", "tags", "projects", "reviews", "seniority"} <= set(
+        membership_tree
+    )
+    assert {"shifts", "reviews", "seniority", "projects", "tags"} <= set(
+        Membership._relation_tree()
+    )
+    assert "membership" in Seniority._relation_tree()
+    assert "profile" in Mention._relation_tree()
+
+
+@pytest.mark.asyncio
+async def test_link_table_relations_match_with_and_without_the_tree_cache(
+    data, monkeypatch
+):
+    cached = await dump_bulk_create_and_select_related()
+    monkeypatch.setattr(
+        RelationMixin, "_relation_tree", classmethod(fresh_tree), raising=True
+    )
+    assert Shift._relation_tree() is not Shift._relation_tree()
+    fresh = await dump_bulk_create_and_select_related()
+    assert cached == fresh
+    created, dumps = cached
+    assert [shift["hours"] for shift in created] == [1, 2]
+    assert created[0]["membership"]["member"]["login"] == "alice"
+    assert [shift["hours"] for shift in dumps[0]["shifts"]] == [1, 2]
