@@ -70,7 +70,8 @@
     `update()` writes only the passed fields, the fields assigned since the model was
     loaded or saved (also in `pre_update` signal handlers), `Json` fields mutated in
     place and `on_update` fields; with nothing changed it still writes all columns.
-    `update(_partial=True | False)` overrides the setting per call.
+    `update(_partial=True | False)` overrides the setting per call. An assigned
+    foreign key writes all of its columns, also the ones it shares with other fields.
 
     The default, `partial_updates=None`, keeps writing all columns but emits a
     `DeprecationWarning` when `update(**kwargs)` also writes columns that did not

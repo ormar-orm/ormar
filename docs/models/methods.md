@@ -509,7 +509,9 @@ With `partial_updates=True` in the [model config](index.md#partial-updates)
 
 * the fields passed as `kwargs`,
 * the fields assigned on the instance (`track.name = "x"`, also in `pre_update`
-  signal handlers and relations assigned with `track.album = album`),
+  signal handlers and relations assigned with `track.album = album`; a foreign key
+  writes all of its columns, also the ones it
+  [shares with other fields](../relations/foreign-key.md#link-tables-keyed-by-foreign-keys-to-several-columns)),
 * `Json` fields mutated in place (`track.settings["volume"] = 5`), detected by
   comparing with a copy taken when the row is loaded or saved,
 * fields with `on_update`.

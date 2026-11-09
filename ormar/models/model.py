@@ -486,8 +486,9 @@ class Model(ModelRow):
     ) -> builtins.dict[str, Any]:
         """
         Keeps the values of the given fields (by field or column name; a foreign
-        key stored in several columns keeps all of them) and of ``onupdate``
-        fields.
+        key stored in several columns keeps all of them, a column it shares
+        with other fields under the key that column is kept under, see
+        ``value_keys``) and of ``onupdate`` fields.
 
         :param self_fields: values of the model columns by field name
         :type self_fields: dict[str, Any]
@@ -496,11 +497,13 @@ class Model(ModelRow):
         :return: values of the selected columns
         :rtype: dict[str, Any]
         """
-        selected = {
-            column
-            for name in field_names
-            for column in self.get_column_aliases(field_name=name)
-        }.union(field_names, self._onupdate_fields)
+        model_fields = self.ormar_config.model_fields
+        selected = set(field_names) | self._onupdate_fields
+        for name in field_names:
+            selected.update(self.get_column_aliases(field_name=name))
+            field = model_fields.get(name)
+            if field is not None and field.kind.holds_columns:
+                selected.update(self.value_keys(field_name=name))
         return {k: v for k, v in self_fields.items() if k in selected}
 
     async def delete(self) -> int:
