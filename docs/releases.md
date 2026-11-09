@@ -193,6 +193,9 @@
   `ForeignKey(Author)` next to `ForeignKey(ForwardRef("Book"))`) no longer fails at
   class creation with `PydanticUndefinedAnnotation`. The related models finish
   building when `update_forward_refs()` resolves the reference.
+* A model created before `update_forward_refs()` resolved a `ForwardRef` of a related
+  model (failing with `PydanticUndefinedAnnotation`) works once the reference is
+  resolved. It failed with `RecursionError` on every later use.
 
 * `values()` / `values_list()` return fields with a custom database column `name=`
   (they were left out).
