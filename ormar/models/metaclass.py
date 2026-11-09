@@ -180,8 +180,8 @@ def get_constraint_copy(
     Copy the constraint and unpacking it's values
 
     :raises ValueError: if non subclass of ColumnCollectionConstraint
-    :param value: an instance of the ColumnCollectionConstraint class
-    :type value: Instance of ColumnCollectionConstraint child
+    :param constraint: an instance of the ColumnCollectionConstraint class
+    :type constraint: Instance of ColumnCollectionConstraint child
     :return: copy ColumnCollectionConstraint ormar constraints
     :rtype: Union[UniqueColumns, IndexColumns, CheckColumns]
     """

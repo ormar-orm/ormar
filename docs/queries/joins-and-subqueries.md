@@ -506,7 +506,7 @@ select related etc related models directly from parent model.
 
 ### select_related
 
-Works exactly the same as [select_related](./#select_related) function above but allows you to fetch related
+Works exactly the same as [select_related](#select_related) function above but allows you to fetch related
 objects from other side of the relation.
 
 !!!tip 
@@ -514,7 +514,7 @@ objects from other side of the relation.
 
 ### select_all
 
-Works exactly the same as [select_all](./#select_all) function above but allows you to fetch related
+Works exactly the same as [select_all](#select_all) function above but allows you to fetch related
 objects from other side of the relation.
 
 !!!tip 
@@ -523,7 +523,7 @@ objects from other side of the relation.
 
 ### prefetch_related
 
-Works exactly the same as [prefetch_related](./#prefetch_related) function above but allows you to fetch related
+Works exactly the same as [prefetch_related](#prefetch_related) function above but allows you to fetch related
 objects from other side of the relation.
 
 !!!tip 

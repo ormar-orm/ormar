@@ -327,9 +327,6 @@ def translate_list_to_dict(  # noqa: CCR001
     :type list_to_trans: Union[list, set]
     :param default: value to use as a default value
     :type default: Any
-    :param is_order: flag if change affects order_by clauses are they require special
-    default value with sort order.
-    :type is_order: bool
     :return: converted to dictionary input list
     :rtype: dict
     """

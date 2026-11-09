@@ -359,7 +359,7 @@ select related etc related models directly from parent model.
 
 ### values
 
-Works exactly the same as [values](./#values) function above but allows you to fetch related
+Works exactly the same as [values](#values) function above but allows you to fetch related
 objects from other side of the relation.
 
 !!!tip 
@@ -367,7 +367,7 @@ objects from other side of the relation.
 
 ### values_list
 
-Works exactly the same as [values_list](./#values_list) function above but allows
+Works exactly the same as [values_list](#values_list) function above but allows
 you to query or create related objects from other side of the relation.
 
 !!!tip 

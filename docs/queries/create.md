@@ -173,7 +173,7 @@ But at the same time it exposes subset of QuerySet API, so you can filter, creat
 
 ### create
 
-Works exactly the same as [create](./#create) function above but allows you to create related objects
+Works exactly the same as [create](#create) function above but allows you to create related objects
 from other side of the relation.
 
 !!!tip
@@ -182,7 +182,7 @@ from other side of the relation.
 
 ### get_or_create
 
-Works exactly the same as [get_or_create](./#get_or_create) function above but allows you to query or create related objects
+Works exactly the same as [get_or_create](#get_or_create) function above but allows you to query or create related objects
 from other side of the relation.
 
 !!!tip
@@ -191,7 +191,7 @@ from other side of the relation.
 
 ### update_or_create
 
-Works exactly the same as [update_or_create](./#update_or_create) function above but allows you to update or create related objects
+Works exactly the same as [update_or_create](#update_or_create) function above but allows you to update or create related objects
 from other side of the relation.
 
 !!!tip

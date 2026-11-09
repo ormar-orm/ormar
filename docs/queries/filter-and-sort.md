@@ -592,9 +592,9 @@ Gets the first row from the db meeting the criteria set by kwargs.
 When any args and/or kwargs are passed it's a shortcut equivalent to calling `filter(*args, **kwargs).get()`
 
 !!!tip
-    To read more about `filter` go to [filter](./#filter).
+    To read more about `filter` go to [filter](#filter).
     
-    To read more about `get` go to [read/get](../read/#get)
+    To read more about `get` go to [read/get](read.md#get)
 
 ## get_or_none
 
@@ -609,9 +609,9 @@ Combination of create and get methods.
 When any args and/or kwargs are passed it's a shortcut equivalent to calling `filter(*args, **kwargs).get_or_create()`
 
 !!!tip
-    To read more about `filter` go to [filter](./#filter).
+    To read more about `filter` go to [filter](#filter).
     
-    To read more about `get_or_create` go to [read/get_or_create](../read/#get_or_create)
+    To read more about `get_or_create` go to [read/get_or_create](read.md#get_or_create)
 
 !!!warning
     When given item does not exist you need to pass kwargs for all required fields of the
@@ -626,9 +626,9 @@ Returns all rows from a database for given model for set filter options.
 When any kwargs are passed it's a shortcut equivalent to calling `filter(*args, **kwargs).all()`
 
 !!!tip
-    To read more about `filter` go to [filter](./#filter).
+    To read more about `filter` go to [filter](#filter).
     
-    To read more about `all` go to [read/all](../read/#all)
+    To read more about `all` go to [read/all](read.md#all)
 
 ### QuerysetProxy methods
 
@@ -640,7 +640,7 @@ select related etc related models directly from parent model.
 
 #### filter
 
-Works exactly the same as [filter](./#filter) function above but allows you to filter related
+Works exactly the same as [filter](#filter) function above but allows you to filter related
 objects from other side of the relation.
 
 !!!tip 
@@ -649,7 +649,7 @@ objects from other side of the relation.
 
 #### exclude
 
-Works exactly the same as [exclude](./#exclude) function above but allows you to filter related
+Works exactly the same as [exclude](#exclude) function above but allows you to filter related
 objects from other side of the relation.
 
 !!!tip 
@@ -658,7 +658,7 @@ objects from other side of the relation.
 
 #### get
 
-Works exactly the same as [get](./#get) function above but allows you to filter related
+Works exactly the same as [get](#get) function above but allows you to filter related
 objects from other side of the relation.
 
 !!!tip 
@@ -671,7 +671,7 @@ Exact equivalent of get described above but instead of raising the exception ret
 
 #### get_or_create
 
-Works exactly the same as [get_or_create](./#get_or_create) function above but allows
+Works exactly the same as [get_or_create](#get_or_create) function above but allows
 you to filter related objects from other side of the relation.
 
 !!!tip 
@@ -679,7 +679,7 @@ you to filter related objects from other side of the relation.
 
 #### all
 
-Works exactly the same as [all](./#all) function above but allows you to filter related
+Works exactly the same as [all](#all) function above but allows you to filter related
 objects from other side of the relation.
 
 !!!tip 
@@ -876,7 +876,7 @@ select related etc related models directly from parent model.
 
 #### order_by
 
-Works exactly the same as [order_by](./#order_by) function above but allows you to sort related
+Works exactly the same as [order_by](#order_by) function above but allows you to sort related
 objects from other side of the relation.
 
 !!!tip 
