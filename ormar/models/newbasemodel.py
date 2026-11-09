@@ -1,5 +1,6 @@
 import base64
 import builtins
+import copy
 import sys
 import warnings
 from dataclasses import dataclass
@@ -135,6 +136,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         "__pydantic_extra__",
         "__pydantic_fields_set__",
         "__setattr_fields__",
+        "__json_snapshot__",
     )
 
     if TYPE_CHECKING:  # pragma no cover
@@ -144,6 +146,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         __relation_graph_version__: int
         __cached_hash__: Optional[int]
         __setattr_fields__: set[str]
+        __json_snapshot__: Optional[builtins.dict[str, Any]]
         _orm: RelationsManager
         _orm_id: int
         _orm_saved: bool
@@ -455,6 +458,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 relation_fields[name].expand_relationship(
                     value=model, child=instance, to_register=True
                 )
+        if cls._json_fields and cls.ormar_config.partial_updates:
+            instance._snapshot_json_fields()
         return instance
 
     @classmethod
@@ -487,6 +492,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         instance.__dict__.update(loaded_json)
         for field_to_nullify in excluded:
             instance.__dict__[field_to_nullify] = None
+        if cls._json_fields and cls.ormar_config.partial_updates:
+            instance._snapshot_json_fields()
         return instance
 
     def __setattr__(self, name: str, value: Any) -> None:  # noqa CCR001
@@ -510,7 +517,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             # let pydantic handle errors for unknown fields
             super().__setattr__(name, value)
 
-        if self._onupdate_fields and name in self.ormar_config.model_fields:
+        if name in self.ormar_config.model_fields:
             self.__setattr_fields__.add(name)
 
         # In this case, the hash could have changed, so update it
@@ -590,6 +597,52 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                     )
 
         _update_cache(list(self._orm._relations.values()))
+
+    def _snapshot_json_fields(self) -> None:
+        """
+        Remembers a copy of the json field values as they are in the database,
+        so that partial updates can detect values mutated in place
+        (``model.data["key"] = 1``), which do not go through ``__setattr__``.
+
+        Called only for models with ``partial_updates=True`` and json fields;
+        the copy is the price of loading such a row.
+        """
+        object.__setattr__(
+            self,
+            "__json_snapshot__",
+            {
+                name: copy.deepcopy(self.__dict__.get(name))
+                for name in self._json_fields
+            },
+        )
+
+    def _reset_change_tracking(self) -> None:
+        """
+        Marks the model as in sync with its database row: forgets the fields
+        assigned since the last load or save and snapshots json fields again.
+        """
+        self.__setattr_fields__.clear()
+        if self._json_fields and self.ormar_config.partial_updates:
+            self._snapshot_json_fields()
+
+    def _changed_fields(self) -> set[str]:
+        """
+        Returns the fields changed since the model was last loaded or saved:
+        the ones assigned through ``__setattr__`` and json fields whose value
+        differs from the snapshot taken at load.
+
+        :return: names of changed fields
+        :rtype: set[str]
+        """
+        changed = set(self.__setattr_fields__)
+        snapshot = self.__json_snapshot__
+        if snapshot:
+            changed.update(
+                name
+                for name, value in snapshot.items()
+                if self.__dict__.get(name) != value
+            )
+        return changed
 
     def _internal_set(self, name: str, value: Any) -> None:
         """
@@ -731,6 +784,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         object.__setattr__(self, "_orm_persisted_key", None)
         object.__setattr__(self, "__cached_hash__", None)
         object.__setattr__(self, "__setattr_fields__", set())
+        object.__setattr__(self, "__json_snapshot__", None)
         object.__setattr__(
             self,
             "_orm",

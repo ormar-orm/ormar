@@ -314,6 +314,7 @@ def copy_and_replace_m2m_through_model(  # noqa: CFQ002
         constraints=through_class.ormar_config.constraints,
         order_by=through_class.ormar_config.orders_by,
         view=through_class.ormar_config.view,
+        partial_updates=through_class.ormar_config.partial_updates,
     )
     # a set table keeps the copy from registering one in metadata on creation
     new_config.table = through_class.ormar_config.table

@@ -517,6 +517,34 @@ class Child(ormar.Model):
 
 To set the same setting on all model check the [best practices]("../models/index/#best-practice") and `base_ormar_config` concept.
 
+### Partial updates
+
+By default `Model.update(**kwargs)` writes all columns of the model, not only the passed
+ones, which can revert changes made in the database since the model was loaded (see
+[update()](methods.md#update)). Set `partial_updates=True` to write only the passed
+fields, the fields assigned since the model was loaded or saved, `Json` fields mutated
+in place and fields with `on_update`.
+
+```python
+base_ormar_config = ormar.OrmarConfig(
+    database=DatabaseConnection(DATABASE_URL),
+    metadata=sqlalchemy.MetaData(),
+    partial_updates=True,
+)
+```
+
+| `partial_updates` | `update(**kwargs)` writes |
+|---|---|
+| `None` (default) | all columns, with a `DeprecationWarning` when other columns than the changed ones are written |
+| `True` | only the changed fields (all columns if nothing changed) |
+| `False` | all columns, without a warning |
+
+The default changes to `True` in a future release. `copy()` keeps the setting of the
+parent config unless you pass `partial_updates`.
+
+With `partial_updates=True` models with `Json` fields keep a copy of their `Json` values
+from the moment they are loaded or saved, to detect values mutated in place.
+
 ## Model sort order
 
 When querying the database with given model by default the Model is ordered by the `primary_key`

@@ -62,6 +62,26 @@
 
 ### 🆕 Features
 
+* **Partial instance updates: `OrmarConfig(partial_updates=True)`**
+
+    `Model.update(**kwargs)` used to write every column of the model from memory, so
+    a row changed in the database after the model was loaded (by another request or
+    a worker) had those changes silently reverted. With `partial_updates=True`
+    `update()` writes only the passed fields, the fields assigned since the model was
+    loaded or saved (also in `pre_update` signal handlers), `Json` fields mutated in
+    place and `on_update` fields; with nothing changed it still writes all columns.
+    `update(_partial=True | False)` overrides the setting per call.
+
+    The default, `partial_updates=None`, keeps writing all columns but emits a
+    `DeprecationWarning` when `update(**kwargs)` also writes columns that did not
+    change. **The default will change to partial updates in a future release**: set
+    `partial_updates=True` to opt in now, or `partial_updates=False` to keep the old
+    behaviour without the warning. `QuerySet.update_or_create()` and the relation
+    proxies' `update()` / `update_or_create()` (which load the row and update it right
+    away) always write only the changed fields. Closes
+    [#1948](https://github.com/ormar-orm/ormar/issues/1948), see
+    [update()](models/methods.md#update).
+
 * `ormar.OneToOne(to, ...)` relation: a unique foreign key whose reverse side holds a
   single model or `None`. Closes [#256](https://github.com/ormar-orm/ormar/issues/256).
   See [OneToOne](relations/one-to-one.md).
