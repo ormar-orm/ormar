@@ -2,6 +2,7 @@ from typing import Any, Optional
 
 import pytest
 import pytest_asyncio
+import sqlalchemy
 
 import ormar
 import ormar.models.model
@@ -122,6 +123,16 @@ class Shift(ormar.Model):
 create_test_database = init_tests(base_ormar_config)
 
 
+async def stored_tenant(row_id: int) -> Optional[int]:
+    """Reads the raw ``tenant_id`` column of an assignment."""
+    table = Assignment.ormar_config.table
+    async with base_ormar_config.engine.connect() as conn:
+        result = await conn.execute(
+            statement=sqlalchemy.select(table.c.tenant_id).where(table.c.id == row_id)
+        )
+        return result.scalar_one()
+
+
 @pytest.fixture
 def written_columns(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     """Records the column names of every ``Model.update()`` statement."""
@@ -209,12 +220,21 @@ async def test_clearing_one_foreign_key_keeps_the_shared_column(data, written_co
     assert row.member is None
     assert row.team.pk == (1, "core")
 
-    # the same columns as a full update, which also keeps tenant_id
+    # clearing the other foreign key too clears the shared column, as a full
+    # update does
     row.team = None
     await row.update()
-    assert written_columns[-1] == ["team_code"]
+    assert written_columns[-1] == ["team_code", "tenant_id"]
     row = await Assignment.objects.get()
     assert row.team is None
+    assert await stored_tenant(row_id=row.id) is None
+
+    await Assignment.objects.filter(id=row.id).update(member=alice, team=core)
+    row = await Assignment.objects.get()
+    row.member = None
+    row.team = None
+    await row.update(_partial=False)
+    assert await stored_tenant(row_id=row.id) is None
 
 
 @pytest.mark.asyncio

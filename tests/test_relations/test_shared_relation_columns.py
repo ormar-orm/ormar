@@ -140,6 +140,43 @@ class IndexedFirst(ormar.Model):
     )
 
 
+class Pairing(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="src_pairings")
+
+    id: int = ormar.Integer(primary_key=True)
+    member: Optional[Member] = ormar.ForeignKey(
+        Member,
+        columns={"tenant_id": "tenant_id", "login": "member_login"},
+        related_name="pairings",
+    )
+    team: Optional[Team] = ormar.ForeignKey(
+        Team,
+        columns={"tenant_id": "tenant_id", "code": "team_code"},
+        related_name="pairings",
+    )
+
+
+class Review(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="src_reviews")
+
+    id: int = ormar.Integer(primary_key=True)
+    member: Optional[Member] = ormar.ForeignKey(
+        Member,
+        columns={"tenant_id": "tenant_id", "login": "member_login"},
+        related_name="reviews",
+    )
+    reviewer: Optional[Member] = ormar.ForeignKey(
+        Member,
+        columns={"tenant_id": "tenant_id", "login": "reviewer_login"},
+        related_name="reviewed",
+    )
+    team: Optional[Team] = ormar.ForeignKey(
+        Team,
+        columns={"tenant_id": "tenant_id", "code": "team_code"},
+        related_name="reviews",
+    )
+
+
 NodeRef = ForwardRef("Node")
 
 
@@ -179,6 +216,8 @@ class OrderedNames(set):
 async def data():
     async with base_ormar_config.database:
         for model in (
+            Review,
+            Pairing,
             Ticket,
             IndexedFirst,
             IndexedLast,
@@ -531,3 +570,85 @@ async def test_clearing_every_foreign_key_clears_the_shared_column(data, model):
     await model.objects.filter(id=row.id).update(tenant=first, member=alice)
     await model.objects.filter(id=row.id).update(tenant=None, member=None)
     assert (await model.objects.get(id=row.id)).tenant is None
+
+
+async def stored_tenant(model: type[ormar.Model], row_id: int) -> Optional[int]:
+    """Reads the raw ``tenant_id`` column of a row, bypassing the relations."""
+    table = model.ormar_config.table
+    async with base_ormar_config.engine.connect() as conn:
+        result = await conn.execute(
+            statement=sqlalchemy.select(table.c.tenant_id).where(table.c.id == row_id)
+        )
+        return result.scalar_one()
+
+
+@pytest.mark.asyncio
+async def test_clearing_every_multi_column_foreign_key_clears_the_shared_column(
+    data,
+):
+    _, _, alice, core = data
+    row = await Pairing.objects.create(member=alice, team=core)
+    row.member = None
+    await row.update()
+    assert await stored_tenant(model=Pairing, row_id=row.id) == 1
+    row.team = None
+    await row.update()
+    assert await stored_tenant(model=Pairing, row_id=row.id) is None
+
+    await Pairing.objects.filter(id=row.id).update(member=alice, team=core)
+    await Pairing.objects.filter(id=row.id).update(member=None)
+    assert await stored_tenant(model=Pairing, row_id=row.id) == 1
+    await Pairing.objects.filter(id=row.id).update(member=None, team=None)
+    assert await stored_tenant(model=Pairing, row_id=row.id) is None
+
+
+@pytest.mark.asyncio
+async def test_saving_and_bulk_updating_cleared_multi_column_foreign_keys(data):
+    _, _, alice, core = data
+    empty = await Pairing(member=None, team=None).save()
+    assert await stored_tenant(model=Pairing, row_id=empty.id) is None
+    assert (await Pairing.objects.get(id=empty.id)).member is None
+
+    first = await Pairing.objects.create(member=alice, team=core)
+    second = await Pairing.objects.create(member=alice, team=core)
+    first.member = None
+    first.team = None
+    second.member = None
+    await Pairing.objects.bulk_update([first, second])
+    assert await stored_tenant(model=Pairing, row_id=first.id) is None
+    assert await stored_tenant(model=Pairing, row_id=second.id) == 1
+    assert (await Pairing.objects.get(id=second.id)).team.pk == (1, "core")
+
+
+@pytest.mark.asyncio
+async def test_three_multi_column_foreign_keys_clear_the_shared_column(data):
+    _, _, alice, core = data
+    row = await Review.objects.create(member=alice, reviewer=alice, team=core)
+    row.member = None
+    row.reviewer = None
+    await row.update()
+    assert await stored_tenant(model=Review, row_id=row.id) == 1
+    assert (await Review.objects.get(id=row.id)).team.pk == (1, "core")
+    row.team = None
+    await row.update()
+    assert await stored_tenant(model=Review, row_id=row.id) is None
+
+    await Review.objects.filter(id=row.id).update(
+        member=alice, reviewer=alice, team=core
+    )
+    await Review.objects.filter(id=row.id).update(member=None, team=None)
+    assert await stored_tenant(model=Review, row_id=row.id) == 1
+    await Review.objects.filter(id=row.id).update(member=None, reviewer=None, team=None)
+    assert await stored_tenant(model=Review, row_id=row.id) is None
+
+
+@pytest.mark.asyncio
+async def test_clearing_a_foreign_key_keeps_a_plain_shared_column(data):
+    _, _, alice, _ = data
+    ticket = await Ticket.objects.create(tenant_id=1, assignee=alice)
+    ticket.assignee = None
+    await ticket.update()
+    assert await stored_tenant(model=Ticket, row_id=ticket.id) == 1
+    await Ticket.objects.filter(id=ticket.id).update(assignee=None)
+    assert await stored_tenant(model=Ticket, row_id=ticket.id) == 1
+    assert (await Ticket.objects.get(id=ticket.id)).assignee is None

@@ -175,6 +175,11 @@
 
 ### 🐛 Fixes
 
+* A column shared only by foreign keys stored in several columns (e.g. `member` and
+  `team` both including `tenant_id`) becomes `NULL` when all of them are set to
+  `None`, as documented, on `update()`, `save()`, `bulk_update()` and queryset
+  `update()`. It kept its old value, as the foreign keys were counted by the key
+  the column is kept under, which they all share.
 * `model_dump()`, `save_related()`, `select_all(follow=True)` and
   `load_all(follow=True)` include relations registered after the model was first
   used, e.g. the reverse side of a foreign key declared by a model defined later.
