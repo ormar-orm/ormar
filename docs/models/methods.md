@@ -489,7 +489,7 @@ await track.save() # will raise integrity error as pk is populated
 
 ## update()
 
-`update(_columns: list[str] = None, **kwargs) -> self`
+`update(_columns: list[str] = None, _partial: bool = None, **kwargs) -> self`
 
 You can update models by using `QuerySet.update()` method or by updating your model attributes (fields) and calling `update()` method.
 
@@ -502,7 +502,59 @@ track = await Track.objects.get(name='The Bird')
 await track.update(name='The Bird Strikes Again')
 ```
 
-To update only selected columns from model into the database provide a list of columns that should be updated to `_columns` argument.
+### Which columns are written
+
+With `partial_updates=True` in the [model config](index.md#partial-updates)
+`update()` writes only what changed since the model was loaded or saved:
+
+* the fields passed as `kwargs`,
+* the fields assigned on the instance (`track.name = "x"`, also in `pre_update`
+  signal handlers and relations assigned with `track.album = album`; a foreign key
+  writes all of its columns, also the ones it
+  [shares with other fields](../relations/foreign-key.md#link-tables-keyed-by-foreign-keys-to-several-columns)),
+* `Json` fields mutated in place (`track.settings["volume"] = 5`), detected by
+  comparing with a copy taken when the row is loaded or saved,
+* fields with `on_update`.
+
+If nothing changed, all columns are written, as before. The tracking is cleared after
+`load()`, `load_all()`, `save()`, `update()` and `QuerySet.bulk_update()`.
+
+`_partial=True` / `_partial=False` overrides the config for one call: `False` writes
+all columns of the model.
+
+```python
+track = await Track.objects.get(name='The Bird')
+track.position = 3
+# UPDATE tracks SET name=..., position=... WHERE id = ...
+await track.update(name='The Bird Strikes Again')
+```
+
+!!!warning "Lost updates"
+    Without `partial_updates=True` (the default is `None`), `update(**kwargs)` writes
+    **every column** of the model from memory, not only the passed ones. If the row
+    was changed in the database after the instance was loaded (by another request or
+    a background worker), those changes are silently reverted:
+
+    ```python
+    stale = await Training.objects.get(id=1)
+    # ... meanwhile another request runs:
+    #     await (await Training.objects.get(id=1)).update(seats_taken=5)
+    await stale.update(status="closed")  # also writes seats_taken=0 back!
+    ```
+
+    With the default config this call emits a `DeprecationWarning` whenever other
+    columns are written as well. Set `partial_updates=True` (or pass `_columns`) to
+    write only what you changed; `partial_updates=False` keeps writing all columns
+    and silences the warning. The default will change to partial updates in a future
+    release.
+
+    Partial updates write less, but they do not lock the row: two requests changing
+    the same column still race, use a transaction with row locking or an atomic
+    `QuerySet.update()` for counters.
+
+### Selected columns
+
+To update only selected columns from model into the database provide a list of columns that should be updated to `_columns` argument (fields with `on_update` are written too).
 
 In example:
 

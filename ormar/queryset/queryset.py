@@ -1635,7 +1635,7 @@ class QuerySet(Generic[T]):
             model = await self.get(**lookup)
         except NoMatch:
             return await self.create(**kwargs)
-        return await model.update(**kwargs)
+        return await model.update(_partial=True, **kwargs)
 
     async def all(self, *args: Any, **kwargs: Any) -> list["T"]:  # noqa: A003
         """
@@ -1913,7 +1913,7 @@ class QuerySet(Generic[T]):
 
         for obj in objects:
             obj.set_save_status(True)
-            obj.__setattr_fields__.clear()
+            obj._reset_change_tracking()
 
         await cast(
             type["Model"], self.model_cls

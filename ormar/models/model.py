@@ -1,4 +1,5 @@
 import builtins
+import warnings
 from typing import TYPE_CHECKING, Any, Optional, TypeVar, Union
 
 from sqlalchemy import Executable
@@ -122,7 +123,7 @@ class Model(ModelRow):
         )
         if not row:
             return await self.save()
-        return await self.update(**kwargs)
+        return await self.update(_partial=False, **kwargs)
 
     def _verify_key_parts_set(self, row: dict[str, Any]) -> None:
         """
@@ -235,7 +236,7 @@ class Model(ModelRow):
         ):
             await self.load()
 
-        self.__setattr_fields__.clear()
+        self._reset_change_tracking()
         await self._emit_signal("post_save", instance=self)
         return self
 
@@ -341,17 +342,39 @@ class Model(ModelRow):
 
         return update_count
 
-    async def update(self: T, _columns: Optional[list[str]] = None, **kwargs: Any) -> T:
+    async def update(
+        self: T,
+        _columns: Optional[list[str]] = None,
+        _partial: Optional[bool] = None,
+        **kwargs: Any,
+    ) -> T:
         """
         Performs update of Model instance in the database.
         Fields can be updated before or you can pass them as kwargs.
+
+        Which columns are written:
+
+        * ``_columns`` given: only those (and ``onupdate`` fields),
+        * nothing changed since the model was loaded or saved: all columns,
+        * partial update (``_partial=True``, or ``partial_updates=True`` in
+          ``OrmarConfig`` when ``_partial`` is not given): the kwargs, the
+          fields assigned since the last load or save (also by ``pre_update``
+          signal handlers), json fields mutated in place (with
+          ``partial_updates=True``) and ``onupdate`` fields,
+        * otherwise all columns. With the default ``partial_updates=None`` a
+          ``DeprecationWarning`` is emitted when kwargs are passed and other
+          columns are written too, as the default changes in a future
+          release.
 
         Sends pre_update and post_update signals.
 
         Sets model save status to True.
 
-        :param _columns: list of columns to update, if None all are updated
-        :type _columns: list
+        :param _columns: list of columns to update
+        :type _columns: Optional[list[str]]
+        :param _partial: write only changed fields (``True``) or all columns
+            (``False``), ``None`` follows ``partial_updates`` of the config
+        :type _partial: Optional[bool]
         :raises ModelPersistenceError: If the pk column is not set
 
         :param kwargs: list of fields to update as field=value pairs
@@ -361,6 +384,7 @@ class Model(ModelRow):
         """
         self.verify_writable()
         explicit_fields = self.__setattr_fields__ | kwargs.keys()
+        auto_onupdate = self._onupdate_fields - explicit_fields
         values = self.populate_onupdate_value(
             dict(kwargs), explicit_fields=explicit_fields
         )
@@ -383,19 +407,14 @@ class Model(ModelRow):
         if not key_moved:
             for field in key_fields:
                 self_fields.pop(field, None)
-        if _columns:
-            selected = {
-                column
-                for name in _columns
-                for column in self.get_column_aliases(field_name=name)
-            }.union(_columns)
-            self_fields = {
-                k: v
-                for k, v in self_fields.items()
-                if k in selected
-                or k in self._onupdate_fields
-                or (key_moved and k in key_fields)
-            }
+        self_fields = self._fields_to_update(
+            self_fields=self_fields,
+            columns=_columns,
+            partial=_partial,
+            changed=self._changed_fields() - auto_onupdate,
+            passed_kwargs=bool(kwargs),
+            key_fields=key_fields if key_moved else set(),
+        )
         if self_fields:
             self_fields = self.translate_columns_to_aliases(self_fields)
             template = update_template(
@@ -405,9 +424,87 @@ class Model(ModelRow):
             )
             await self._execute_query(expr=template.statement, params=template.params)
         self.set_save_status(True)
-        self.__setattr_fields__.clear()
+        self._reset_change_tracking()
         await self._emit_signal("post_update", instance=self)
         return self
+
+    def _fields_to_update(  # noqa: CFQ002
+        self,
+        self_fields: builtins.dict[str, Any],
+        columns: Optional[list[str]],
+        partial: Optional[bool],
+        changed: set[str],
+        passed_kwargs: bool,
+        key_fields: set[str],
+    ) -> builtins.dict[str, Any]:
+        """
+        Selects the column values ``update()`` writes, see its docstring.
+
+        :param self_fields: values of all columns of the model by field name
+        :type self_fields: dict[str, Any]
+        :param columns: ``_columns`` passed to ``update()``
+        :type columns: Optional[list[str]]
+        :param partial: ``_partial`` passed to ``update()``
+        :type partial: Optional[bool]
+        :param changed: fields changed since the last load or save
+        :type changed: set[str]
+        :param passed_kwargs: if ``update()`` received field values
+        :type passed_kwargs: bool
+        :param key_fields: primary key fields to write as the key moved
+        :type key_fields: set[str]
+        :return: values of the columns to write
+        :rtype: dict[str, Any]
+        """
+        if columns:
+            return self._select_update_columns(
+                self_fields=self_fields, field_names=set(columns) | key_fields
+            )
+        if partial is None:
+            partial = self.ormar_config.partial_updates
+        if not changed or partial is False:
+            return self_fields
+        selected = self._select_update_columns(
+            self_fields=self_fields, field_names=changed | key_fields
+        )
+        if partial:
+            return selected
+        if passed_kwargs and selected.keys() != self_fields.keys():
+            warnings.warn(
+                f"{self.get_name(lower=False)}.update(**kwargs) writes all columns "
+                "of the row, not only the passed and changed fields, which reverts "
+                "changes made in the database since the model was loaded. Set "
+                "`partial_updates=True` in `OrmarConfig` to write only the changed "
+                "fields (the default in a future release), `partial_updates=False` "
+                "to keep writing all columns, or pass `_columns`.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+        return self_fields
+
+    def _select_update_columns(
+        self, self_fields: builtins.dict[str, Any], field_names: set[str]
+    ) -> builtins.dict[str, Any]:
+        """
+        Keeps the values of the given fields (by field or column name; a foreign
+        key stored in several columns keeps all of them, a column it shares
+        with other fields under the key that column is kept under, see
+        ``value_keys``) and of ``onupdate`` fields.
+
+        :param self_fields: values of the model columns by field name
+        :type self_fields: dict[str, Any]
+        :param field_names: names of fields to keep
+        :type field_names: set[str]
+        :return: values of the selected columns
+        :rtype: dict[str, Any]
+        """
+        model_fields = self.ormar_config.model_fields
+        selected = set(field_names) | self._onupdate_fields
+        for name in field_names:
+            selected.update(self.get_column_aliases(field_name=name))
+            field = model_fields.get(name)
+            if field is not None and field.kind.holds_columns:
+                selected.update(self.value_keys(field_name=name))
+        return {k: v for k, v in self_fields.items() if k in selected}
 
     async def delete(self) -> int:
         """
@@ -484,7 +581,7 @@ class Model(ModelRow):
             kwargs = self.translate_row_to_fields(row=dict(row))
         self.update_from_dict(kwargs)
         self.set_save_status(True)
-        self.__setattr_fields__.clear()
+        self._reset_change_tracking()
         return self
 
     async def load_all(
@@ -533,5 +630,5 @@ class Model(ModelRow):
         instance = await queryset.select_related(relations).get(pk=self.persisted_key)
         self._orm.clear()
         self.update_from_dict(instance.model_dump())
-        self.__setattr_fields__.clear()
+        self._reset_change_tracking()
         return self

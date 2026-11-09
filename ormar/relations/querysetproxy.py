@@ -172,7 +172,7 @@ class QuerysetProxy(Generic[T]):
             **self._get_through_link_kwargs(child)
         )
         if kwargs:
-            await through_model.update(**kwargs)
+            await through_model.update(_partial=True, **kwargs)
 
     async def upsert_through_instance(self, child: "T", **kwargs: Any) -> None:
         """
@@ -607,7 +607,7 @@ class QuerysetProxy(Generic[T]):
         through_kwargs = kwargs.pop(self.through_model_name, {})
         children = await self.queryset.all()
         for child in children:
-            await child.update(**kwargs)  # type: ignore
+            await child.update(_partial=True, **kwargs)  # type: ignore
             if self.type_ == ormar.RelationType.MULTIPLE and through_kwargs:
                 await self.update_through_instance(
                     child=child,
@@ -685,7 +685,7 @@ class QuerysetProxy(Generic[T]):
             model = await self.queryset.get(**lookup)
         except NoMatch:
             return await self.create(**kwargs)
-        return await model.update(**kwargs)
+        return await model.update(_partial=True, **kwargs)
 
     def filter(  # noqa: A003, A001
         self, *args: Any, **kwargs: Any

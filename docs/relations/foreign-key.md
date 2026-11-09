@@ -440,6 +440,9 @@ await Membership.objects.get(member=alice, team=core)  # the same row
 * `update(_columns=[...])` writes only the listed columns: updating the shared column
   alone leaves the other columns of its foreign keys as they are, so the database's
   foreign keys reject a pair that no longer exists.
+* With [partial updates](../models/methods.md#which-columns-are-written), assigning a
+  foreign key writes all of its columns, the shared one included, so a value that
+  conflicts with the other fields still raises `ModelPersistenceError`.
 * Only columns named explicitly (`columns=` / `name=`) are shared. A field whose name
   clashes with a generated column name (`<field>_<column>`) still raises
   `ModelDefinitionError`, as do two plain fields on one column and fields giving a

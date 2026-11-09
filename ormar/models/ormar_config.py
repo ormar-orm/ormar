@@ -29,6 +29,7 @@ class OrmarConfig:
         emit_parent_signals: bool
         exclude_parent_fields: list[str]
         constraints: list[ColumnCollectionConstraint]
+        partial_updates: Optional[bool]
 
     def __init__(
         self,
@@ -46,6 +47,7 @@ class OrmarConfig:
         extra: Extra = Extra.forbid,
         constraints: Optional[list[ColumnCollectionConstraint]] = None,
         view: bool = False,
+        partial_updates: Optional[bool] = None,
     ) -> None:
         self.pk = None  # type: ignore
         self.metadata = metadata  # type: ignore
@@ -70,6 +72,7 @@ class OrmarConfig:
         self.extra = extra
         self.queryset_class = queryset_class
         self.table: sqlalchemy.Table = None  # type: ignore
+        self.partial_updates = partial_updates
 
     def copy(
         self,
@@ -87,6 +90,7 @@ class OrmarConfig:
         extra: Optional[Extra] = None,
         constraints: Optional[list[ColumnCollectionConstraint]] = None,
         view: Optional[bool] = None,
+        partial_updates: Union[bool, None, PydanticUndefinedType] = PydanticUndefined,
     ) -> "OrmarConfig":
         # PydanticUndefined distinguishes "omitted" (inherit parent schema)
         # from an explicit ``schema=None`` (clear schema).
@@ -115,4 +119,9 @@ class OrmarConfig:
             extra=extra or self.extra,
             constraints=constraints,
             view=view if view is not None else self.view,
+            partial_updates=(
+                self.partial_updates
+                if isinstance(partial_updates, PydanticUndefinedType)
+                else partial_updates
+            ),
         )
