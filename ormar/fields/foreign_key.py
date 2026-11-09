@@ -874,7 +874,10 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
     ) -> "Model":
         """
         Takes a dictionary, creates a instance and registers it for parent.
-        If dictionary contains only one field and it's a pk it is a __pk_only__ model.
+        If dictionary holds only the referenced key fields it is a __pk_only__
+        model. Related fields may be present if they are None, empty or the
+        relation back to the child (as in serialized responses), any other
+        related value makes it a full model, so nested related models are kept.
         Registration is mutual, so children have also reference to parent.
 
         Used in normal FK for dictionaries.
@@ -890,10 +893,13 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         """
         key_only_model = None
         target_fields = self.target_fields()
-        own_keys = set(value.keys()) - self.to.extract_related_names()
+        related_names = self.to.extract_related_names()
+        own_keys = set(value.keys()) - related_names
+        nested_keys = value.keys() & related_names - {self.get_related_name()}
         if (
             own_keys == set(target_fields)
             and all(value.get(field) is not None for field in target_fields)
+            and all(value[name] is None or value[name] == [] for name in nested_keys)
             and not self.is_through
         ):
             key_only_model = self.to_key_only(**value)

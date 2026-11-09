@@ -216,6 +216,10 @@
   no longer fail with `PydanticUserError: Field ... requires a type annotation`
   on Python 3.14+, where class bodies no longer store `__annotations__`
   (PEP 649).
+* A related model given as a dict with only its primary key and nested relations
+  (e.g. `Writer(notes=[{"id": 2, "letter": {"id": 3}}])`) keeps the nested
+  relations; it was built as a pk-only model, which dropped them. Such a dict now
+  builds a full model, so required fields of that model have to be given.
 
 ## 0.27.0
 
