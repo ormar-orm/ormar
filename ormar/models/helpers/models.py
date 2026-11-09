@@ -7,6 +7,7 @@ import pydantic
 
 import ormar  # noqa: I100
 from ormar.models.helpers.pydantic import populate_pydantic_default_values
+from ormar.models.relation_graph import RelationGraph
 
 if sys.version_info >= (3, 14):  # pragma: no cover
     import annotationlib
@@ -71,6 +72,8 @@ def populate_default_options_values(  # noqa: CCR001
     }
 
     new_model.__relation_map__ = None
+    new_model.__relation_tree__ = None
+    new_model.__relation_graph_version__ = RelationGraph.version
     new_model.__ormar_fields_validators__ = None
 
 

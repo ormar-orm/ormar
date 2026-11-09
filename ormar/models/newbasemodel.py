@@ -51,9 +51,9 @@ from ormar.models.helpers.sqlalchemy import (
 )
 from ormar.models.metaclass import ModelMetaclass
 from ormar.models.modelproxy import ModelTableProxy
+from ormar.models.relation_graph import RelationGraph
 from ormar.models.utils import Extra
 from ormar.queryset.field_accessor import FieldAccessor
-from ormar.queryset.utils import translate_list_to_dict
 from ormar.relations.relation import Relation
 from ormar.relations.relation_manager import RelationsManager
 from ormar.relations.utils import is_dead_proxy
@@ -139,6 +139,8 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
     if TYPE_CHECKING:  # pragma no cover
         pk: Any
         __relation_map__: Optional[list[str]]
+        __relation_tree__: Optional[builtins.dict]
+        __relation_graph_version__: int
         __cached_hash__: Optional[int]
         __setattr_fields__: set[str]
         _orm: RelationsManager
@@ -951,6 +953,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
                 update_column_definition(model=cls, field=field)
         populate_config_sqlalchemy_table_if_required(config=cls.ormar_config)
         cls.reset_column_caches()
+        RelationGraph.changed()
         rebuild_model(model=cast(type["Model"], cls))
         cls.ormar_config.requires_ref_update = False
 
@@ -1401,9 +1404,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         }
 
         relation_map = (
-            relation_map
-            if relation_map is not None
-            else translate_list_to_dict(self._iterate_related_models())
+            relation_map if relation_map is not None else self._relation_tree()
         )
         pk_only = getattr(self, "__pk_only__", False)
         if relation_map and not pk_only:

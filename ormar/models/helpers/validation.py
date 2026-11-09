@@ -5,7 +5,6 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 import pydantic
 
 from ormar.models.helpers.models import config_field_not_set
-from ormar.queryset.utils import translate_list_to_dict
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
@@ -26,11 +25,7 @@ def generate_model_example(
     :rtype: dict[str, int]
     """
     example: dict[str, Any] = dict()
-    relation_map = (
-        relation_map
-        if relation_map is not None
-        else translate_list_to_dict(model._iterate_related_models())
-    )
+    relation_map = relation_map if relation_map is not None else model._relation_tree()
     for name, field in model.ormar_config.model_fields.items():
         populates_sample_fields_values(
             example=example, name=name, field=field, relation_map=relation_map
