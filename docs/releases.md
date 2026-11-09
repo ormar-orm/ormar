@@ -189,6 +189,10 @@
   `AttributeError: 'ForwardRef' object has no attribute '_iterate_related_models'`
   before `update_forward_refs()` is called. The unresolved relation is skipped and
   joins the relation paths once `update_forward_refs()` resolves it.
+* A model with both a concrete relation and a `ForwardRef` relation (e.g.
+  `ForeignKey(Author)` next to `ForeignKey(ForwardRef("Book"))`) no longer fails at
+  class creation with `PydanticUndefinedAnnotation`. The related models finish
+  building when `update_forward_refs()` resolves the reference.
 
 * `values()` / `values_list()` return fields with a custom database column `name=`
   (they were left out).
