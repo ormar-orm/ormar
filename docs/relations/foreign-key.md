@@ -313,8 +313,9 @@ await Enrollment.objects.get(pk=(ann.id, math.id))
 await Enrollment.objects.get(student=ann, course=math)  # the same row
 ```
 
-Foreign keys in the primary key are not nullable. They can point only at models with
-a single column primary key (or a single `to_field`) for now.
+Foreign keys in the primary key are not nullable. A foreign key stored in several
+columns can be part of the key too (see
+[link tables keyed by foreign keys to several columns](#link-tables-keyed-by-foreign-keys-to-several-columns)).
 
 ## Foreign keys to several columns
 
@@ -369,7 +370,89 @@ line.model_dump(flatten_fields={"order"})["order"]  # {"tenant_id": 1, "number":
 * A key can also be given as a list (`[1, 7]`, as JSON has no tuples). In
   `get_pydantic(flatten_fields=...)` the relation is a typed dict of the referenced
   fields, validated per field.
-* A foreign key to several columns can't be part of a primary key yet.
+
+### Link tables keyed by foreign keys to several columns
+
+A foreign key to several columns can be part of the primary key, and fields can share
+a column: name the same column in `columns=` of several foreign keys (or use the name
+of a plain field). The table creates the column once. A typical multi-tenant link
+table:
+
+```python
+class Member(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="members")
+
+    tenant_id: int = ormar.Integer(primary_key=True)
+    login: str = ormar.String(max_length=20, primary_key=True)
+
+
+class Team(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="teams")
+
+    tenant_id: int = ormar.Integer(primary_key=True)
+    code: str = ormar.String(max_length=10, primary_key=True)
+
+
+class Membership(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="memberships")
+
+    tenant_id: int = ormar.Integer(primary_key=True)  # optional
+    member: Member = ormar.ForeignKey(
+        Member,
+        primary_key=True,
+        columns={"tenant_id": "tenant_id", "login": "member_login"},
+    )
+    team: Team = ormar.ForeignKey(
+        Team,
+        primary_key=True,
+        columns={"tenant_id": "tenant_id", "code": "team_code"},
+    )
+    # PRIMARY KEY (tenant_id, member_login, team_code)
+    # FOREIGN KEY (tenant_id, member_login) REFERENCES members
+    # FOREIGN KEY (tenant_id, team_code) REFERENCES teams
+
+
+membership = await Membership.objects.create(member=alice, team=core)
+membership.pk  # (1, "alice", "core"): one part per key column
+membership.tenant_id  # 1, filled in from the foreign keys
+await Membership.objects.get(pk=(1, "alice", "core"))
+await Membership.objects.get(member=alice, team=core)  # the same row
+```
+
+* The key value has one part per key column, a shared column once, in the order the
+  columns first appear.
+* A shared column gets the value its fields agree on. Two different values (a member
+  and a team of different tenants) raise `ModelPersistenceError` on `save()`,
+  `update()`, `bulk_create()`, `bulk_update()` and queryset `update()`. A queryset
+  `update()` checks only the values it is given, and the database's foreign keys
+  check the rest.
+* Setting a foreign key that shares a column to `None` writes `NULL` to its own
+  columns and leaves the shared column as it is. The relation then reads as `None`.
+* A plain field sharing the column that isn't set is filled in from the foreign keys
+  when the model is created (`Membership(member=alice, team=core).tenant_id == 1`, so
+  `model_dump()` and `pk` agree before saving), which also lets a required plain field
+  be left out. A foreign key assigned later fills the plain field on `save()`.
+* `exclude_fields()` / `fields()` work per field: excluding the plain field leaves it
+  `None` on loaded models (even a required one) while its foreign keys still read the
+  column, and excluding a foreign key leaves the plain field loaded.
+* `update(_columns=[...])` writes only the listed columns: updating the shared column
+  alone leaves the other columns of its foreign keys as they are, so the database's
+  foreign keys reject a pair that no longer exists.
+* Only columns named explicitly (`columns=` / `name=`) are shared. A field whose name
+  clashes with a generated column name (`<field>_<column>`) still raises
+  `ModelDefinitionError`, as do two plain fields on one column and fields giving a
+  shared column different types (`String(3)` and `String(20)`, or `BigInteger` and
+  `Integer`, differ too).
+* The shared column keeps the options of every field storing it on its own: the
+  foreign key constraint of a foreign key to one column (`name="tenant_id"`), and the
+  `index`, `unique`, `default`, `server_default` and `comment` of a plain field,
+  whichever field is declared first. It is part of the primary key when any of its
+  fields is, and nullable only when all of them are.
+* A link table like this can be the `through` model of a `ManyToMany` (see
+  [many to many](many-to-many.md#models-with-a-composite-primary-key)).
+* Relations **to** a model whose primary key holds a foreign key to several columns
+  (a `ForeignKey` or `ManyToMany` to `Membership`), and a `ManyToMany` declared **on**
+  such a model, aren't supported yet and raise `ModelDefinitionError`.
 
 ## Relation Setup
 

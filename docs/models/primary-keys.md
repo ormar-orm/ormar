@@ -57,6 +57,10 @@ order.pk = (1, 8)  # sets tenant_id and number
   All parts must be set before `save()` (a server default on a part counts as set).
 * Foreign keys can be part of the key (`ForeignKey(..., primary_key=True)`, see
   [foreign keys in the primary key](../relations/foreign-key.md#foreign-keys-in-the-primary-key)).
+  A foreign key stored in several columns adds all of them, and the key value is a
+  flat tuple with one part per column, a column shared by several fields once
+  (`membership.pk == (1, "alice", "core")`, see
+  [link tables keyed by foreign keys to several columns](../relations/foreign-key.md#link-tables-keyed-by-foreign-keys-to-several-columns)).
 * Foreign keys **to** models with a composite key are stored in one column per key
   part (see [foreign keys to several columns](../relations/foreign-key.md#foreign-keys-to-several-columns)).
   Many-to-many relations to and from models with a composite key work the same way:

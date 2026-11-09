@@ -298,8 +298,40 @@ Project(documents=[[1, 7]])  # keys as JSON lists, tuples, dicts or models
 
 A link table you declare yourself can reference such a model with a foreign key to
 several columns (`ormar.ForeignKey(Document, columns={...})`, see
-[foreign keys to several columns](foreign-key.md#foreign-keys-to-several-columns));
-those foreign keys can't be part of the link table's primary key yet.
+[foreign keys to several columns](foreign-key.md#foreign-keys-to-several-columns)).
+Those foreign keys can form the link table's primary key and share columns, like the
+tenant of a multi-tenant schema
+(see [link tables keyed by foreign keys to several columns](foreign-key.md#link-tables-keyed-by-foreign-keys-to-several-columns)):
+
+```python
+class Team(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="teams")
+
+    tenant_id: int = ormar.Integer(primary_key=True)
+    code: str = ormar.String(max_length=10, primary_key=True)
+    members = ormar.ManyToMany(Member, through=ForwardRef("Membership"))
+
+
+class Membership(ormar.Model):  # PRIMARY KEY (tenant_id, member_login, team_code)
+    ormar_config = base_ormar_config.copy(tablename="memberships")
+
+    member: Member = ormar.ForeignKey(
+        Member,
+        primary_key=True,
+        columns={"tenant_id": "tenant_id", "login": "member_login"},
+    )
+    team: Team = ormar.ForeignKey(
+        Team,
+        primary_key=True,
+        columns={"tenant_id": "tenant_id", "code": "team_code"},
+    )
+
+
+Team.update_forward_refs()
+
+await core.members.add(alice)  # tenant_id stored once
+await core.members.add(carol)  # carol from another tenant: ModelPersistenceError
+```
 
 ## Overriding foreign key constraint names on the through model
 

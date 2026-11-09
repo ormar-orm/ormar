@@ -113,15 +113,24 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         Receives dictionary of model that is about to be saved and changes all related
         models that are stored as foreign keys to their fk value.
 
+        The values of all foreign keys are collected first and merged into the
+        dictionary afterwards (see ``merge_relation_values``), so columns the
+        foreign keys share get the same result whatever order they come in.
+
         :param model_dict: dictionary of model that is about to be saved
         :type model_dict: dict
         :return: dictionary of model that is about to be saved
         :rtype: dict
         """
+        relation_values: dict[str, dict[str, Any]] = {}
         for field in cls.extract_related_names():
             field_value = model_dict.get(field, None)
             if field_value is None and field in model_dict:
-                cls._expand_missing_relation(model_dict=model_dict, field_name=field)
+                cls._expand_missing_relation(
+                    model_dict=model_dict,
+                    field_name=field,
+                    relation_values=relation_values,
+                )
             elif field_value is not None:
                 target_field = cast(
                     "ForeignKeyField", cls.ormar_config.model_fields[field]
@@ -134,40 +143,46 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
                             f"You cannot save {field_value.get_name()} "
                             f"model without pk set!"
                         )
-                    model_dict.pop(field)
-                    model_dict.update(values)
+                    relation_values[field] = values
                 elif isinstance(field_value, list) and field_value:
                     model_dict[field] = [
                         target_key.value_from(data=target) for target in field_value
                     ]
                 elif isinstance(field_value, dict) and field_value:
-                    model_dict.pop(field)
-                    model_dict.update(target_field.link.values_for(related=field_value))
+                    relation_values[field] = target_field.link.values_for(
+                        related=field_value
+                    )
                 else:
                     model_dict.pop(field, None)
+        cls.merge_relation_values(target=model_dict, relation_values=relation_values)
         return model_dict
 
     @classmethod
-    def _expand_missing_relation(cls, model_dict: dict, field_name: str) -> None:
+    def _expand_missing_relation(
+        cls,
+        model_dict: dict,
+        field_name: str,
+        relation_values: dict[str, dict[str, Any]],
+    ) -> None:
         """
-        A missing foreign key stored in several columns sets all its columns
-        to ``None`` (single-column foreign keys keep their ``None`` value), a
-        missing reverse relation (one-to-one) is dropped, as it has no
-        column.
+        A missing foreign key sets all its columns to ``None`` (a column it
+        shares with other fields keeps their value), a missing reverse
+        relation (one-to-one) is dropped, as it has no column.
 
         :param model_dict: dictionary of the model that is about to be saved
         :type model_dict: dict
         :param field_name: name of the relation field holding ``None``
         :type field_name: str
+        :param relation_values: values of the foreign keys by name, filled in
+        :type relation_values: dict[str, dict[str, Any]]
         """
         field = cls.ormar_config.model_fields[field_name]
         if not field.kind.holds_columns:
             model_dict.pop(field_name)
             return
-        link = cast("ForeignKeyField", field).link
-        if len(link.pairs) > 1:
-            model_dict.pop(field_name)
-            model_dict.update(link.values_for(related=None))
+        relation_values[field_name] = cast("ForeignKeyField", field).link.values_for(
+            related=None
+        )
 
     @classmethod
     def reconvert_str_to_bytes(cls, model_dict: dict) -> dict:
@@ -329,10 +344,11 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         validators = cls._build_individual_schema_validator()
         foreign_keys = cls._extract_db_related_names()
         validated: dict = {}
+        related_values: dict[str, dict[str, Any]] = {}
         for key, value in new_kwargs.items():
             if key in foreign_keys:
-                validated.update(
-                    cls._related_values_for_update(field_name=key, value=value)
+                related_values[key] = cls._related_values_for_update(
+                    field_name=key, value=value
                 )
             elif key in cls._json_fields:
                 validated[key] = validators[key].validate_python(encode_json(value))
@@ -340,6 +356,7 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
                 if key in validators:
                     validators[key].validate_python(value)
                 validated[key] = value
+        cls.merge_relation_values(target=validated, relation_values=related_values)
         return validated
 
     @classmethod

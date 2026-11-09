@@ -19,14 +19,15 @@ class ValuesColumns:
     """
     Columns of a raw query returned by ``values()`` / ``values_list()``.
 
-    :ivar names: returned name (relation string) by query column label; the
-        columns of a foreign key stored in several columns share one name
-    :ivar key_parts: target field by query column label, for the columns of
+    :ivar names: ``(query column label, returned name)`` pairs in query
+        order; the columns of a foreign key stored in several columns share
+        one name, a column several fields share is listed once per field
+    :ivar key_parts: target field by ``(label, name)``, for the columns of
         foreign keys stored in several columns
     """
 
-    names: dict[str, str]
-    key_parts: dict[str, str]
+    names: tuple[tuple[str, str], ...]
+    key_parts: dict[tuple[str, str], str]
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,7 @@ class ReturnedColumn:
 
 def resolve_column(
     model_cls: type["Model"], column: str, allowed: set[str]
-) -> Optional[ReturnedColumn]:
+) -> list[ReturnedColumn]:
     """
     :param model_cls: model of the table the column belongs to
     :type model_cls: type[Model]
@@ -53,20 +54,27 @@ def resolve_column(
     :type column: str
     :param allowed: names of the fields to return
     :type allowed: set[str]
-    :return: the field the column stores, ``None`` if it isn't returned
-    :rtype: Optional[ReturnedColumn]
+    :return: the returned fields storing the column (several when fields
+        share it), empty if none is returned
+    :rtype: list[ReturnedColumn]
     """
-    field_name = model_cls.get_field_name_of_column(column=column)
-    if field_name not in allowed:
-        return None
-    field = model_cls.ormar_config.model_fields.get(field_name)
-    if field is None or not field.kind.holds_columns:
-        return ReturnedColumn(name=field_name)
-    pairs = cast("ForeignKeyField", field).link.pairs
-    if len(pairs) == 1:
-        return ReturnedColumn(name=field_name)
-    part = next(pair.target_field for pair in pairs if pair.source_column == column)
-    return ReturnedColumn(name=field_name, part=part)
+    resolved = []
+    for field_name in model_cls.get_field_names_of_column(column=column):
+        if field_name not in allowed:
+            continue
+        field = model_cls.ormar_config.model_fields.get(field_name)
+        pairs = (
+            cast("ForeignKeyField", field).link.pairs
+            if field is not None and field.kind.holds_columns
+            else ()
+        )
+        part = (
+            next(pair.target_field for pair in pairs if pair.source_column == column)
+            if len(pairs) > 1
+            else None
+        )
+        resolved.append(ReturnedColumn(name=field_name, part=part))
+    return resolved
 
 
 def allowed_columns(
@@ -185,8 +193,8 @@ def values_column_map(
     :type exclude_through: bool
     :param column_names: list of column names with prefixes from query
     :type column_names: list[str]
-    :return: dictionary of column name to resolved name
-    :rtype: dict[str, str]
+    :return: query columns and the names they are returned under
+    :rtype: ValuesColumns
     """
     tables = joined_table_columns(
         model_cls=model_cls,
@@ -199,8 +207,8 @@ def values_column_map(
             model=model_cls, excludable=excludable, add_pk_columns=False
         )
     )
-    names: dict[str, str] = dict()
-    key_parts: dict[str, str] = dict()
+    names: list[tuple[str, str]] = []
+    key_parts: dict[tuple[str, str], str] = dict()
     for column_name in column_names:
         prefix, _, column = column_name.partition("_")
         if prefix in tables:
@@ -214,11 +222,12 @@ def values_column_map(
                 model_cls=model_cls, column=column_name, allowed=own_columns
             )
             name_prefix = ""
-        if resolved is not None:
-            names[column_name] = f"{name_prefix}{resolved.name}"
-            if resolved.part is not None:
-                key_parts[column_name] = resolved.part
-    return ValuesColumns(names=names, key_parts=key_parts)
+        for returned in resolved:
+            entry = (column_name, f"{name_prefix}{returned.name}")
+            names.append(entry)
+            if returned.part is not None:
+                key_parts[entry] = returned.part
+    return ValuesColumns(names=tuple(names), key_parts=key_parts)
 
 
 def extract_values(rows: list[Any], columns: ValuesColumns, as_dict: bool) -> list[Any]:
@@ -226,7 +235,7 @@ def extract_values(rows: list[Any], columns: ValuesColumns, as_dict: bool) -> li
     Extracts the mapped columns of each row, in the order of the query columns,
     as a dictionary keyed by relation string or as a tuple of values.
 
-    Sample: with names {"t1a2b3c_name": "posts__user__name"} a row
+    Sample: with names (("t1a2b3c_name", "posts__user__name"),) a row
     {"id": 1, "t1a2b3c_name": "a"} becomes {"posts__user__name": "a"} or ("a",)
 
     A foreign key stored in several columns is one value: a dict of its
@@ -247,8 +256,8 @@ def extract_values(rows: list[Any], columns: ValuesColumns, as_dict: bool) -> li
     """
     if columns.key_parts:
         return extract_grouped_values(rows=rows, columns=columns, as_dict=as_dict)
-    labels = list(columns.names)
-    names = list(columns.names.values())
+    labels = [label for label, _ in columns.names]
+    names = [name for _, name in columns.names]
     if as_dict and labels == names == list(rows[0].keys()):
         return [dict(row) for row in rows]
     if len(labels) > 1:
@@ -277,25 +286,29 @@ def extract_grouped_values(
     :rtype: list[Any]
     """
     groups: dict[str, list[str]] = dict()
-    for label, name in columns.names.items():
+    for label, name in columns.names:
         groups.setdefault(name, []).append(label)
     result = []
     for row in rows:
         values = [
-            group_value(row=row, labels=labels, columns=columns, as_dict=as_dict)
-            for labels in groups.values()
+            group_value(
+                row=row, name=name, labels=labels, columns=columns, as_dict=as_dict
+            )
+            for name, labels in groups.items()
         ]
         result.append(dict(zip(groups, values)) if as_dict else tuple(values))
     return result
 
 
 def group_value(
-    row: Any, labels: list[str], columns: ValuesColumns, as_dict: bool
+    row: Any, name: str, labels: list[str], columns: ValuesColumns, as_dict: bool
 ) -> Any:
     """
     :param row: database row
     :type row: Any
-    :param labels: query column labels of one returned name
+    :param name: returned name
+    :type name: str
+    :param labels: query column labels of the returned name
     :type labels: list[str]
     :param columns: returned columns of the query
     :type columns: ValuesColumns
@@ -304,11 +317,13 @@ def group_value(
     :return: the value of the returned name
     :rtype: Any
     """
-    if labels[0] not in columns.key_parts:
+    if (labels[0], name) not in columns.key_parts:
         return row[labels[0]]
     parts = tuple(row[label] for label in labels)
     if None in parts:
         return None
     if as_dict:
-        return {columns.key_parts[label]: part for label, part in zip(labels, parts)}
+        return {
+            columns.key_parts[(label, name)]: part for label, part in zip(labels, parts)
+        }
     return parts

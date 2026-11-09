@@ -67,6 +67,35 @@ def to_field_names(
     return tuple(to_field)
 
 
+def keyed_by_multi_column_relation(model: type["Model"]) -> bool:
+    """
+    :param model: model to check
+    :type model: type[Model]
+    :return: whether the model's primary key holds a foreign key stored in
+        several columns (e.g. a link table keyed by two such foreign keys)
+    :rtype: bool
+    """
+    key = model.ormar_config.pk
+    return any(len(field.column_aliases()) > 1 for field in key.relation_parts.values())
+
+
+def validate_key_target(to: type["Model"]) -> None:
+    """
+    A relation can't lead to a model whose primary key holds a foreign key
+    stored in several columns (e.g. a link table keyed by two such foreign
+    keys) yet.
+
+    :raises ModelDefinitionError: if the target's key holds such a foreign key
+    :param to: target model
+    :type to: type[Model]
+    """
+    if keyed_by_multi_column_relation(model=to):
+        raise ModelDefinitionError(
+            f"Relations to {to.__name__}, whose primary key holds a foreign key "
+            "stored in several columns, are not supported yet."
+        )
+
+
 def populate_fk_params_based_on_to_model(
     *,
     to: type["T"],
@@ -89,6 +118,8 @@ def populate_fk_params_based_on_to_model(
     :return: annotation, column type and key-only model of the relation
     :rtype: FkParams
     """
+    if not virtual:
+        validate_key_target(to=to)
     key = to.ormar_config.pk
     names = to_field_names(to_field=to_field)
     if names is None:
@@ -121,15 +152,13 @@ def validate_link_columns(
     to_field: Union[str, list[str], tuple[str, ...], None],
     columns: Optional[dict[str, str]],
     name: Optional[str],
-    primary_key: bool,
 ) -> None:
     """
     Validate the column options of a foreign key against the columns it
     references.
 
     :raises ModelDefinitionError: if ``columns=`` doesn't map exactly the
-        referenced columns, ``name=`` is used for several columns, or a foreign
-        key of several columns is part of a primary key (not supported yet)
+        referenced columns or ``name=`` is used for several columns
     :param to: target model
     :type to: type[Model]
     :param to_field: referenced field(s), ``None`` for the primary key
@@ -138,8 +167,6 @@ def validate_link_columns(
     :type columns: Optional[dict[str, str]]
     :param name: single local column name
     :type name: Optional[str]
-    :param primary_key: whether the foreign key is part of the primary key
-    :type primary_key: bool
     """
     names = to_field_names(to_field=to_field) or to.ormar_config.pk.fields
     referenced = {to.get_column_alias(field_name=field) for field in names}
@@ -157,11 +184,6 @@ def validate_link_columns(
         raise ModelDefinitionError(
             f"A foreign key to several columns of {to.__name__} needs columns= "
             "instead of name=."
-        )
-    if len(names) > 1 and primary_key:
-        raise ModelDefinitionError(
-            f"A foreign key to several columns of {to.__name__} cannot be part of "
-            "a primary key yet."
         )
 
 
@@ -392,7 +414,6 @@ def ForeignKey(  # type: ignore # noqa CFQ002
             to_field=to_field,
             columns=columns,
             name=name,
-            primary_key=primary_key,
         )
         __type__ = params.annotation
         column_type = params.column_type
@@ -653,6 +674,8 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
                 name=pair.source_column,
                 type_=cast(Any, target_fields[pair.target_field].column_type),
                 nullable=self.sql_nullable,
+                primary_key=self.primary_key,
+                autoincrement=False,
             )
             for pair in pairs
         ]
@@ -752,7 +775,6 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
                     to_field=self.to_field,
                     columns=self.columns,
                     name=self.db_alias,
-                    primary_key=self.primary_key,
                 )
             self.__type__ = params.annotation
             self.column_type = params.column_type
