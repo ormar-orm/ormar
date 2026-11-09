@@ -153,6 +153,11 @@
   `load_all(follow=True)` include relations registered after the model was first
   used, e.g. the reverse side of a foreign key declared by a model defined later.
   The cached relation paths of a model are rebuilt when any relation is added.
+* `model_dump()`, `bulk_create()`, `save_related()` and `get_pydantic()` of a model
+  connected to a still unresolved `ForwardRef` relation no longer fail with
+  `AttributeError: 'ForwardRef' object has no attribute '_iterate_related_models'`
+  before `update_forward_refs()` is called. The unresolved relation is skipped and
+  joins the relation paths once `update_forward_refs()` resolves it.
 
 * `values()` / `values_list()` return fields with a custom database column `name=`
   (they were left out).
