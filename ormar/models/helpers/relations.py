@@ -25,6 +25,7 @@ from ormar.fields.relation_kind import (
 from ormar.models.descriptors import RelationDescriptor
 from ormar.models.helpers.rebuild import mark_for_rebuild
 from ormar.models.helpers.sqlalchemy import adjust_through_many_to_many_model
+from ormar.models.relation_graph import RelationGraph
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
@@ -89,7 +90,8 @@ def reset_relation_caches(model: type["Model"]) -> None:
     """
     Drop the lazily cached relation metadata of a model that gains a reverse
     relation, so models already used before a related model was defined see
-    the new relation (and lose trusted row construction).
+    the new relation (and lose trusted row construction). The cached relation
+    paths of every model connected to it are rebuilt on next use too.
 
     :param model: model receiving a reverse relation
     :type model: type[Model]
@@ -98,6 +100,7 @@ def reset_relation_caches(model: type["Model"]) -> None:
     model._related_fields = None
     model._related_field_map = None
     model._trusted_rows = None
+    RelationGraph.changed()
 
 
 def resolve_through_fields(model_field: "ManyToManyField") -> None:

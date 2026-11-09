@@ -38,6 +38,7 @@ quick_access_set = {
     "_orm_id",
     "_orm_saved",
     "_related_names",
+    "_relation_tree",
     "_update_and_follow",
     "_update_excluded_with_related_not_required",
     "_verify_model_can_be_initialized",

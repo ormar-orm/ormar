@@ -268,3 +268,14 @@ def test_subtracting_with_set_and_dict():
     }
     test = subtract_dict(curr_dict, dict_to_update)
     assert test == {"translation": {"translations": {"language": Ellipsis}}}
+
+
+def test_subtracting_dict_does_not_modify_the_input():
+    curr_dict = {"aa": {"bb": Ellipsis, "cc": {"dd": Ellipsis}}, "ee": Ellipsis}
+    snapshot = {"aa": {"bb": Ellipsis, "cc": {"dd": Ellipsis}}, "ee": Ellipsis}
+    test = subtract_dict(
+        current_dict=curr_dict,
+        updating_dict={"aa": {"cc": {"dd": Ellipsis}}, "ee": Ellipsis},
+    )
+    assert test == {"aa": {"bb": Ellipsis}}
+    assert curr_dict == snapshot

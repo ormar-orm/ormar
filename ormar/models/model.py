@@ -281,9 +281,7 @@ class Model(ModelRow):
         """
         self.verify_writable()
         relation_map = (
-            relation_map
-            if relation_map is not None
-            else translate_list_to_dict(self._iterate_related_models())
+            relation_map if relation_map is not None else self._relation_tree()
         )
         if exclude and isinstance(exclude, set):
             exclude = translate_list_to_dict(exclude)

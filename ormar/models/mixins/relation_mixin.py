@@ -1,7 +1,9 @@
 from typing import TYPE_CHECKING, Callable, Optional, cast
 
 from ormar import BaseField, ForeignKeyField
+from ormar.models.relation_graph import RelationGraph
 from ormar.models.traversible import NodeList
+from ormar.queryset.utils import translate_list_to_dict
 
 
 class RelationMixin:
@@ -14,6 +16,8 @@ class RelationMixin:
 
         ormar_config: OrmarConfig
         __relation_map__: Optional[list[str]]
+        __relation_tree__: Optional[dict]
+        __relation_graph_version__: int
         _related_names: Optional[set]
         _through_names: Optional[set]
         _related_fields: Optional[list]
@@ -152,11 +156,15 @@ class RelationMixin:
         Iterates related models recursively to extract relation strings of
         nested not visited models.
 
+        The top level result is cached on the class until the relation graph
+        changes (see ``RelationGraph``).
+
         :return: list of relation strings to be passed to select_related
         :rtype: list[str]
         """
         if not node_list:
-            if cls.__relation_map__:
+            cls._drop_stale_relation_maps()
+            if cls.__relation_map__ is not None:
                 return cls.__relation_map__
             node_list = NodeList()
             parsed_map = dict()
@@ -190,6 +198,38 @@ class RelationMixin:
         if not recurrent:
             cls.__relation_map__ = result
         return result
+
+    @classmethod
+    def _relation_tree(cls) -> dict:
+        """
+        Returns the relation paths of ``_iterate_related_models`` as a nested
+        dict, the default relation map of ``model_dump``, ``save_related`` and
+        ``get_pydantic``. Built once per model class and cached until the
+        relation graph changes, so it is shared and must not be modified::
+
+            Book._iterate_related_models()  # -> ["author__country", "tags"]
+            Book._relation_tree()  # -> {"author": {"country": ...}, "tags": ...}
+
+        :return: nested dict of relation names
+        :rtype: dict
+        """
+        cls._drop_stale_relation_maps()
+        tree = cls.__relation_tree__
+        if tree is None:
+            tree = translate_list_to_dict(list_to_trans=cls._iterate_related_models())
+            cls.__relation_tree__ = tree
+        return tree
+
+    @classmethod
+    def _drop_stale_relation_maps(cls) -> None:
+        """
+        Drops the cached relation paths and tree of the model when a relation
+        was registered on any model since they were built.
+        """
+        if cls.__relation_graph_version__ != RelationGraph.version:
+            cls.__relation_map__ = None
+            cls.__relation_tree__ = None
+            cls.__relation_graph_version__ = RelationGraph.version
 
     @staticmethod
     def _get_final_relations(

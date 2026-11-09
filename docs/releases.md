@@ -134,8 +134,19 @@
   models with dense relations now takes 13 MiB and 0.13 s instead of 107 MiB and
   0.61 s (16 MiB once every model is used; with `defer_build` 11 MiB and 0.12 s
   instead of 25 MiB and 0.37 s, 45 MiB instead of 35 MiB once every model is used).
+* `model_dump()`, `bulk_create()`, `save_related()` and `get_pydantic()` no longer
+  rebuild the nested map of a model's relation paths on every call. The map is
+  built once per model class and reused, so dumping a model of a densely related
+  schema (91,000 relation paths) takes 0.01 ms instead of 165 ms, and
+  `bulk_create()` of 300 rows of a model with 12,000 relation paths 17 ms instead
+  of 5.6 s.
 
 ### 🐛 Fixes
+
+* `model_dump()`, `save_related()`, `select_all(follow=True)` and
+  `load_all(follow=True)` include relations registered after the model was first
+  used, e.g. the reverse side of a foreign key declared by a model defined later.
+  The cached relation paths of a model are rebuilt when any relation is added.
 
 * `values()` / `values_list()` return fields with a custom database column `name=`
   (they were left out).

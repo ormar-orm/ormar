@@ -18,7 +18,6 @@ from ormar.models.excludable import (
 )
 from ormar.models.helpers.pydantic import extract_pk_value
 from ormar.models.mixins.relation_mixin import RelationMixin  # noqa: I100, I202
-from ormar.queryset.utils import translate_list_to_dict
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import Model
@@ -66,7 +65,7 @@ class PydanticMixin(RelationMixin):
         :raises QueryDefinitionError: on invalid flatten paths or when a
             flattened relation has sub-field include/exclude
         """
-        relation_map = translate_list_to_dict(cls._iterate_related_models())
+        relation_map = cls._relation_tree()
         flatten_map = resolve_flatten_map(
             model_cls=cast(type["Model"], cls),
             flatten_fields=flatten_fields,
