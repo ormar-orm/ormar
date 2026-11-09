@@ -345,7 +345,7 @@ class AliasMixin:
             for values in relation_values.values():
                 target.update(values)
             return
-        cleared: dict[str, int] = {}
+        cleared: dict[SharedKey, int] = {}
         for field_name in cls.ormar_config.model_fields:
             field_values = relation_values.get(field_name)
             if field_values is None:
@@ -357,7 +357,7 @@ class AliasMixin:
                 kept, column = shared[key]
                 current = target.get(kept)
                 if value is None:
-                    cleared[kept] = cleared.get(kept, 0) + 1
+                    cleared[shared[key]] = cleared.get(shared[key], 0) + 1
                     continue
                 if current is None:
                     target[kept] = value
@@ -369,27 +369,23 @@ class AliasMixin:
         cls.clear_shared_columns(target=target, cleared=cleared)
 
     @classmethod
-    def clear_shared_columns(cls, target: dict, cleared: dict[str, int]) -> None:
+    def clear_shared_columns(cls, target: dict, cleared: dict[SharedKey, int]) -> None:
         """
-        Write ``None`` to a shared column no plain field stores when every key
-        storing it was cleared (e.g. two nullable foreign keys sharing a
-        ``tenant_id`` both set to ``None``).
+        Write ``None`` to a shared column when every field storing it is a
+        foreign key given ``None`` (e.g. two nullable foreign keys sharing a
+        ``tenant_id`` both set to ``None``). The fields are counted per column,
+        as foreign keys stored in several columns all keep a shared column
+        under the same key, and a plain field storing the column is never
+        cleared, so its column keeps its value.
 
         :param target: model dict being prepared, updated in place
         :type target: dict
-        :param cleared: number of ``None`` values given per kept key
-        :type cleared: dict[str, int]
+        :param cleared: number of foreign keys given ``None`` per shared column
+        :type cleared: dict[SharedKey, int]
         """
-        if not cleared:
-            return
-        shared = cls.shared_value_keys()
-        model_fields = cls.ormar_config.model_fields
-        for kept, count in cleared.items():
-            stored_by_plain = (
-                kept in model_fields and not model_fields[kept].is_relation
-            )
-            sharing = sum(1 for value in shared.values() if value.kept == kept)
-            if not stored_by_plain and target.get(kept) is None and count == sharing:
+        for (kept, column), count in cleared.items():
+            sharing = len(cls.get_field_names_of_column(column=column))
+            if target.get(kept) is None and count == sharing:
                 target[kept] = None
 
     @classmethod
