@@ -175,6 +175,13 @@
 
 ### 🐛 Fixes
 
+* The reverse side of a relation is registered when the related model has a field
+  named like the owner model, e.g. `Player.coach = ForeignKey(Coach)` next to
+  `Coach.fans = ManyToMany(Player, related_name="idols")`. `idols` was silently
+  skipped (`Player(idols=...)` raised `ModelError`, `coach.fans.add()` a
+  `KeyError`), a field with that name leading to another model raised a false
+  `ModelDefinitionError`, and with a `ForwardRef` the model failed with
+  `AttributeError: 'ForwardRef' object has no attribute 'ormar_config'`.
 * A column shared only by foreign keys stored in several columns (e.g. `member` and
   `team` both including `tenant_id`) becomes `NULL` when all of them are set to
   `None`, as documented, on `update()`, `save()`, `bulk_update()` and queryset

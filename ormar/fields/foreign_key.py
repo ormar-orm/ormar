@@ -568,6 +568,7 @@ class ForeignKeyField(BaseField):  # type: ignore[misc]
         )
         self.columns: Optional[dict[str, str]] = kwargs.pop("columns", None)
         self.db_constraint: bool = kwargs.pop("db_constraint", True)
+        self.deferred_related_name_checks: list[ForeignKeyField] = []
         super().__init__(**kwargs)
 
     def construct_constraints(self) -> list:
