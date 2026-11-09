@@ -167,7 +167,7 @@ If no criteria is set it will return the last row in db sorted by pk.
 (The criteria cannot be set also with filter/exclude).
 
 !!!tip
-    To read more about `get` visit [read/get](./read/#get)
+    To read more about `get` visit [read/get](read.md#get)
 
 
 ## first
@@ -177,7 +177,7 @@ If no criteria is set it will return the last row in db sorted by pk.
 Gets the first row from the db ordered by primary key column ascending.
 
 !!!tip
-    To read more about `first` visit [read/first](./read/#first)
+    To read more about `first` visit [read/first](read.md#first)
 
 
 ## first_or_none
@@ -188,7 +188,7 @@ Same as `first()` but returns `None` instead of raising `NoMatch` when no
 row matches.
 
 !!!tip
-    To read more about `first_or_none` visit [read/first_or_none](./read/#first_or_none)
+    To read more about `first_or_none` visit [read/first_or_none](read.md#first_or_none)
 
 
 ## last
@@ -205,7 +205,7 @@ newest_by_name = await Track.objects.order_by("name").last()
 ```
 
 !!!tip
-    To read more about `last` visit [read/last](./read/#last)
+    To read more about `last` visit [read/last](read.md#last)
 
 
 ## last_or_none
@@ -216,7 +216,7 @@ Same as `last()` but returns `None` instead of raising `NoMatch` when no
 row matches.
 
 !!!tip
-    To read more about `last_or_none` visit [read/last_or_none](./read/#last_or_none)
+    To read more about `last_or_none` visit [read/last_or_none](read.md#last_or_none)
 
 
 ## QuerysetProxy methods
@@ -229,7 +229,7 @@ select related etc related models directly from parent model.
 
 ### paginate
 
-Works exactly the same as [paginate](./#paginate) function above but allows you to paginate related
+Works exactly the same as [paginate](#paginate) function above but allows you to paginate related
 objects from other side of the relation.
 
 !!!tip 
@@ -237,7 +237,7 @@ objects from other side of the relation.
 
 ### limit
 
-Works exactly the same as [limit](./#limit) function above but allows you to paginate related
+Works exactly the same as [limit](#limit) function above but allows you to paginate related
 objects from other side of the relation.
 
 !!!tip 
@@ -245,7 +245,7 @@ objects from other side of the relation.
 
 ### offset
 
-Works exactly the same as [offset](./#offset) function above but allows you to paginate related
+Works exactly the same as [offset](#offset) function above but allows you to paginate related
 objects from other side of the relation.
 
 !!!tip 
@@ -253,7 +253,7 @@ objects from other side of the relation.
 
 ### slicing with `__getitem__`
 
-Works exactly the same as [slicing](./#slicing-with-__getitem__) above but on the relation
+Works exactly the same as [slicing](#slicing-with-__getitem__) above but on the relation
 side:
 
 ```python

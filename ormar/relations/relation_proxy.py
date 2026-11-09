@@ -107,7 +107,7 @@ class RelationProxy(Generic[T], list[T]):
 
         :param prev_hash: The hash to update
         :type prev_hash: int
-        :param prev_hash: The new hash to update to
+        :param new_hash: The new hash to update to
         :type new_hash: int
         """
         try:

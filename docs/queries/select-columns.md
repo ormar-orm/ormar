@@ -404,7 +404,7 @@ select related etc related models directly from parent model.
 
 ### fields
 
-Works exactly the same as [fields](./#fields) function above but allows you to select columns from related
+Works exactly the same as [fields](#fields) function above but allows you to select columns from related
 objects from other side of the relation.
 
 !!!tip 
@@ -412,7 +412,7 @@ objects from other side of the relation.
 
 ### exclude_fields
 
-Works exactly the same as [exclude_fields](./#exclude_fields) function above but allows you to select columns from related
+Works exactly the same as [exclude_fields](#exclude_fields) function above but allows you to select columns from related
 objects from other side of the relation.
 
 !!!tip 
@@ -420,7 +420,7 @@ objects from other side of the relation.
 
 ### flatten_fields
 
-Works exactly the same as [flatten_fields](./#flatten_fields) function above
+Works exactly the same as [flatten_fields](#flatten_fields) function above
 but applied to the related-side queryset.
 
 !!!tip

@@ -295,7 +295,7 @@ select related etc related models directly from parent model.
 
 ### count
 
-Works exactly the same as [count](./#count) function above but allows you to select columns from related
+Works exactly the same as [count](#count) function above but allows you to select columns from related
 objects from other side of the relation.
 
 !!!tip
@@ -303,27 +303,27 @@ objects from other side of the relation.
 
 ### exists
 
-Works exactly the same as [exists](./#exists) function above but allows you to select columns from related
+Works exactly the same as [exists](#exists) function above but allows you to select columns from related
 objects from other side of the relation.
 
 ### sum
 
-Works exactly the same as [sum](./#sum) function above but allows you to sum columns from related
+Works exactly the same as [sum](#sum) function above but allows you to sum columns from related
 objects from other side of the relation.
 
 ### avg
 
-Works exactly the same as [avg](./#avg) function above but allows you to average columns from related
+Works exactly the same as [avg](#avg) function above but allows you to average columns from related
 objects from other side of the relation.
 
 ### min
 
-Works exactly the same as [min](./#min) function above but allows you to select minimum of columns from related
+Works exactly the same as [min](#min) function above but allows you to select minimum of columns from related
 objects from other side of the relation.
 
 ### max
 
-Works exactly the same as [max](./#max) function above but allows you to select maximum of columns from related
+Works exactly the same as [max](#max) function above but allows you to select maximum of columns from related
 objects from other side of the relation.
 
 !!!tip

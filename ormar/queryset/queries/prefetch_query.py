@@ -581,15 +581,12 @@ class PrefetchQuery:
         Main entry point for prefetch_query.
 
         Receives list of already initialized parent models with all children from
-        select_related already populated. Receives also list of row sql result rows
-        as it's quicker to extract ids that way instead of calling each model.
+        select_related already populated.
 
         Returns list with related models already prefetched and set.
 
         :param models: list of already instantiated models from main query
         :type models: Sequence[Model]
-        :param rows: row sql result of the main query before the prefetch
-        :type rows: list[sqlalchemy.engine.result.RowProxy]
         :return: list of models with children prefetched
         :rtype: list[Model]
         """

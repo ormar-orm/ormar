@@ -739,6 +739,6 @@ assert department_check.model_dump(exclude=to_exclude) == to_save
 [sqlalchemy connection string]: https://docs.sqlalchemy.org/en/13/core/engines.html#database-urls
 [sqlalchemy table creation]: https://docs.sqlalchemy.org/en/13/core/metadata.html#creating-and-dropping-database-tables
 [alembic]: https://alembic.sqlalchemy.org/en/latest/tutorial.html
-[save status]:  ../models/index/#model-save-status
+[save status]:  index.md#model-save-status
 [Internals]:  #internals
 [exclude_fields]: ../queries/select-columns.md#exclude_fields
