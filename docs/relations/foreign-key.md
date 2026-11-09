@@ -428,6 +428,8 @@ await Membership.objects.get(member=alice, team=core)  # the same row
   check the rest.
 * Setting a foreign key that shares a column to `None` writes `NULL` to its own
   columns and leaves the shared column as it is. The relation then reads as `None`.
+  The shared column becomes `NULL` only when every foreign key storing it is `None`
+  and no plain field stores it.
 * A plain field sharing the column that isn't set is filled in from the foreign keys
   when the model is created (`Membership(member=alice, team=core).tenant_id == 1`, so
   `model_dump()` and `pk` agree before saving), which also lets a required plain field
@@ -450,9 +452,49 @@ await Membership.objects.get(member=alice, team=core)  # the same row
   fields is, and nullable only when all of them are.
 * A link table like this can be the `through` model of a `ManyToMany` (see
   [many to many](many-to-many.md#models-with-a-composite-primary-key)).
-* Relations **to** a model whose primary key holds a foreign key to several columns
-  (a `ForeignKey` or `ManyToMany` to `Membership`), and a `ManyToMany` declared **on**
-  such a model, aren't supported yet and raise `ModelDefinitionError`.
+
+### Relations to link tables
+
+A model whose primary key holds foreign keys (like `Membership` above) is referenced
+like any other model with a composite key: a `ForeignKey`, `OneToOne` or `ManyToMany`
+to it stores one column per **key column**, each shared column once, and a link table
+can declare a `ManyToMany` itself.
+
+```python
+class Shift(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="shifts")
+
+    id: int = ormar.Integer(primary_key=True)
+    membership: Membership = ormar.ForeignKey(Membership)
+    # membership_tenant_id, membership_member_login, membership_team_code
+    # FOREIGN KEY (...) REFERENCES memberships (tenant_id, member_login, team_code)
+
+
+class Seniority(ormar.Model):  # keyed by the link table's key
+    ormar_config = base_ormar_config.copy(tablename="seniorities")
+
+    membership: Membership = ormar.OneToOne(Membership, primary_key=True)
+    years: int = ormar.Integer(default=0)
+
+
+await Shift.objects.create(membership=membership)
+await Shift.objects.create(membership=(1, "alice", "core"))  # key tuple
+await Shift.objects.filter(membership__member__login="alice").all()
+shift.model_dump(flatten_fields={"membership"})["membership"]
+# {"tenant_id": 1, "member": {"tenant_id": 1, "login": "alice"},
+#  "team": {"tenant_id": 1, "code": "core"}}
+```
+
+* `columns=` is keyed by the **columns** of the referenced key
+  (`{"tenant_id": ..., "member_login": ..., "team_code": ...}`), and the default
+  column names are `<field>_<key column>`.
+* A key value is the flat tuple of the key columns (`membership.pk`). A dict of the
+  key fields works too, with a foreign key in the key given as a model, a dict of its
+  fields or its own key tuple.
+* Flattened output (`flatten_fields`, `get_pydantic(flatten_fields=...)`) and
+  `values()` give the dict of the key fields, where a foreign key in the key is
+  represented by its own flattened value (nested dicts above). `values_list()` gives
+  the flat tuple.
 
 ## Relation Setup
 

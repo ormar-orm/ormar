@@ -6,7 +6,7 @@ import sqlalchemy
 
 import ormar  # noqa: I100, I202
 from ormar.fields.link import qualified_fk_reference
-from ormar.models.descriptors import RelationDescriptor
+from ormar.models.descriptors import PkDescriptor, RelationDescriptor
 from ormar.models.helpers.pydantic import create_pydantic_field
 from ormar.models.helpers.related_names_validation import (
     validate_related_names_in_relations,
@@ -629,3 +629,21 @@ def update_column_definition(
             columns[ind : ind + 1] = field.get_columns()
             columns[:] = merge_shared_columns(model=model, columns=columns)
             break
+
+
+def rebuild_primary_key(model: Union[type["Model"], type["NewBaseModel"]]) -> None:
+    """
+    A key whose only field is a foreign key to a forward reference is built as
+    a key of one column; once the reference resolves to a model with a key of
+    several columns, the foreign key stores several columns and the model's
+    key becomes composite.
+
+    :param model: model whose forward references were just resolved
+    :type model: Union[type[Model], type[NewBaseModel]]
+    """
+    key = model.ormar_config.pk
+    if key.is_composite or len(key.column_aliases()) == 1:
+        return
+    composite = build_primary_key(owner=cast(type["Model"], model), fields=key.fields)
+    model.ormar_config.pk = composite
+    model.pk = PkDescriptor(key=composite)  # type: ignore[assignment]

@@ -93,13 +93,25 @@ class Profile(ormar.Model):
     bio: Optional[str] = ormar.String(max_length=50, nullable=True)
 
 
+class Nickname(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="ckr_nicknames")
+
+    member: Member = ormar.ForeignKey(  # type: ignore[assignment]
+        ForwardRef("Member"), primary_key=True, related_name="nicknames"
+    )
+    nick: Optional[str] = ormar.String(max_length=20, nullable=True)
+
+
+Nickname.update_forward_refs()
+
+
 create_test_database = init_tests(base_ormar_config)
 
 
 @pytest_asyncio.fixture(autouse=True)
 async def data():
     async with base_ormar_config.database:
-        for model in (Profile, Task, Assignment, Membership, Team, Member):
+        for model in (Nickname, Profile, Task, Assignment, Membership, Team, Member):
             await model.objects.delete(each=True)
         alice = await Member.objects.create(tenant_id=1, login="alice")
         bob = await Member.objects.create(tenant_id=1, login="bob")
@@ -176,26 +188,6 @@ def test_shared_column_definition_errors():
                 columns={"tenant_id": "tenant_id", "login": "member_login"},
                 related_name="bad_types",
             )
-
-
-def test_relations_to_a_model_keyed_by_a_foreign_key_of_several_columns_raise():
-    with pytest.raises(ModelDefinitionError, match="not supported yet"):
-
-        class BadForeignKey(ormar.Model):
-            ormar_config = base_ormar_config.copy(tablename="ckr_bad_fk")
-
-            id: int = ormar.Integer(primary_key=True)
-            membership: Optional[Membership] = ormar.ForeignKey(
-                Membership, related_name="bad_fks"
-            )
-
-    with pytest.raises(ModelDefinitionError, match="not supported yet"):
-
-        class BadManyToMany(ormar.Model):
-            ormar_config = base_ormar_config.copy(tablename="ckr_bad_m2m")
-
-            id: int = ormar.Integer(primary_key=True)
-            memberships = ormar.ManyToMany(Membership, related_name="bad_m2ms")
 
 
 @pytest.mark.asyncio
@@ -448,3 +440,16 @@ async def test_single_foreign_key_of_several_columns_as_the_whole_key(data):
     assert await Profile.objects.count() == 1
     with pytest.raises(QueryDefinitionError):
         await Profile.objects.get(pk=(1, None))
+
+
+@pytest.mark.asyncio
+async def test_key_of_a_foreign_key_to_a_forward_reference(data):
+    alice, *_ = data
+    key = Nickname.ormar_config.pk
+    assert key.is_composite
+    assert key.column_aliases() == ("member_tenant_id", "member_login")
+    nickname = await Nickname.objects.create(member=alice, nick="al")
+    assert nickname.pk == (1, "alice")
+    fetched = await Nickname.objects.select_related("member").get(pk=(1, "alice"))
+    assert fetched.nick == "al"
+    assert fetched.member.login == "alice"
