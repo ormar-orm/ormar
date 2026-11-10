@@ -16,7 +16,8 @@ class SelectAction(QueryAction):
     Represents a single column target for an aggregate function on a queryset.
 
     Created when ``.min()`` / ``.max()`` / ``.sum()`` / ``.avg()`` is called,
-    optionally traversing relations via ``__``.
+    optionally traversing relations via ``__``. Also resolves the fields read
+    by column expressions (see ``expression_columns``).
     """
 
     def __init__(self, select_str: str, model_cls: type["Model"]) -> None:

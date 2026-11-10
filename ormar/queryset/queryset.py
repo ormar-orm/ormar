@@ -1280,11 +1280,11 @@ class QuerySet(Generic[T]):
         """
         for clause in self.filter_clauses + self.exclude_clauses:
             actions = clause._iter() if isinstance(clause, FilterGroup) else [clause]
-            for action in actions:
-                if any(path.related_parts for path in action.path_actions()):
+            for path in (path for action in actions for path in action.path_actions()):
+                if path.related_parts:
                     raise QueryDefinitionError(
                         f"{operation}() does not support filters on related models "
-                        f"('{action.query_str}'). Select the pks first and "
+                        f"('{path.query_str}'). Select the pks first and "
                         f"filter with pk__in instead."
                     )
 

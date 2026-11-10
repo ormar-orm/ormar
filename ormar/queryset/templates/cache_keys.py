@@ -34,12 +34,11 @@ def value_cache_key(action: "FilterAction") -> Any:
         filter(active=True)  # -> ("literal", True)  literal true
         filter(id__in=[1, 2])  # -> "in"               IN (expanding)
         filter(name="a")  # -> ("value", str)     = :ormar_p0
-        filter(a__lt=F("b") + 1)  # -> ("expr", <shape>, ("",))  < b + :ormar_p0_0
+        filter(a__lt=F("b") + 1)  # -> ("expr", <shape>)  < b + :ormar_p0_0
 
     Values written into the SQL text are part of the key as they are. For a
     bound value only its type is kept, so values of different types never
-    share a statement. An expression keeps its shape and the table aliases of
-    the fields it reads.
+    share a statement.
 
     :param action: filter action
     :type action: FilterAction
@@ -48,10 +47,7 @@ def value_cache_key(action: "FilterAction") -> Any:
     """
     value = action.bound_value()
     if isinstance(value, Expression):
-        prefixes = tuple(
-            column.table_prefix for column in action.expression_columns.values()
-        )
-        return ("expr", expression_key(node=value), prefixes)
+        return ("expr", expression_key(node=value))
     if action.operator == "isnull":
         return ("isnull", bool(value))
     if action.operator == "in":

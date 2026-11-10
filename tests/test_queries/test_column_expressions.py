@@ -300,14 +300,17 @@ async def test_expressions_reference_non_relation_fields(slots):
     for kwargs in [{"taken": F("owner__score")}, {"taken": Slot.owner.id + 1}]:
         with pytest.raises(QueryDefinitionError, match="not support .* yet"):
             await Slot.objects.filter(id=1).update(**kwargs)
-    for related_filter in [
-        Slot.objects.filter(owner__score__lt=F("owner__limit")),
-        Slot.objects.filter(taken__lt=F("owner__score")),
-        Slot.objects.exclude(ormar.or_(taken__lt=F("zone__budget"), id=1)),
+    for related_filter, path in [
+        (Slot.objects.filter(owner__score__lt=F("owner__limit")), "owner__score__lt"),
+        (Slot.objects.filter(taken__lt=F("owner__score")), "owner__score"),
+        (
+            Slot.objects.exclude(ormar.or_(taken__lt=F("zone__budget"), id=1)),
+            "zone__budget",
+        ),
     ]:
-        with pytest.raises(QueryDefinitionError, match="related models"):
+        with pytest.raises(QueryDefinitionError, match=f"related models \\('{path}'"):
             await related_filter.update(taken=1)
-        with pytest.raises(QueryDefinitionError, match="related models"):
+        with pytest.raises(QueryDefinitionError, match=f"related models \\('{path}'"):
             await related_filter.delete()
 
 

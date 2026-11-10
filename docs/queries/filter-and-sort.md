@@ -204,12 +204,12 @@ Expressions work with the `exact`, `gt`, `gte`, `lt` and `lte` operators, in
 await Track.objects.filter(play_count__gt=F("position") * 10).all()
 await Track.objects.filter(Track.play_count > Track.position * 10).all()
 
-# fields of related models, joined like in filter(album__rank=1)
-await Track.objects.filter(position__lt=F("album__rank")).all()
-await Track.objects.filter(Track.position < Track.album.rank).all()
+# fields of related models, joined like in filter(album__name="Malibu")
+await Track.objects.filter(name=F("album__name")).all()
+await Track.objects.filter(Track.name == Track.album.name).all()
 
-# both sides on different related models
-await Track.objects.filter(album__sold__gt=F("label__budget")).all()
+# through a reverse relation, compared per track
+await Album.objects.filter(id__lt=F("tracks__position")).all()
 ```
 
 A field of a related model is joined automatically, like in a filter on that
