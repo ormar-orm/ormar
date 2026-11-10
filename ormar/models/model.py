@@ -10,7 +10,6 @@ from ormar.exceptions import ModelPersistenceError, NoMatch
 from ormar.models import NewBaseModel  # noqa I100
 from ormar.models.model_row import ModelRow
 from ormar.queryset.templates import (
-    MYSQL_DIALECTS,
     delete_template,
     insert_template,
     pk_select_template,
@@ -19,9 +18,6 @@ from ormar.queryset.templates import (
 from ormar.queryset.utils import subtract_dict, translate_list_to_dict
 
 T = TypeVar("T", bound="Model")
-
-# MySQL server error ER_DUP_ENTRY: an insert hit an existing unique key
-MYSQL_DUPLICATE_ENTRY_ERROR = 1062
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import ForeignKeyField
@@ -224,7 +220,8 @@ class Model(ModelRow):
         self._verify_key_parts_set(row=self_fields)
         # MySQL has no conflict clause telling an insert from a skipped row, so
         # it runs a plain insert and a duplicate key error means skipped
-        returning = bool(on_conflict) and self.db_backend_name() not in MYSQL_DIALECTS
+        rules = self.ormar_config.database.rules
+        returning = bool(on_conflict) and rules.conflict_returning
         template = insert_template(
             model_cls=type(self),
             values=self_fields,
@@ -236,7 +233,7 @@ class Model(ModelRow):
                 expr=template.statement, is_select=returning, params=template.params
             )
         except IntegrityError as error:
-            if not on_conflict or error.orig.args[0] != MYSQL_DUPLICATE_ENTRY_ERROR:  # type: ignore
+            if not on_conflict or not rules.is_duplicate_key(error=error):
                 raise
             return None  # pragma: no cover
         if returning:  # pragma: no cover

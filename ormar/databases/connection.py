@@ -12,6 +12,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.engine.interfaces import Dialect
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
+from ormar.databases.dialects import DialectRules, rules_for
 from ormar.databases.native.adapters import select_adapter
 from ormar.databases.native.backend import NativeBackend
 from ormar.databases.native.compiler import NativeCompiler
@@ -22,13 +23,6 @@ from ormar.fields.parsers import deserialize_json_column, serialize_json_column
 _transaction_connection: ContextVar[Optional[AsyncConnection]] = ContextVar(
     "_transaction_connection", default=None
 )
-
-# Backends where switching a pooled connection into AUTOCOMMIT and back costs
-# extra round trips on every checkout (MySQL: SET AUTOCOMMIT, SET SESSION
-# TRANSACTION ISOLATION LEVEL, COMMIT; aiosqlite: a hop to the driver thread
-# per switch). Their engine runs in AUTOCOMMIT instead and only transactional
-# connections leave it (see ``Transaction``).
-AUTOCOMMIT_ENGINE_BACKENDS = frozenset({"mysql", "mariadb", "sqlite"})
 
 
 class DatabaseConnection:
@@ -67,9 +61,11 @@ class DatabaseConnection:
         self._options = options
         self._engine: Optional[AsyncEngine] = None
         self._autocommit_engine: Optional[AsyncEngine] = None
+        self.rules: DialectRules = rules_for(
+            backend_name=make_url(url).get_backend_name()
+        )
         self._autocommit_by_default = (
-            "isolation_level" not in options
-            and make_url(url).get_backend_name() in AUTOCOMMIT_ENGINE_BACKENDS
+            "isolation_level" not in options and self.rules.autocommit_engine
         )
 
         self._global_transaction: Optional[Transaction] = None
@@ -101,7 +97,7 @@ class DatabaseConnection:
             )
 
             # Set up SQLite foreign keys pragma if using SQLite
-            if self._engine.dialect.name == "sqlite":  # pragma: nocover
+            if self.rules.foreign_keys_pragma:  # pragma: nocover
 
                 @event.listens_for(self._engine.sync_engine, "connect")
                 def set_sqlite_pragma(dbapi_conn: Any, connection_record: Any) -> None:

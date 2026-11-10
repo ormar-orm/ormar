@@ -78,7 +78,6 @@ from ormar.queryset.templates.slots import (
     value_params,
 )
 from ormar.queryset.templates.writes import (
-    MYSQL_DIALECTS,
     build_bulk_update,
     build_delete,
     build_insert,
@@ -92,7 +91,6 @@ from ormar.queryset.templates.writes import (
 )
 
 __all__ = [
-    "MYSQL_DIALECTS",
     "LIMIT_SLOT",
     "OFFSET_SLOT",
     "PK_SLOT",
