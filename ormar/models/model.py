@@ -19,6 +19,9 @@ from ormar.queryset.utils import subtract_dict, translate_list_to_dict
 
 T = TypeVar("T", bound="Model")
 
+# MySQL server error ER_DUP_ENTRY: an insert hit an existing unique key
+MYSQL_DUPLICATE_ENTRY_ERROR = 1062
+
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import ForeignKeyField
     from ormar.models.ormar_config import OrmarConfig
@@ -232,7 +235,7 @@ class Model(ModelRow):
                 expr=template.statement, is_select=returning, params=template.params
             )
         except IntegrityError as error:
-            if not on_conflict or error.orig.args[0] != 1062:  # type: ignore
+            if not on_conflict or error.orig.args[0] != MYSQL_DUPLICATE_ENTRY_ERROR:  # type: ignore
                 raise
             return None  # pragma: no cover
         if returning:  # pragma: no cover
