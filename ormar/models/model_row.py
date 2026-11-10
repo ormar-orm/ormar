@@ -93,6 +93,7 @@ PlanCache = dict[tuple[type, str, int], RowExtractionPlan]
 
 @lru_cache(maxsize=2048)
 def build_shared_row_plan(
+    *,
     model_cls: type["ModelRow"],
     table_prefix: str,
     include: frozenset,
@@ -848,11 +849,11 @@ class ModelRow(NewBaseModel):
         """
         model_excludable = excludable.get(model_cls=cls, alias=table_prefix)  # type: ignore
         return build_shared_row_plan(
-            cls,
-            table_prefix,
-            frozenset(model_excludable.include),
-            frozenset(model_excludable.exclude),
-            model_excludable.pk_only,
+            model_cls=cls,
+            table_prefix=table_prefix,
+            include=frozenset(model_excludable.include),
+            exclude=frozenset(model_excludable.exclude),
+            pk_only=model_excludable.pk_only,
         )
 
     @staticmethod

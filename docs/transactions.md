@@ -236,6 +236,48 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+## Row locks with select_for_update
+
+`select_for_update()` locks the rows a query reads until the transaction ends
+(`SELECT ... FOR UPDATE OF <table>`), so concurrent transactions can't change them
+in between your read and your write.
+
+```python
+async with database.transaction():
+    account = await Account.objects.select_for_update().get(id=1)
+    account.balance -= 100
+    await account.update()
+```
+
+Options (all default to `False`):
+
+* `nowait=True` - raise a database error at once instead of waiting for rows locked by
+  another transaction.
+* `skip_locked=True` - skip rows locked by others, e.g. for job queues:
+  `select_for_update(skip_locked=True).order_by("id").limit(10).all()`.
+  `nowait` and `skip_locked` can't be combined.
+* `read=True` - a shared lock (`FOR SHARE`).
+* `no_key=True` - PostgreSQL's weaker `FOR NO KEY UPDATE` / `FOR KEY SHARE`, which don't
+  block inserts of rows referencing the locked ones. MySQL ignores it.
+
+Things to know:
+
+* It raises `QueryDefinitionError` outside a transaction, and with `count()`, `exists()`
+  and the aggregates (lock with `get_or_none()` or `limit(1).values_list("id")` instead).
+  Tests using `force_rollback` run inside a transaction, so the lock works there.
+* Only rows of the queried model are locked, not the joined `select_related` ones
+  (PostgreSQL refuses to lock the nullable side of outer joins). Rows loaded with
+  `prefetch_related` are not locked, and a `Prefetch` queryset can't use it.
+* `update()` and `delete()` ignore it, as the `UPDATE` / `DELETE` itself locks the rows.
+* With `skip_locked`, `select_related` and `limit()` the limit is applied before the
+  locked rows are skipped, so fewer rows can come back; for queues query without
+  `select_related` or use `limit(..., limit_raw_sql=True)`.
+* SQLite has no row locks, the query runs without them. MariaDB has no `OF`, it locks
+  the joined rows too.
+* Lock rows in a consistent `order_by()` to avoid deadlocks. On MySQL (REPEATABLE READ)
+  `select_for_update().get_or_create()` of a missing row takes gap locks, so two racing
+  calls can deadlock instead of one raising `IntegrityError`.
+
 ## Transaction Context Management
 
 Ormar manages transactions using context variables, which means:

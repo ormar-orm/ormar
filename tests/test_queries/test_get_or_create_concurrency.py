@@ -1,13 +1,14 @@
 """Concurrent ``get_or_create`` race-recovery tests for issue #1016.
 
-These tests run under AUTOCOMMIT (no surrounding transaction) so they
+The first tests run under AUTOCOMMIT (no surrounding transaction) so they
 exercise the real-world scenario: separate coroutines, each pulling its
 own connection from the pool, racing to insert a row.
 
-The project-wide ``force_rollback=True`` config can't be used here:
-PostgreSQL aborts the surrounding transaction on the first failed
-statement, which makes the recovery ``get`` raise
-``InFailedSQLTransactionError`` instead of returning the winner's row.
+The tests inside ``database.transaction()`` check that the insert runs in a
+savepoint: PostgreSQL aborts the whole transaction on a failed statement,
+so without it the retried ``get`` raised ``InFailedSQLTransactionError``.
+The race there is simulated by creating the winner's row in the same
+transaction right before the first ``get`` reports a miss.
 """
 
 import asyncio
@@ -17,6 +18,9 @@ import pytest
 import sqlalchemy.exc
 
 import ormar
+from ormar.exceptions import NoMatch
+from ormar.queryset import QuerySet
+from ormar.relations.querysetproxy import QuerysetProxy
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -142,3 +146,145 @@ async def test_proxy_get_or_create_propagates_unrelated_integrity_error():
                 )
         finally:
             await _cleanup()
+
+
+def fake_first_miss(monkeypatch, owner, create_winner):
+    """Make the first ``owner.get`` call create the winner's row and report
+    ``NoMatch``, as if a concurrent caller inserted it right after the miss.
+    Later calls go to the original ``get``.
+    """
+    original_get = owner.get
+    calls = []
+
+    async def get(self, *args, **kwargs):
+        if not calls:
+            calls.append(True)
+            await create_winner()
+            raise NoMatch()
+        return await original_get(self, *args, **kwargs)
+
+    monkeypatch.setattr(owner, "get", get)
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_in_transaction_recovers_from_race(monkeypatch):
+    """Inside a transaction the losing insert rolls back only its savepoint,
+    so the retried ``get`` returns the winner's row and the transaction stays
+    usable.
+    """
+    async with race_config.database:
+        async with race_config.database.transaction(force_rollback=True):
+            library = await RaceLibrary.objects.create(name="Main")
+            fake_first_miss(
+                monkeypatch=monkeypatch,
+                owner=QuerySet,
+                create_winner=lambda: RaceBook.objects.create(
+                    isbn="978-0-00-000001-1", title="Winner"
+                ),
+            )
+            book, created = await RaceBook.objects.get_or_create(
+                isbn="978-0-00-000001-1", _defaults={"title": "Loser"}
+            )
+            assert not created
+            assert book.title == "Winner"
+            await RaceBook.objects.create(isbn="978-0-00-000001-2", title="After")
+            assert await RaceBook.objects.count() == 2
+            assert await RaceLibrary.objects.get(pk=library.pk)
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_in_transaction_raises_unrelated_integrity_error():
+    """An unrelated constraint conflict inside a transaction raises
+    ``IntegrityError``, keeps earlier writes and leaves the transaction
+    usable.
+    """
+    async with race_config.database:
+        async with race_config.database.transaction(force_rollback=True):
+            library = await RaceLibrary.objects.create(name="Main")
+            await RaceBook.objects.create(isbn="978-0-00-000001-3", title="Original")
+            with pytest.raises(sqlalchemy.exc.IntegrityError):
+                await RaceBook.objects.get_or_create(
+                    isbn="978-0-00-000001-3", title="Different"
+                )
+            await RaceBook.objects.create(isbn="978-0-00-000001-4", title="After")
+            assert await RaceBook.objects.count() == 2
+            assert await RaceLibrary.objects.get(pk=library.pk)
+
+
+@pytest.mark.asyncio
+async def test_proxy_get_or_create_in_transaction_recovers_from_race(monkeypatch):
+    """Same in-transaction race through the relation proxy."""
+    async with race_config.database:
+        async with race_config.database.transaction(force_rollback=True):
+            library = await RaceLibrary.objects.create(name="Main")
+            fake_first_miss(
+                monkeypatch=monkeypatch,
+                owner=QuerysetProxy,
+                create_winner=lambda: library.books.create(
+                    isbn="978-0-00-000001-5", title="Winner"
+                ),
+            )
+            book, created = await library.books.get_or_create(
+                isbn="978-0-00-000001-5", _defaults={"title": "Loser"}
+            )
+            assert not created
+            assert book.title == "Winner"
+            await library.books.create(isbn="978-0-00-000001-6", title="After")
+            assert await library.books.count() == 2
+
+
+@pytest.mark.asyncio
+async def test_proxy_get_or_create_in_transaction_raises_unrelated_integrity_error():
+    """Same unrelated constraint conflict through the relation proxy."""
+    async with race_config.database:
+        async with race_config.database.transaction(force_rollback=True):
+            library = await RaceLibrary.objects.create(name="Main")
+            await library.books.create(isbn="978-0-00-000001-7", title="Original")
+            with pytest.raises(sqlalchemy.exc.IntegrityError):
+                await library.books.get_or_create(
+                    isbn="978-0-00-000001-7", title="Different"
+                )
+            await library.books.create(isbn="978-0-00-000001-8", title="After")
+            assert await library.books.count() == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_get_or_create_misses_in_one_transaction():
+    """Two concurrent misses sharing one transaction take turns with their
+    savepoints instead of releasing each other's, so both rows are created.
+    """
+    async with race_config.database:
+        async with race_config.database.transaction(force_rollback=True):
+            results = await asyncio.gather(
+                RaceBook.objects.get_or_create(isbn="978-0-00-000001-9", title="A"),
+                RaceBook.objects.get_or_create(isbn="978-0-00-000002-0", title="B"),
+            )
+            assert [created for _, created in results] == [True, True]
+            assert await RaceBook.objects.count() == 2
+
+
+@pytest.mark.asyncio
+async def test_get_or_create_nested_in_pre_save_signal_in_transaction():
+    """A ``get_or_create`` called from a ``pre_save`` signal of another
+    ``get_or_create`` in the same transaction runs in a nested savepoint
+    instead of waiting for the outer call's lock.
+    """
+
+    async def ensure_library(sender, instance, **kwargs):
+        instance.library, _ = await RaceLibrary.objects.get_or_create(name="Signal")
+
+    RaceBook.ormar_config.signals.pre_save.connect(ensure_library)
+    try:
+        async with race_config.database:
+            async with race_config.database.transaction(force_rollback=True):
+                book, created = await asyncio.wait_for(
+                    RaceBook.objects.get_or_create(
+                        isbn="978-0-00-000002-1", title="Nested"
+                    ),
+                    timeout=5,
+                )
+                assert created
+                assert book.library.name == "Signal"
+                assert await RaceLibrary.objects.count() == 1
+    finally:
+        RaceBook.ormar_config.signals.pre_save.disconnect(ensure_library)
