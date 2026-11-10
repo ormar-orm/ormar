@@ -260,14 +260,14 @@ def insert_statement(
     config = model_cls.ormar_config
     conflict: dict[str, Any] = {}
     if on_conflict:
-        pk_columns = config.pk.column_aliases()
+        pk = config.pk.column_aliases()
         target = (
             tuple(
                 column
                 for field_name in conflict_target or ()
                 for column in model_cls.get_column_aliases(field_name=field_name)
             )
-            or pk_columns
+            or pk
         )
         update_names = tuple(
             sorted(
@@ -276,9 +276,7 @@ def insert_statement(
                 for column in model_cls.get_column_aliases(field_name=field_name)
             )
         ) or tuple(
-            column
-            for column in names
-            if column not in {*target, *pk_columns, *on_update}
+            column for column in names if column not in {*target, *pk, *on_update}
         )
         conflict = dict(
             dialect_name=config.database.dialect.name,
