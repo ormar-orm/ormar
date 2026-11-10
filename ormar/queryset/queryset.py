@@ -7,11 +7,13 @@ from typing import (
     Callable,
     Generic,
     Iterable,
+    Literal,
     Optional,
     Sequence,
     TypeVar,
     Union,
     cast,
+    overload,
 )
 
 import sqlalchemy
@@ -38,11 +40,11 @@ from ormar.queryset.templates import (
     cached_statement,
     canonical_actions,
     clauses_cache_key,
+    conflict_insert_statement,
     count_statement,
     excludable_cache_key,
     exists_statement,
     insert_statement,
-    insert_template,
     order_cache_key,
     release_values,
     template_cache_for,
@@ -1724,23 +1726,45 @@ class QuerySet(Generic[T]):
             if rows:
                 yield (await self._process_query_result_rows(rows, plan_cache))[0]
 
-    async def create(self, **kwargs: Any) -> "T":
+    @overload
+    async def create(
+        self, *, on_conflict: Literal["ignore"], **kwargs: Any
+    ) -> Optional["T"]: ...
+
+    @overload
+    async def create(self, *, on_conflict: None = None, **kwargs: Any) -> "T": ...
+
+    async def create(
+        self, *, on_conflict: Optional[Literal["ignore"]] = None, **kwargs: Any
+    ) -> Optional["T"]:
         """
         Creates the model instance, saves it in a database and returns the updates model
         (with pk populated if not passed and autoincrement is set).
 
         The allowed kwargs are `Model` fields names and proper value types.
 
+        With ``on_conflict="ignore"`` a row conflicting with an existing one on
+        any unique key is skipped and ``None`` is returned.
+
+        :param on_conflict: ``ignore`` to skip a conflicting row
+        :type on_conflict: Optional[Literal["ignore"]]
         :param kwargs: fields names and proper value types
         :type kwargs: Any
-        :return: created model
-        :rtype: Model
+        :return: created model, ``None`` when the row was skipped
+        :rtype: Optional[Model]
         """
         instance = self.model(**kwargs)
-        instance = await instance.save()
-        return instance
+        if on_conflict:
+            return await instance._save(on_conflict=on_conflict)
+        return await instance.save()
 
-    async def bulk_create(self, objects: list["T"]) -> None:
+    async def bulk_create(
+        self,
+        objects: list["T"],
+        on_conflict: Optional[Literal["ignore", "update"]] = None,
+        conflict_target: Optional[list[str]] = None,
+        update_fields: Optional[list[str]] = None,
+    ) -> None:
         """
         Performs a bulk create in one database session to speed up the process.
 
@@ -1752,15 +1776,40 @@ class QuerySet(Generic[T]):
         server_default value) are inserted in separate statements, so generated
         primary keys may not follow the order of the passed list.
 
+        With ``on_conflict="ignore"`` rows conflicting with existing ones on any
+        unique key are skipped. With ``on_conflict="update"`` rows conflicting on
+        ``conflict_target`` (the primary key by default) update ``update_fields``
+        (by default all inserted fields but the target and the key) and fields
+        with ``on_update``. Skipped objects are marked as saved too.
+
         Bulk operations do not send signals.
 
         :param objects: list of ormar models already initialized and ready to save.
         :type objects: list[Model]
+        :param on_conflict: ``ignore`` or ``update`` rows conflicting with
+            existing ones
+        :type on_conflict: Optional[Literal["ignore", "update"]]
+        :param conflict_target: names of the fields of the unique key the rows
+            conflict on, only with ``update``
+        :type conflict_target: Optional[list[str]]
+        :param update_fields: names of the fields updated, only with ``update``
+        :type update_fields: Optional[list[str]]
         """
         self.model.verify_writable()
 
         if not objects:
             raise ModelListEmptyError("Bulk create objects are empty!")
+        if (conflict_target or update_fields) and on_conflict != "update":
+            raise QueryDefinitionError(
+                "conflict_target and update_fields need on_conflict='update'"
+            )
+        fields = self.model_config.model_fields
+        on_update = {
+            self.model.get_column_alias(field_name=name): fields[name].get_on_update()
+            for name in self.model._onupdate_fields
+            if on_conflict == "update" and name not in (update_fields or ())
+        }
+        on_update_params = {f"ormar_ou_{name}": v for name, v in on_update.items()}
 
         ready_objects = []
         trusted = self.model.flat_row_model()
@@ -1787,15 +1836,36 @@ class QuerySet(Generic[T]):
             transactional=several_statements
         ) as executor:
             for rows in rows_by_keys.values():
-                if len(rows) == 1:
-                    template = insert_template(model_cls=self.model, values=rows[0])
-                    await executor.execute(template.statement, template.params)
-                    continue
                 names = tuple(sorted(rows[0]))
-                await executor.execute_many(
-                    insert_statement(model_cls=self.model, names=names),
-                    [value_params(names=names, values=row) for row in rows],
+                # duplicates within one batch: the last one wins; holds only
+                # while there is no RETURNING (SQLAlchemy would then send one
+                # multi-row VALUES, which PostgreSQL rejects for a row
+                # affected twice)
+                statement = (
+                    conflict_insert_statement(
+                        model_cls=self.model,
+                        names=names,
+                        on_conflict=on_conflict,
+                        conflict_target=conflict_target,
+                        update_fields=update_fields,
+                        on_update=tuple(sorted(on_update)),
+                    )
+                    if on_conflict
+                    else insert_statement(model_cls=self.model, names=names)
                 )
+                params = [
+                    {**value_params(names=names, values=row), **on_update_params}
+                    for row in rows
+                ]
+                # MySQL drivers turn executemany into one multi-row VALUES and
+                # leave the on_update binds after it unfilled
+                if (len(rows) == 1 and not on_conflict) or (
+                    on_update and self.model.db_backend_name() == "mysql"
+                ):
+                    for row_params in params:
+                        await executor.execute(query=statement, params=row_params)
+                else:
+                    await executor.execute_many(query=statement, values=params)
 
         for obj in objects:
             obj.set_save_status(True)

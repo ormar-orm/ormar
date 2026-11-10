@@ -1,5 +1,13 @@
 # Release notes
 
+## 0.29.0
+
+### 🆕 Features
+
+* **Conflict handling in `create()` and `bulk_create()`** ([#1016](https://github.com/ormar-orm/ormar/issues/1016), [#1437](https://github.com/ormar-orm/ormar/discussions/1437))
+
+    `create(on_conflict="ignore")` skips a row that conflicts with an existing one on any unique key and returns `None`, in one statement and without a failed insert, so concurrent creates no longer race. `bulk_create(on_conflict="ignore")` skips such rows, and `bulk_create(on_conflict="update", conflict_target=[...], update_fields=[...])` updates the existing rows (an upsert). See [conflict handling](queries/create.md#conflict-handling).
+
 ## 0.28.0
 
 ### ✨ Breaking changes

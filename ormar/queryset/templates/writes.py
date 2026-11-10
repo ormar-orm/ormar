@@ -12,12 +12,16 @@ Each runs one cached statement per model and set of written columns::
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Mapping,
+    Optional,
+    Sequence,
     Tuple,
     Type,
 )
 
 import sqlalchemy
+from sqlalchemy.dialects import mysql, postgresql, sqlite
 from sqlalchemy.sql import Executable
 
 from ormar.queryset.templates.cache import StatementTemplate, cached_statement
@@ -44,6 +48,81 @@ def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:
     :rtype: Executable
     """
     return table.insert().values(value_binds(table=table, names=names))
+
+
+DIALECT_INSERTS: dict[str, Callable[..., Any]] = {
+    "mysql": mysql.insert,
+    "postgresql": postgresql.insert,
+    "sqlite": sqlite.insert,
+}
+
+
+def build_conflict_insert(
+    table: sqlalchemy.Table,
+    names: Tuple[str, ...],
+    primary_key: "PrimaryKey",
+    dialect_name: str,
+    on_conflict: str,
+    target: Tuple[str, ...],
+    update_names: Tuple[str, ...],
+    on_update: Tuple[str, ...],
+    returning: bool,
+) -> Executable:
+    """
+    Build an insert that skips or updates a row conflicting with an existing
+    one::
+
+        INSERT INTO tags (name, score) VALUES (:ormar_v0, :ormar_v1)
+        ON CONFLICT (name) DO UPDATE SET score = excluded.score
+        -- MySQL: ON DUPLICATE KEY UPDATE score = VALUES(score)
+
+    MySQL reacts to a conflict on any unique key, so the target is not
+    emitted there, and ``ignore`` becomes a no-op update of the first key
+    column (a duplicate key error would abort the whole ``executemany``).
+    Columns in ``on_update`` are set from ``ormar_ou_<column>`` parameters.
+
+    :param table: written table
+    :type table: sqlalchemy.Table
+    :param names: inserted column names, sorted
+    :type names: Tuple[str, ...]
+    :param primary_key: primary key of the written model
+    :type primary_key: PrimaryKey
+    :param dialect_name: name of the database dialect
+    :type dialect_name: str
+    :param on_conflict: ``ignore`` or ``update``
+    :type on_conflict: str
+    :param target: conflicting column names
+    :type target: Tuple[str, ...]
+    :param update_names: columns updated from the inserted row
+    :type update_names: Tuple[str, ...]
+    :param on_update: columns updated with their ``on_update`` value
+    :type on_update: Tuple[str, ...]
+    :param returning: return the primary key of a written row
+    :type returning: bool
+    :return: insert statement
+    :rtype: Executable
+    """
+    statement = DIALECT_INSERTS[dialect_name](table).values(
+        value_binds(table=table, names=names)
+    )
+    excluded = statement.inserted if dialect_name == "mysql" else statement.excluded
+    set_ = {
+        **{name: excluded[name] for name in update_names},
+        **{
+            name: sqlalchemy.bindparam(key=f"ormar_ou_{name}", type_=table.c[name].type)
+            for name in on_update
+        },
+    }
+    if dialect_name == "mysql":
+        key_column = primary_key.column_aliases()[0]
+        return statement.on_duplicate_key_update(
+            set_ if on_conflict == "update" else {key_column: table.c[key_column]}
+        )
+    if on_conflict == "update":
+        statement = statement.on_conflict_do_update(index_elements=target, set_=set_)
+    else:
+        statement = statement.on_conflict_do_nothing()
+    return statement.returning(*primary_key.columns()) if returning else statement
 
 
 def build_update(
@@ -164,6 +243,73 @@ def insert_statement(model_cls: Type[Any], names: Tuple[str, ...]) -> Executable
         builder=build_insert,
         table=table,
         names=names,
+    )
+
+
+def conflict_insert_statement(
+    model_cls: Type[Any],
+    names: Tuple[str, ...],
+    on_conflict: str,
+    conflict_target: Optional[Sequence[str]] = None,
+    update_fields: Optional[Sequence[str]] = None,
+    on_update: Tuple[str, ...] = (),
+    returning: bool = False,
+) -> Executable:
+    """
+    Return the insert of a model that skips or updates conflicting rows, from
+    the model's template cache (see ``build_conflict_insert``).
+
+    The target defaults to the primary key columns and the updated columns to
+    the inserted ones other than the target, the key and ``on_update``.
+
+    :param model_cls: inserted model
+    :type model_cls: Type[Any]
+    :param names: inserted column names, sorted
+    :type names: Tuple[str, ...]
+    :param on_conflict: ``ignore`` or ``update``
+    :type on_conflict: str
+    :param conflict_target: names of the fields of the conflicting unique key
+    :type conflict_target: Optional[Sequence[str]]
+    :param update_fields: names of the fields updated from the inserted row
+    :type update_fields: Optional[Sequence[str]]
+    :param on_update: columns updated with their ``on_update`` value
+    :type on_update: Tuple[str, ...]
+    :param returning: return the primary key of a written row
+    :type returning: bool
+    :return: insert statement with ``ormar_v{i}`` binds
+    :rtype: Executable
+    """
+    config = model_cls.ormar_config
+    aliases = model_cls.get_column_aliases
+    target = (
+        tuple(c for name in conflict_target for c in aliases(field_name=name))
+        if conflict_target
+        else config.pk.column_aliases()
+    )
+    update_names: Tuple[str, ...] = ()
+    if on_conflict == "update":
+        update_names = tuple(
+            sorted(c for name in update_fields for c in aliases(field_name=name))
+            if update_fields
+            else (
+                name
+                for name in names
+                if name not in {*target, *config.pk.column_aliases(), *on_update}
+            )
+        )
+    return cached_statement(
+        model_cls=model_cls,
+        key=("insert", names, on_conflict, target, update_names, on_update, returning),
+        builder=build_conflict_insert,
+        table=config.table,
+        names=names,
+        primary_key=config.pk,
+        dialect_name=config.database.dialect.name,
+        on_conflict=on_conflict,
+        target=target,
+        update_names=update_names,
+        on_update=on_update,
+        returning=returning,
     )
 
 

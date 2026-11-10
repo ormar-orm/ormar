@@ -160,6 +160,8 @@ Send for `Model.save()` and `Model.objects.create()` methods.
 
 `sender` is a `ormar.Model` class and `instance` is the model that was saved.
 
+Not sent when `create(on_conflict="ignore")` skipped a conflicting row (`pre_save` is still sent).
+
 ### pre_update
 
 `pre_update(sender: type["Model"], instance: "Model")`
