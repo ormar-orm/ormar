@@ -4,9 +4,25 @@
 
 ### 🆕 Features
 
+* **`select_for_update()` row locks** ([#781](https://github.com/ormar-orm/ormar/issues/781))
+
+    Locks the rows of the queried model until the end of the transaction, with `nowait`, `skip_locked`, `read` (`FOR SHARE`) and `no_key` (PostgreSQL `FOR NO KEY UPDATE` / `FOR KEY SHARE`) options. It raises `QueryDefinitionError` outside a transaction and with count, exists and aggregates; on SQLite it's a no-op. See [transactions](transactions.md#row-locks-with-select_for_update).
+
+    ```python
+    async with database.transaction():
+        jobs = await Job.objects.select_for_update(skip_locked=True).order_by("id").limit(10).all()
+    ```
+
 * **Conflict handling in `create()` and `bulk_create()`** ([#1016](https://github.com/ormar-orm/ormar/issues/1016), [#1437](https://github.com/ormar-orm/ormar/discussions/1437))
 
     `create(on_conflict="ignore")` skips a row that conflicts with an existing one on any unique key and returns `None` instead of raising `IntegrityError`, so concurrent creates of the same row no longer fail. `bulk_create(on_conflict="ignore")` skips such rows, and `bulk_create(on_conflict="update", conflict_target=[...], update_fields=[...])` updates the existing rows (an upsert). See [conflict handling](queries/create.md#conflict-handling).
+
+## 0.28.1
+
+### 🐛 Fixes
+
+* `get_or_create()` (also on relations) inside `database.transaction()` now runs the insert in a savepoint. On PostgreSQL a lost race used to abort the whole transaction and raise `InFailedSQLTransactionError`; now it returns the concurrent caller's row, and an unrelated constraint error is raised as `IntegrityError` with the transaction still usable. [#1960](https://github.com/ormar-orm/ormar/pull/1960)
+* `prefixed_table()` (`ormar.relations.aliases`) takes keyword arguments only. A positional call, e.g. when building a custom `where()` on a `select_related()` query, returned a second aliased table under the same name, so PostgreSQL failed with `table name "..." specified more than once`; it raises a `TypeError` now. The other cached helpers `build_prefixed_columns()`, `build_shared_row_plan()` and `key_dict_type()` are keyword-only too. [#1961](https://github.com/ormar-orm/ormar/pull/1961)
 
 ## 0.28.0
 

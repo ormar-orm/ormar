@@ -53,6 +53,7 @@ from ormar.queryset.templates import (
 )
 from ormar.queryset.utils import (
     extract_access_chains,
+    get_or_create_with_retry,
     get_relationship_alias_model_and_str,
     normalize_slice,
 )
@@ -110,6 +111,7 @@ class QuerySet(Generic[T]):
         proxy_source_model: Optional[type["Model"]] = None,
         reverse_result: bool = False,
         prefetch_querysets: Optional[dict[str, "QuerySet"]] = None,
+        row_lock: Optional[dict[str, bool]] = None,
     ) -> None:
         self.proxy_source_model = proxy_source_model
         self.model_cls = model_cls
@@ -126,6 +128,7 @@ class QuerySet(Generic[T]):
         self._prefetch_querysets: dict[str, "QuerySet"] = (
             {} if prefetch_querysets is None else prefetch_querysets
         )
+        self.row_lock = row_lock or {}
 
     @property
     def model_config(self) -> "OrmarConfig":
@@ -165,6 +168,7 @@ class QuerySet(Generic[T]):
         proxy_source_model: Optional[type["Model"]] = None,
         reverse_result: Optional[bool] = None,
         prefetch_querysets: Optional[dict[str, "QuerySet"]] = None,
+        row_lock: Optional[dict[str, bool]] = None,
     ) -> "QuerySet":
         """
         Method that returns new instance of queryset based on passed params,
@@ -200,6 +204,7 @@ class QuerySet(Generic[T]):
             proxy_source_model=replace_if_none("proxy_source_model"),
             reverse_result=replace_if_none("reverse_result"),
             prefetch_querysets=replace_if_none("prefetch_querysets"),
+            row_lock=replace_if_none("row_lock"),
         )
 
     async def _prefetch_related_models(
@@ -392,7 +397,8 @@ class QuerySet(Generic[T]):
             binder=binder,
         )
         exp = qry.build_select_expression()
-        # print("\n", exp.compile(compile_kwargs={"literal_binds": True}))
+        if self.row_lock:
+            exp = exp.with_for_update(of=self.table, **self.row_lock)
         return exp
 
     def build_select_template(
@@ -433,9 +439,21 @@ class QuerySet(Generic[T]):
         :type order_bys: Optional[list]
         :param wrap: turns the built select into the executed statement
         :type wrap: Optional[Callable[[sqlalchemy.sql.Select], Any]]
+        :raises QueryDefinitionError: if a ``select_for_update`` queryset runs
+            outside a transaction or as count, exists or an aggregate
         :return: statement and values to bind
         :rtype: StatementTemplate
         """
+        if self.row_lock:
+            if wrap is not None:
+                raise QueryDefinitionError(
+                    "select_for_update cannot lock count, exists or aggregates, "
+                    "use get_or_none() / limit(1).values_list('id') instead."
+                )
+            if self.model_config.database.get_transaction_connection() is None:
+                raise QueryDefinitionError(
+                    "select_for_update has to run inside a transaction."
+                )
         actions = canonical_actions(
             filter_clauses=self.filter_clauses, exclude_clauses=self.exclude_clauses
         )
@@ -614,6 +632,7 @@ class QuerySet(Generic[T]):
         * ordering - see ``order_cache_key``
         * limit and offset presence - see ``limit_cache_key``
         * ``limit_raw_sql`` - limit on raw rows instead of main models
+        * ``row_lock`` - the ``select_for_update`` options
 
         Any new queryset option that changes the built SQL has to be added
         here; the cross check of the test suite fails when one is missing.
@@ -639,6 +658,7 @@ class QuerySet(Generic[T]):
             self.limit_cache_key(limit=limit),
             bool(offset or self.query_offset),
             self.limit_sql_raw,
+            tuple(self.row_lock.items()),
         )
 
     def filter(  # noqa: A003
@@ -1333,6 +1353,44 @@ class QuerySet(Generic[T]):
         query_offset = (page - 1) * page_size
         return self.rebuild_self(limit_count=limit_count, offset=query_offset)
 
+    def select_for_update(
+        self,
+        nowait: bool = False,
+        skip_locked: bool = False,
+        read: bool = False,
+        no_key: bool = False,
+    ) -> "QuerySet[T]":
+        """
+        Lock the rows of the main model read by this queryset until the end of
+        the transaction (``SELECT ... FOR UPDATE OF <table>``). It has to run
+        inside a transaction; joined related models are not locked and SQLite
+        runs the query without locks.
+
+        :param nowait: raise instead of waiting for rows locked by others
+        :type nowait: bool
+        :param skip_locked: skip rows locked by others instead of waiting
+        :type skip_locked: bool
+        :param read: take a shared lock (``FOR SHARE``)
+        :type read: bool
+        :param no_key: weaker PostgreSQL lock that does not block inserts of
+            rows referencing the locked ones (``FOR NO KEY UPDATE`` /
+            ``FOR KEY SHARE``)
+        :type no_key: bool
+        :raises QueryDefinitionError: if both nowait and skip_locked are set
+        :return: QuerySet
+        :rtype: QuerySet
+        """
+        if nowait and skip_locked:
+            raise QueryDefinitionError("Use either nowait or skip_locked, not both.")
+        return self.rebuild_self(
+            row_lock={
+                "nowait": nowait,
+                "skip_locked": skip_locked,
+                "read": read,
+                "key_share": no_key,
+            }
+        )
+
     def limit(
         self, limit_count: int, limit_raw_sql: Optional[bool] = None
     ) -> "QuerySet[T]":
@@ -1588,7 +1646,8 @@ class QuerySet(Generic[T]):
         ``sqlalchemy.exc.IntegrityError`` and ``get`` is retried once.
         If the retry still finds no row, the original ``IntegrityError`` is
         re-raised because the violation isn't a race but a legitimate
-        constraint conflict (e.g. a different unique key).
+        constraint conflict (e.g. a different unique key). Inside a transaction
+        the ``create`` runs in a savepoint, so the transaction stays usable.
 
         Passing a criteria is actually calling filter(*args, **kwargs) method described
         below.
@@ -1600,19 +1659,12 @@ class QuerySet(Generic[T]):
         :return: model instance and a boolean
         :rtype: tuple("T", bool)
         """
-        try:
-            return await self.get(*args, **kwargs), False
-        except NoMatch:
-            pass
-
         _defaults = _defaults or {}
-        try:
-            return await self.create(**{**kwargs, **_defaults}), True
-        except sqlalchemy.exc.IntegrityError as integrity_error:
-            try:
-                return await self.get(*args, **kwargs), False
-            except NoMatch:
-                raise integrity_error from None
+        return await get_or_create_with_retry(
+            database=self.model_config.database,
+            get=lambda: self.get(*args, **kwargs),
+            create=lambda: self.create(**{**kwargs, **_defaults}),
+        )
 
     async def update_or_create(self, **kwargs: Any) -> "T":
         """

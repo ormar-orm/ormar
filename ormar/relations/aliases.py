@@ -9,7 +9,7 @@ from sqlalchemy.sql.selectable import NamedFromClause
 
 @lru_cache(maxsize=2048)
 def build_prefixed_columns(
-    alias: str, table: sqlalchemy.Table, fields: Optional[frozenset[str]]
+    *, alias: str, table: sqlalchemy.Table, fields: Optional[frozenset[str]]
 ) -> tuple[Label[Any], ...]:
     """
     Builds labelled columns of a table, cached as labels are immutable and the
@@ -77,19 +77,21 @@ def prefixed_columns(
     :rtype: list[Label[Any]]
     """
     return list(
-        build_prefixed_columns(alias, table, frozenset(fields) if fields else None)
+        build_prefixed_columns(
+            alias=alias, table=table, fields=frozenset(fields) if fields else None
+        )
     )
 
 
 @lru_cache(maxsize=None)
-def prefixed_table(alias: str, table: sqlalchemy.Table) -> NamedFromClause:
+def prefixed_table(*, alias: str, table: sqlalchemy.Table) -> NamedFromClause:
     """
     Returns the table aliased under its table alias.
 
     Cached without a size limit, as filters and joins of one statement have to
     reference the same aliased table object, and the number of aliases is bounded
     by the relation paths of the defined models.
-    Call it with keyword arguments only: the cache keys keyword and positional
+    The parameters are keyword-only, as the cache keys keyword and positional
     calls differently, and two aliased objects of one table break the query.
 
     :param alias: alias of given table
