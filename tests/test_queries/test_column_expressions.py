@@ -49,12 +49,19 @@ class Tag(ormar.Model):
     cap: int = ormar.Integer(default=0)
 
 
+class Link(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="fx_links")
+
+    id: int = ormar.Integer(primary_key=True)
+    weight: int = ormar.Integer(default=0)
+
+
 class Event(ormar.Model):
     ormar_config = base_ormar_config.copy(tablename="fx_events")
 
     id: int = ormar.Integer(primary_key=True)
     level: int = ormar.Integer(default=0)
-    tags: list[Tag] = ormar.ManyToMany(Tag)
+    tags: list[Tag] = ormar.ManyToMany(Tag, through=Link)
 
 
 create_test_database = init_tests(base_ormar_config)
@@ -349,3 +356,50 @@ async def test_many_to_many_prefetch_filters_with_expressions():
                         "tags", queryset=Tag.objects.filter(score__lt=F("events__id"))
                     )
                 ).get()
+
+
+@pytest_asyncio.fixture()
+async def linked():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            first = await Event.objects.create(level=3)
+            second = await Event.objects.create(level=0)
+            low = await Tag.objects.create(score=1)
+            high = await Tag.objects.create(score=5)
+            await first.tags.add(low, weight=10)
+            await first.tags.add(high, weight=2)
+            await second.tags.add(low, weight=0)
+            yield
+
+
+@pytest.mark.asyncio
+async def test_through_model_filters_join_the_through_table(linked):
+    for queryset in [
+        Event.objects.filter(link__weight__gt=3),
+        Event.objects.filter(level__lt=F("link__weight")),
+    ]:
+        assert queryset._select_related == ["tags"]
+        loaded = await queryset.all()
+        assert [(item.level, [tag.score for tag in item.tags]) for item in loaded] == [
+            (3, [1])
+        ]
+    by_tag = Tag.objects.filter(score__lt=F("link__weight"))
+    assert by_tag._select_related == ["events"]
+    assert [tag.score for tag in await by_tag.all()] == [1]
+
+
+@pytest.mark.asyncio
+async def test_through_model_filters_are_rejected_where_not_joined(linked):
+    for through_filter, path in [
+        (Tag.objects.filter(link__weight__gt=3), "link__weight__gt"),
+        (Tag.objects.filter(score__lt=F("link__weight")), "link__weight"),
+    ]:
+        with pytest.raises(QueryDefinitionError, match=f"related models \\('{path}'"):
+            await through_filter.update(score=0)
+        with pytest.raises(QueryDefinitionError, match=f"related models \\('{path}'"):
+            await through_filter.delete()
+        with pytest.raises(QueryDefinitionError, match="many to many"):
+            await Event.objects.prefetch_related(
+                ormar.Prefetch("tags", queryset=through_filter)
+            ).all()
+    assert await Tag.objects.count() == 2
