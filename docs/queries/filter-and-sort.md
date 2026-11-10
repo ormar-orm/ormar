@@ -65,6 +65,8 @@ You can use special filter suffix to change the filter operands:
 
 *  **exact** - exact match to value, sql `column = <VALUE>` 
        * can be written as`album__name__exact='Malibu'`
+*  **ne** - not equal, sql `column != <VALUE>` (`column IS NOT NULL` for `None`)
+       * can be written as`album__name__ne='Malibu'`
 *  **iexact** - exact match sql `column = <VALUE>` (case insensitive)
       * can be written as`album__name__iexact='malibu'`
 *  **contains** - sql `column LIKE '%<VALUE>%'`
@@ -112,6 +114,8 @@ Product.objects.filter(
 
 *  **exact** - exact match to value, sql `column = <VALUE>` 
       * can be written as `Track.album.name == 'Malibu`
+*  **ne** - not equal, sql `column != <VALUE>` (`column IS NOT NULL` for `None`)
+      * can be written as `Track.album.name != 'Malibu'`
 *  **iexact** - exact match sql `column = <VALUE>` (case insensitive)
       * can be written as `Track.album.name.iexact('malibu')`
 *  **contains** - sql `column LIKE '%<VALUE>%'`
@@ -195,7 +199,7 @@ Product.objects.filter(
 
 A filter value can be another column of the row, with a field accessor
 (`Model.field`) or `ormar.F("field")`, optionally combined with `+`, `-` and `*`.
-Expressions work with the `exact`, `gt`, `gte`, `lt` and `lte` operators, in
+Expressions work with the `exact`, `ne`, `gt`, `gte`, `lt` and `lte` operators, in
 `filter()`, `exclude()`, `or_()` / `and_()` and the methods taking filters (`get()`,
 `count()`, `exists()`, `values()` and others).
 

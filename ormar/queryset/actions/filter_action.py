@@ -15,6 +15,7 @@ if TYPE_CHECKING:  # pragma: nocover
 
 FILTER_OPERATORS = {
     "exact": "__eq__",
+    "ne": "__ne__",
     "iexact": "ilike",
     "contains": "like",
     "icontains": "ilike",
@@ -31,6 +32,7 @@ FILTER_OPERATORS = {
 }
 METHODS_TO_OPERATORS = {
     "__eq__": "exact",
+    "__ne__": "ne",
     "__mod__": "contains",
     "__gt__": "gt",
     "__ge__": "gte",
@@ -63,9 +65,9 @@ class FilterAction(QueryAction):
         self.expression_columns: dict[str, SelectAction] = {}
         if isinstance(value, Expression):
             value = value._node()
-            if self.operator not in ("exact", "gt", "gte", "lt", "lte"):
+            if self.operator not in ("exact", "ne", "gt", "gte", "lt", "lte"):
                 raise QueryDefinitionError(
-                    f"Expressions only take exact, gt, gte, lt and lte filters, "
+                    f"Expressions only take exact, ne, gt, gte, lt and lte filters, "
                     f"not '{self.operator}'"
                 )
             self.expression_columns = expression_columns(node=value, model=model_cls)

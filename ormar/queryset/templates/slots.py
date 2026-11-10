@@ -51,6 +51,7 @@ PK_SLOT = "ormar_pk"
 # values exactly like a plain ``column <op> value`` comparison would.
 COMPARISON_OPERATORS = {
     "__eq__": operators.eq,
+    "__ne__": operators.ne,
     "like": operators.like_op,
     "ilike": operators.ilike_op,
     "in_": operators.in_op,

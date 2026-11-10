@@ -113,6 +113,17 @@ class FieldAccessor(Expression):
         """
         return self._select_operator(op="__eq__", other=other)
 
+    def __ne__(self, other: Any) -> FilterGroup:  # type: ignore
+        """
+        overloaded to work as sql `column != <VALUE>` (`IS NOT NULL` for None)
+
+        :param other: value to check agains operator
+        :type other: str
+        :return: FilterGroup for operator
+        :rtype: ormar.queryset.clause.FilterGroup
+        """
+        return self._select_operator(op="__ne__", other=other)
+
     def __ge__(self, other: Any) -> FilterGroup:
         """
         overloaded to work as sql `column >= <VALUE>`
