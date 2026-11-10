@@ -106,8 +106,8 @@ class FieldAccessor(Expression):
         """
         overloaded to work as sql `column = <VALUE>`
 
-        :param other: value to check agains operator
-        :type other: str
+        :param other: value to check against operator
+        :type other: Any
         :return: FilterGroup for operator
         :rtype: ormar.queryset.clause.FilterGroup
         """
@@ -117,8 +117,8 @@ class FieldAccessor(Expression):
         """
         overloaded to work as sql `column != <VALUE>` (`IS NOT NULL` for None)
 
-        :param other: value to check agains operator
-        :type other: str
+        :param other: value to check against operator
+        :type other: Any
         :return: FilterGroup for operator
         :rtype: ormar.queryset.clause.FilterGroup
         """

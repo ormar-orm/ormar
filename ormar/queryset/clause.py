@@ -7,10 +7,10 @@ from sqlalchemy import ColumnElement
 import ormar  # noqa I100
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.filter_action import (
-    FILTER_OPERATORS,
     FilterAction,
     KeyInFilterAction,
     KeyNullFilterAction,
+    split_filter_key,
 )
 
 if TYPE_CHECKING:  # pragma no cover
@@ -342,9 +342,7 @@ def multi_column_filter_actions(
     :return: filter actions, ``None`` if the key is not such a filter
     :rtype: Optional[list[FilterAction]]
     """
-    parts = name.split("__")
-    operator = parts[-1] if parts[-1] in FILTER_OPERATORS else "exact"
-    path = parts if operator == "exact" and parts[-1] != "exact" else parts[:-1]
+    operator, path = split_filter_key(model_cls=model_cls, key=name)
     target = model_cls
     field = None
     for part in path:

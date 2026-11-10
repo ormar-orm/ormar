@@ -51,6 +51,38 @@ METHODS_TO_OPERATORS = {
 ESCAPE_CHARACTERS = ["%", "_"]
 
 
+def split_filter_key(model_cls: type["Model"], key: str) -> tuple[str, list[str]]:
+    """
+    Split a filter key into its operator and the path of the filtered field.
+    A field named ``ne`` takes precedence over the ``ne`` operator::
+
+        split_filter_key(model_cls=Track, key="album__name__ne")
+        # -> ("ne", ["album", "name"])
+        split_filter_key(model_cls=Corner, key="ne")  # Corner has a field ne
+        # -> ("exact", ["ne"])
+
+    :param model_cls: model the filter starts from
+    :type model_cls: type[Model]
+    :param key: filter key
+    :type key: str
+    :return: operator (``exact`` when none is given) and the field path parts
+    :rtype: tuple[str, list[str]]
+    """
+    parts = key.split("__")
+    if parts[-1] not in FILTER_OPERATORS:
+        return "exact", parts
+    if parts[-1] == "ne":
+        target = model_cls
+        for part in parts[:-1]:
+            field = target.ormar_config.model_fields.get(part)
+            if field is None or not field.is_relation:
+                return "ne", parts[:-1]
+            target = field.to
+        if "ne" in target.ormar_config.model_fields:
+            return "exact", parts
+    return parts[-1], parts[:-1]
+
+
 class FilterAction(QueryAction):
     """
     Represents a single WHERE predicate on a queryset.
@@ -104,15 +136,11 @@ class FilterAction(QueryAction):
         )
 
     def _split_value_into_parts(self, query_str: str) -> None:
-        parts = query_str.split("__")
-        if parts[-1] in FILTER_OPERATORS:
-            self.operator = parts[-1]
-            self.field_name = parts[-2]
-            self.related_parts = parts[:-2]
-        else:
-            self.operator = "exact"
-            self.field_name = parts[-1]
-            self.related_parts = parts[:-1]
+        self.operator, path = split_filter_key(
+            model_cls=self.source_model, key=query_str
+        )
+        self.field_name = path[-1]
+        self.related_parts = path[:-1]
 
     def _escape_characters_in_clause(self) -> None:
         """

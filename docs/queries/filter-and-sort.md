@@ -67,6 +67,9 @@ You can use special filter suffix to change the filter operands:
        * can be written as`album__name__exact='Malibu'`
 *  **ne** - not equal, sql `column != <VALUE>` (`column IS NOT NULL` for `None`)
        * can be written as`album__name__ne='Malibu'`
+       * rows with `NULL` in the column never match, include them with
+         `ormar.or_(x__ne=v, x__isnull=True)`
+       * a field named `ne` takes precedence over the operator, compare it with `ne__ne=...`
 *  **iexact** - exact match sql `column = <VALUE>` (case insensitive)
       * can be written as`album__name__iexact='malibu'`
 *  **contains** - sql `column LIKE '%<VALUE>%'`
@@ -116,6 +119,8 @@ Product.objects.filter(
       * can be written as `Track.album.name == 'Malibu`
 *  **ne** - not equal, sql `column != <VALUE>` (`column IS NOT NULL` for `None`)
       * can be written as `Track.album.name != 'Malibu'`
+      * rows with `NULL` in the column never match, include them with
+        `ormar.or_(Track.album.name != 'Malibu', Track.album.name.isnull(True))`
 *  **iexact** - exact match sql `column = <VALUE>` (case insensitive)
       * can be written as `Track.album.name.iexact('malibu')`
 *  **contains** - sql `column LIKE '%<VALUE>%'`

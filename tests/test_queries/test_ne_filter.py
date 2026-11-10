@@ -30,6 +30,21 @@ class Track(ormar.Model):
     play_count: Optional[int] = ormar.Integer(nullable=True)
 
 
+class Location(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="nef_locations")
+
+    id: int = ormar.Integer(primary_key=True)
+    ne: int = ormar.Integer()
+
+
+class Corner(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="nef_corners")
+
+    id: int = ormar.Integer(primary_key=True)
+    ne: int = ormar.Integer()
+    location: Optional[Location] = ormar.ForeignKey(Location)
+
+
 create_test_database = init_tests(base_ormar_config)
 
 
@@ -109,3 +124,22 @@ async def test_ne_filters_updates_and_deletes(tracks):
     assert await Track.objects.filter(name__ne="Surf").update(position=0) == 2
     assert await Track.objects.filter(position__ne=0).delete() == 1
     assert await names(queryset=Track.objects) == ["Hits", "Malibu"]
+
+
+@pytest.mark.asyncio
+async def test_field_named_ne_takes_precedence_over_the_operator(tracks):
+    first = await Location.objects.create(ne=5)
+    second = await Location.objects.create(ne=7)
+    await Corner.objects.create(ne=1, location=first)
+    await Corner.objects.create(ne=2, location=second)
+
+    async def corners(queryset):
+        return sorted(corner.ne for corner in await queryset.all())
+
+    assert await corners(queryset=Corner.objects.filter(ne=1)) == [1]
+    assert await corners(queryset=Corner.objects.filter(location__ne=5)) == [1]
+    assert await corners(queryset=Corner.objects.filter(ne__ne=1)) == [2]
+    assert await corners(queryset=Corner.objects.filter(Corner.ne != 1)) == [2]
+    assert await corners(queryset=Corner.objects.filter(location__ne__ne=5)) == [2]
+    malibu = await Album.objects.get(name="Malibu")
+    assert await names(queryset=Track.objects.filter(album__ne=malibu)) == ["Hits"]
