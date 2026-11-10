@@ -32,9 +32,7 @@ T = TypeVar("T")
 savepoint_locks: "WeakKeyDictionary[AsyncConnection, asyncio.Lock]" = (
     WeakKeyDictionary()
 )
-holds_savepoint_lock: ContextVar[bool] = ContextVar(
-    "holds_savepoint_lock", default=False
-)
+holds_savepoint_lock = ContextVar("holds_savepoint_lock", default=False)
 
 
 PathParts = tuple[str, ...]
@@ -553,18 +551,11 @@ async def get_or_create_with_retry(
     """
     Shared body of ``get_or_create`` for querysets and relation proxies.
 
-    Returns the row from ``get``, or creates it when ``get`` raises
-    ``NoMatch``. When a concurrent caller inserts a matching row first, the
-    ``create`` fails with ``IntegrityError`` and ``get`` is retried once; if
-    the retry finds nothing the conflict is unrelated and the original error
-    is raised.
-
-    Inside a transaction the ``create`` runs in a savepoint, so a failed
-    insert does not abort the whole transaction (PostgreSQL would reject the
-    retried ``get`` otherwise). Tasks sharing the transaction take turns with
-    their savepoints, as releasing one would release savepoints opened after
-    it; a nested call in the same task (e.g. from a ``pre_save`` signal) keeps
-    the lock its caller holds.
+    On ``IntegrityError`` from ``create`` the ``get`` is retried once and the
+    error re-raised if it still finds nothing. Inside a transaction ``create``
+    runs in a savepoint, serialised per transaction connection because
+    releasing a savepoint releases the ones opened after it; nested calls in
+    the same task (e.g. from a ``pre_save`` signal) reuse the held lock.
 
     :param database: database the model belongs to
     :type database: DatabaseConnection
