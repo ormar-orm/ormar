@@ -203,14 +203,10 @@ async def test_lock_guards():
     async with lock_config.database:
         locking = LockJob.objects.select_for_update()
         with pytest.raises(QueryDefinitionError, match="transaction"):
-            await locking.all()
-        with pytest.raises(QueryDefinitionError, match="transaction"):
             await locking.get(id=1)
-        with pytest.raises(QueryDefinitionError, match="transaction"):
-            async for _ in locking.iterate():
-                pass  # pragma: no cover
         author = await LockAuthor.objects.create(name="guarded")
         async with lock_config.database.transaction():
+            assert await locking.all() == []
             for read in (locking.count(), locking.exists(), locking.max("id")):
                 with pytest.raises(QueryDefinitionError, match="get_or_none"):
                     await read
@@ -218,6 +214,12 @@ async def test_lock_guards():
                 await LockAuthor.objects.prefetch_related(
                     Prefetch("jobs", queryset=locking)
                 ).all()
+        cached = LockJob.objects.select_for_update()
+        with pytest.raises(QueryDefinitionError, match="transaction"):
+            await cached.all()
+        with pytest.raises(QueryDefinitionError, match="transaction"):
+            async for _ in cached.iterate():
+                pass  # pragma: no cover
         with pytest.raises(QueryDefinitionError, match="nowait"):
             LockJob.objects.select_for_update(nowait=True, skip_locked=True)
         await author.delete()

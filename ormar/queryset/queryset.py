@@ -1361,9 +1361,8 @@ class QuerySet(Generic[T]):
         """
         Lock the rows of the main model read by this queryset until the end of
         the transaction (``SELECT ... FOR UPDATE OF <table>``). It has to run
-        inside a transaction. Joined related models are not locked.
-
-        SQLite has no row locks, there the query runs without them.
+        inside a transaction; joined related models are not locked and SQLite
+        runs the query without locks.
 
         :param nowait: raise instead of waiting for rows locked by others
         :type nowait: bool
