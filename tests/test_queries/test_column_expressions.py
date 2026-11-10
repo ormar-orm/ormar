@@ -136,6 +136,19 @@ async def test_expression_statements_are_shared_by_shape(slots):
 
 
 @pytest.mark.asyncio
+async def test_cached_statements_bind_the_literals_of_each_call(slots):
+    template_cache_for(model_cls=Slot).clear()
+    qs = Slot.objects.filter(name="free")
+    await qs.update(taken=F("taken") + 1)
+    await qs.update(taken=F("taken") + 5)
+    assert (await qs.get()).taken == 7
+    assert await Slot.objects.filter(taken__lt=F("capacity") + 4).count() == 1
+    assert await Slot.objects.filter(taken__lt=F("capacity") + 5).count() == 2
+    assert await Slot.objects.filter(taken__lt=F("taken") * 2).count() == 2
+    assert await Slot.objects.filter(taken__lt=F("capacity") - 1).count() == 0
+
+
+@pytest.mark.asyncio
 async def test_update_rejects_reading_columns_assigned_in_the_same_update(slots):
     qs = Slot.objects.filter(name="free")
     with pytest.raises(QueryDefinitionError, match="capacity"):
@@ -150,6 +163,8 @@ async def test_update_rejects_reading_columns_assigned_in_the_same_update(slots)
 async def test_expressions_reference_own_fields_of_the_compared_model(slots):
     invalid_filters = [
         {"taken__lt": F("owner__score")},
+        {"taken__lt": F("owner__id")},
+        {"owner__score__lt": F("id")},
         {"owner__score__lt": F("capacity")},
         {"taken__lt": F("owner")},
         {"taken__lt": F("missing")},
@@ -163,6 +178,7 @@ async def test_expressions_reference_own_fields_of_the_compared_model(slots):
     for kwargs in [
         {"owner": F("taken")},
         {"taken": F("owner__score")},
+        {"taken": F("owner__id")},
         {"taken": F("owner")},
     ]:
         with pytest.raises(QueryDefinitionError):

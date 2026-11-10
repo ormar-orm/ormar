@@ -196,9 +196,9 @@ def expression_clause(
 ) -> Any:
     """
     Build the SQL of an expression over the columns of ``table``. With a
-    ``slot`` the literals become named bind parameters ``{slot}_{k}``, typed
-    like SQLAlchemy types the literal of ``column + literal``, without one
-    they stay plain values.
+    ``slot`` the literals become bind parameters named ``{slot}_{k}`` and typed
+    from the left operand and the literal (``release_values`` drops the
+    literal afterwards), without one they stay plain values.
 
     :param node: expression node
     :type node: Any
@@ -215,7 +215,7 @@ def expression_clause(
     """
     if isinstance(node, F):
         return table.c[model.get_column_alias(node._path.split("__")[-1])]
-    index = index if index is not None else itertools.count()
+    index = index or itertools.count()
     left = expression_clause(
         node=node._left, model=model, table=table, slot=slot, index=index
     )

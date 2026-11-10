@@ -29,7 +29,7 @@ from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.sqltypes import TupleType
 
 from ormar.queryset.actions.filter_action import FILTER_OPERATORS
-from ormar.queryset.expressions import Expression, expression_clause, expression_params
+from ormar.queryset.expressions import expression_params
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.queryset.actions.filter_action import FilterAction
@@ -264,16 +264,10 @@ class SlotBinder:
         )
 
 
-def value_binds(
-    table: sqlalchemy.Table,
-    names: Tuple[str, ...],
-    values: Optional[Mapping[str, Any]] = None,
-    model: Any = None,
-) -> Dict[Any, Any]:
+def value_binds(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Dict[Any, Any]:
     """
     Return named bind parameters for the written columns, ``ormar_v{i}`` in
-    the given column order, typed like their columns. A column written with an
-    expression gets the expression, its literals named ``ormar_v{i}_{k}``::
+    the given column order, typed like their columns::
 
         value_binds(table=authors, names=("name", "score"))
         # -> {authors.c.name: :ormar_v0, authors.c.score: :ormar_v1}
@@ -282,20 +276,13 @@ def value_binds(
     :type table: sqlalchemy.Table
     :param names: written column names, sorted
     :type names: Tuple[str, ...]
-    :param values: written values by column name, needed for expressions
-    :type values: Optional[Mapping[str, Any]]
-    :param model: written model, needed for expressions
-    :type model: Any
     :return: bind parameter per column
     :rtype: Dict[Any, Any]
     """
-    values = values or {}
     return {
-        table.c[name]: expression_clause(
-            node=values[name], model=model, table=table, slot=f"ormar_v{index}"
+        table.c[name]: sqlalchemy.bindparam(
+            key=f"ormar_v{index}", type_=table.c[name].type
         )
-        if isinstance(values.get(name), Expression)
-        else sqlalchemy.bindparam(key=f"ormar_v{index}", type_=table.c[name].type)
         for index, name in enumerate(names)
     }
 
@@ -315,10 +302,4 @@ def value_params(names: Tuple[str, ...], values: Mapping[str, Any]) -> Dict[str,
     :return: values by bind parameter name
     :rtype: Dict[str, Any]
     """
-    return {
-        key: value
-        for index, name in enumerate(names)
-        for key, value in expression_params(
-            value=values[name], slot=f"ormar_v{index}"
-        ).items()
-    }
+    return {f"ormar_v{index}": values[name] for index, name in enumerate(names)}

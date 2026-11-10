@@ -27,7 +27,13 @@ from ormar.models.row_registry import RowRegistry
 from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
 from ormar.queryset.actions.order_action import OrderAction, expand_pk_orders
 from ormar.queryset.clause import FilterGroup, QueryClause
-from ormar.queryset.expressions import Expression, expression_fields, expression_key
+from ormar.queryset.expressions import (
+    Expression,
+    expression_clause,
+    expression_fields,
+    expression_key,
+    expression_params,
+)
 from ormar.queryset.prefetch import Prefetch
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
@@ -527,10 +533,9 @@ class QuerySet(Generic[T]):
             filter_clauses=self.filter_clauses, exclude_clauses=self.exclude_clauses
         )
         names = tuple(sorted(values))
-        params = {
-            **template_params(actions=actions, limit=None, offset=None),
-            **value_params(names=names, values=values),
-        }
+        params = template_params(actions=actions, limit=None, offset=None)
+        for index, name in enumerate(names):
+            params.update(expression_params(value=values[name], slot=f"ormar_v{index}"))
         key = (
             kind,
             clauses_cache_key(clauses=self.filter_clauses),
@@ -569,14 +574,17 @@ class QuerySet(Generic[T]):
         table = self.table
         expr: Any
         if kind == "update":
-            expr = table.update().values(
-                value_binds(
-                    table=table,
-                    names=tuple(sorted(values)),
-                    values=values,
-                    model=self.model,
-                )
-            )
+            names = tuple(sorted(values))
+            binds = value_binds(table=table, names=names)
+            for index, name in enumerate(names):
+                if isinstance(values[name], Expression):
+                    binds[table.c[name]] = expression_clause(
+                        node=values[name],
+                        model=self.model,
+                        table=table,
+                        slot=f"ormar_v{index}",
+                    )
+            expr = table.update().values(binds)
         else:
             expr = table.delete()
         expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
