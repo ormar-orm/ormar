@@ -23,6 +23,10 @@
     await Slot.objects.filter(id=1, taken__lt=F("capacity")).update(taken=Slot.taken + 1)
     ```
 
+* **Conflict handling in `create()` and `bulk_create()`** ([#1016](https://github.com/ormar-orm/ormar/issues/1016), [#1437](https://github.com/ormar-orm/ormar/discussions/1437))
+
+    `create(on_conflict="ignore")` skips a row that conflicts with an existing one on any unique key and returns `None` instead of raising `IntegrityError`, so concurrent creates of the same row no longer fail. `bulk_create(on_conflict="ignore")` skips such rows, and `bulk_create(on_conflict="update", conflict_target=[...], update_fields=[...])` updates the existing rows (an upsert). See [conflict handling](queries/create.md#conflict-handling).
+
 ### 🐛 Fixes
 
 * `get_or_create()` (also on relations) inside `database.transaction()` now runs the insert in a savepoint. On PostgreSQL a lost race used to abort the whole transaction and raise `InFailedSQLTransactionError`; now it returns the concurrent caller's row, and an unrelated constraint error is raised as `IntegrityError` with the transaction still usable. [#1960](https://github.com/ormar-orm/ormar/pull/1960)

@@ -2,10 +2,10 @@
 
 Following methods allow you to insert data into the database.
 
-* `create(**kwargs) -> Model`
+* `create(on_conflict: Optional[Literal["ignore"]] = None, **kwargs) -> Optional[Model]`
 * `get_or_create(_defaults: Optional[dict[str, Any]] = None, **kwargs) -> tuple[Model, bool]`
 * `update_or_create(**kwargs) -> Model`
-* `bulk_create(objects: list[Model]) -> None`
+* `bulk_create(objects: list[Model], on_conflict=None, conflict_target=None, update_fields=None) -> None`
 
 
 * `Model`
@@ -141,6 +141,94 @@ A valid list of `Model` objects needs to be passed.
     inside one transaction, so generated primary keys may not follow the order
     of the passed list. If you need that order, split such objects into separate
     `bulk_create()` calls.
+
+## Conflict handling
+
+`create()` and `bulk_create()` can skip or update rows that conflict with existing
+ones on a unique key, in the same statement as the insert, instead of failing with an
+`IntegrityError`.
+
+```python
+class Tag(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="tags")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=50, unique=True)
+    score: int = ormar.Integer(default=0)
+    updated: bool = ormar.Boolean(default=False, on_update=True)
+```
+
+### Skip conflicting rows
+
+```python
+tag = await Tag.objects.create(name="python", on_conflict="ignore")
+# a Tag when the row was inserted, None when a row with the same name
+# (or with the same primary key) already exists
+```
+
+`on_conflict="ignore"` reacts to a conflict on any unique key (primary key, unique
+column or unique constraint). Concurrent `create(on_conflict="ignore")` calls insert the
+row once, the others get `None`, and no error is raised, so an open transaction stays
+usable. `pre_save` is sent, `post_save` only when the row was inserted.
+
+`None` does not load the existing row: use `get()` for it. The model built from the
+passed kwargs is still added to the in-memory relations of models it was given, like
+after a failed insert.
+
+```python
+await Tag.objects.bulk_create(
+    [Tag(name="python"), Tag(name="sql")], on_conflict="ignore"
+)
+```
+
+### Update conflicting rows
+
+```python
+await Tag.objects.bulk_create(
+    [Tag(name="python", score=5), Tag(name="rust", score=1)],
+    on_conflict="update",
+    conflict_target=["name"],
+    update_fields=["score"],
+)
+```
+
+* `conflict_target` - fields of the unique key the rows conflict on: the primary key
+  by default. A foreign key stored in several columns stands for all of its columns.
+* `update_fields` - fields set from the inserted row: by default all inserted fields
+  except the target and the primary key.
+* Fields with `on_update` that are not in `update_fields` get their `on_update`
+  value, as in `bulk_update()`.
+
+`conflict_target` and `update_fields` are only allowed with `on_conflict="update"`.
+When several objects of one call conflict on the same key, the last one wins.
+
+`bulk_create()` sends no signals, sets no primary keys and marks all passed objects as
+saved, the skipped ones too.
+
+### Backends
+
+| | PostgreSQL, SQLite | MySQL |
+|---|---|---|
+| `create(on_conflict="ignore")` | `INSERT ... ON CONFLICT DO NOTHING RETURNING` | plain `INSERT`, a duplicate key error is caught |
+| `bulk_create(on_conflict="ignore")` | `ON CONFLICT DO NOTHING` | `ON DUPLICATE KEY UPDATE` of the primary key to itself |
+| `bulk_create(on_conflict="update")` | `ON CONFLICT (target) DO UPDATE` | `ON DUPLICATE KEY UPDATE`, one row per statement when an `on_update` field is set |
+
+!!!warning
+    MySQL has no conflict target: `ON DUPLICATE KEY UPDATE` reacts to a conflict on
+    **any** unique key of the table, so with several unique keys a row can update an
+    existing row that conflicts on a different key than `conflict_target`. The target is
+    used only on PostgreSQL and SQLite, which reject it when it does not match a unique
+    key or constraint. MariaDB is not tested.
+
+!!!note
+    SQLite supports `ON CONFLICT` with `RETURNING` from version 3.35.
+
+!!!note
+    `on_conflict` is a reserved keyword argument of `create()`. To create a model with
+    a field named `on_conflict` use `Model(on_conflict=...).save()`.
+
+`QuerysetProxy.create()` accepts `on_conflict="ignore"` too, except for many to many
+relations.
 
 ## Model methods
 
