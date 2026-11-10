@@ -1860,7 +1860,9 @@ class QuerySet(Generic[T]):
             for name in self.model._onupdate_fields
             if on_conflict == "update" and name not in (update_fields or ())
         }
-        on_update_params = {f"ormar_ou_{name}": v for name, v in on_update.items()}
+        on_update_params = {
+            f"ormar_on_update_{column}": value for column, value in on_update.items()
+        }
 
         ready_objects = []
         trusted = self.model.flat_row_model()

@@ -78,7 +78,7 @@ def build_conflict_insert(
     MySQL reacts to a conflict on any unique key, so the target is not emitted
     there and ``ignore`` becomes a no-op update of a key column (a duplicate
     key error would abort the whole ``executemany``). Columns in ``on_update``
-    are set from ``ormar_ou_<column>`` parameters.
+    are set from ``ormar_on_update_<column>`` parameters.
 
     :param table: written table
     :type table: sqlalchemy.Table
@@ -103,17 +103,21 @@ def build_conflict_insert(
         value_binds(table=table, names=names)
     )
     excluded = statement.inserted if dialect_name == "mysql" else statement.excluded
-    set_ = {name: excluded[name] for name in update_names}
+    conflict_updates = {name: excluded[name] for name in update_names}
     for name in on_update:
-        set_[name] = sqlalchemy.bindparam(
-            key=f"ormar_ou_{name}", type_=table.c[name].type
+        conflict_updates[name] = sqlalchemy.bindparam(
+            key=f"ormar_on_update_{name}", type_=table.c[name].type
         )
     if dialect_name == "mysql":
         return statement.on_duplicate_key_update(
-            set_ if on_conflict == "update" else {target[0]: table.c[target[0]]}
+            conflict_updates
+            if on_conflict == "update"
+            else {target[0]: table.c[target[0]]}
         )
     if on_conflict == "update":
-        statement = statement.on_conflict_do_update(index_elements=target, set_=set_)
+        statement = statement.on_conflict_do_update(
+            index_elements=target, set_=conflict_updates
+        )
     else:
         statement = statement.on_conflict_do_nothing()
     return statement.returning(*table.primary_key) if returning else statement
@@ -256,13 +260,26 @@ def insert_statement(
     config = model_cls.ormar_config
     conflict: dict[str, Any] = {}
     if on_conflict:
-        aliases = model_cls.get_column_aliases
-        pk = config.pk.column_aliases()
-        target = tuple(c for n in conflict_target or () for c in aliases(field_name=n))
-        target = target or pk
+        pk_columns = config.pk.column_aliases()
+        target = (
+            tuple(
+                column
+                for field_name in conflict_target or ()
+                for column in model_cls.get_column_aliases(field_name=field_name)
+            )
+            or pk_columns
+        )
         update_names = tuple(
-            sorted(c for n in update_fields or () for c in aliases(field_name=n))
-        ) or tuple(n for n in names if n not in {*target, *pk, *on_update})
+            sorted(
+                column
+                for field_name in update_fields or ()
+                for column in model_cls.get_column_aliases(field_name=field_name)
+            )
+        ) or tuple(
+            column
+            for column in names
+            if column not in {*target, *pk_columns, *on_update}
+        )
         conflict = dict(
             dialect_name=config.database.dialect.name,
             on_conflict=on_conflict,
