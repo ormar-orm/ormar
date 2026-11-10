@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Literal, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Any, Optional, Sequence, Union
 
 try:
     from typing import Protocol
@@ -42,9 +42,7 @@ class QuerySetProtocol(Protocol):  # pragma: nocover
         self, **kwargs: Any
     ) -> Sequence[Optional["Model"]]: ...
 
-    async def create(
-        self, on_conflict: Optional[Literal["ignore"]] = None, **kwargs: Any
-    ) -> Optional["Model"]: ...
+    async def create(self, **kwargs: Any) -> "Model": ...
 
     async def update(self, each: bool = False, **kwargs: Any) -> int: ...
 

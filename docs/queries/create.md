@@ -206,7 +206,7 @@ saved, the skipped ones too.
 |---|---|---|
 | `create(on_conflict="ignore")` | `INSERT ... ON CONFLICT DO NOTHING RETURNING` | plain `INSERT`, a duplicate key error is caught |
 | `bulk_create(on_conflict="ignore")` | `ON CONFLICT DO NOTHING` | `ON DUPLICATE KEY UPDATE` of the primary key to itself |
-| `bulk_create(on_conflict="update")` | `ON CONFLICT (target) DO UPDATE` | `ON DUPLICATE KEY UPDATE` |
+| `bulk_create(on_conflict="update")` | `ON CONFLICT (target) DO UPDATE` | `ON DUPLICATE KEY UPDATE`, one row per statement when an `on_update` field is set |
 
 !!!warning
     MySQL has no conflict target: `ON DUPLICATE KEY UPDATE` reacts to a conflict on

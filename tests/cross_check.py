@@ -288,20 +288,25 @@ def checked_write_template(
 
 
 def checked_insert_template(
-    model_cls: Any, values: Mapping[str, Any]
+    model_cls: Any, values: Mapping[str, Any], **statement_kwargs: Any
 ) -> StatementTemplate:
     """
     ``insert_template`` compared with the insert built with literal values.
+    Inserts handling conflicts are not compared.
 
     :param model_cls: inserted model
     :type model_cls: Any
     :param values: values by column name
     :type values: Mapping[str, Any]
+    :param statement_kwargs: conflict handling of the insert
+    :type statement_kwargs: Any
     :return: statement and values to bind
     :rtype: StatementTemplate
     """
-    template = ORIGINAL_INSERT_TEMPLATE(model_cls=model_cls, values=values)
-    if ENABLED:
+    template = ORIGINAL_INSERT_TEMPLATE(
+        model_cls=model_cls, values=values, **statement_kwargs
+    )
+    if ENABLED and not statement_kwargs.get("on_conflict"):
         table = model_cls.ormar_config.table
         fresh = table.insert().values(literal_values(table=table, values=values))
         assert_same_write(model_cls=model_cls, template=template, fresh=fresh)

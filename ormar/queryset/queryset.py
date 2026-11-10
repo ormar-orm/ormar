@@ -40,7 +40,6 @@ from ormar.queryset.templates import (
     cached_statement,
     canonical_actions,
     clauses_cache_key,
-    conflict_insert_statement,
     count_statement,
     excludable_cache_key,
     exists_statement,
@@ -1837,21 +1836,16 @@ class QuerySet(Generic[T]):
         ) as executor:
             for rows in rows_by_keys.values():
                 names = tuple(sorted(rows[0]))
-                # duplicates within one batch: the last one wins; holds only
-                # while there is no RETURNING (SQLAlchemy would then send one
-                # multi-row VALUES, which PostgreSQL rejects for a row
-                # affected twice)
-                statement = (
-                    conflict_insert_statement(
-                        model_cls=self.model,
-                        names=names,
-                        on_conflict=on_conflict,
-                        conflict_target=conflict_target,
-                        update_fields=update_fields,
-                        on_update=tuple(sorted(on_update)),
-                    )
-                    if on_conflict
-                    else insert_statement(model_cls=self.model, names=names)
+                # duplicates in one batch: the last wins, only while there is no
+                # RETURNING (SQLAlchemy would then send a multi-row VALUES, which
+                # PostgreSQL rejects for a row affected twice)
+                statement = insert_statement(
+                    model_cls=self.model,
+                    names=names,
+                    on_conflict=on_conflict,
+                    conflict_target=conflict_target,
+                    update_fields=update_fields,
+                    on_update=tuple(sorted(on_update)),
                 )
                 params = [
                     {**value_params(names=names, values=row), **on_update_params}
@@ -1859,9 +1853,7 @@ class QuerySet(Generic[T]):
                 ]
                 # MySQL drivers turn executemany into one multi-row VALUES and
                 # leave the on_update binds after it unfilled
-                if (len(rows) == 1 and not on_conflict) or (
-                    on_update and self.model.db_backend_name() == "mysql"
-                ):
+                if len(rows) == 1 or (on_update and database.dialect.name == "mysql"):
                     for row_params in params:
                         await executor.execute(query=statement, params=row_params)
                 else:

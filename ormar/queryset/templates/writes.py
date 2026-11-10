@@ -60,7 +60,6 @@ DIALECT_INSERTS: dict[str, Callable[..., Any]] = {
 def build_conflict_insert(
     table: sqlalchemy.Table,
     names: Tuple[str, ...],
-    primary_key: "PrimaryKey",
     dialect_name: str,
     on_conflict: str,
     target: Tuple[str, ...],
@@ -76,22 +75,20 @@ def build_conflict_insert(
         ON CONFLICT (name) DO UPDATE SET score = excluded.score
         -- MySQL: ON DUPLICATE KEY UPDATE score = VALUES(score)
 
-    MySQL reacts to a conflict on any unique key, so the target is not
-    emitted there, and ``ignore`` becomes a no-op update of the first key
-    column (a duplicate key error would abort the whole ``executemany``).
-    Columns in ``on_update`` are set from ``ormar_ou_<column>`` parameters.
+    MySQL reacts to a conflict on any unique key, so the target is not emitted
+    there and ``ignore`` becomes a no-op update of a key column (a duplicate
+    key error would abort the whole ``executemany``). Columns in ``on_update``
+    are set from ``ormar_ou_<column>`` parameters.
 
     :param table: written table
     :type table: sqlalchemy.Table
     :param names: inserted column names, sorted
     :type names: Tuple[str, ...]
-    :param primary_key: primary key of the written model
-    :type primary_key: PrimaryKey
     :param dialect_name: name of the database dialect
     :type dialect_name: str
     :param on_conflict: ``ignore`` or ``update``
     :type on_conflict: str
-    :param target: conflicting column names
+    :param target: conflicting column names (the primary key for ``ignore``)
     :type target: Tuple[str, ...]
     :param update_names: columns updated from the inserted row
     :type update_names: Tuple[str, ...]
@@ -106,23 +103,20 @@ def build_conflict_insert(
         value_binds(table=table, names=names)
     )
     excluded = statement.inserted if dialect_name == "mysql" else statement.excluded
-    set_ = {
-        **{name: excluded[name] for name in update_names},
-        **{
-            name: sqlalchemy.bindparam(key=f"ormar_ou_{name}", type_=table.c[name].type)
-            for name in on_update
-        },
-    }
+    set_ = {name: excluded[name] for name in update_names}
+    for name in on_update:
+        set_[name] = sqlalchemy.bindparam(
+            key=f"ormar_ou_{name}", type_=table.c[name].type
+        )
     if dialect_name == "mysql":
-        key_column = primary_key.column_aliases()[0]
         return statement.on_duplicate_key_update(
-            set_ if on_conflict == "update" else {key_column: table.c[key_column]}
+            set_ if on_conflict == "update" else {target[0]: table.c[target[0]]}
         )
     if on_conflict == "update":
         statement = statement.on_conflict_do_update(index_elements=target, set_=set_)
     else:
         statement = statement.on_conflict_do_nothing()
-    return statement.returning(*primary_key.columns()) if returning else statement
+    return statement.returning(*table.primary_key) if returning else statement
 
 
 def build_update(
@@ -222,52 +216,32 @@ def build_bulk_update(
     )
 
 
-def insert_statement(model_cls: Type[Any], names: Tuple[str, ...]) -> Executable:
-    """
-    Return the insert of a model for the given sorted column names, from the
-    model's template cache. ``save()`` binds one row to it and
-    ``bulk_create`` runs it with ``executemany`` for every row with the same
-    columns.
-
-    :param model_cls: inserted model
-    :type model_cls: Type[Any]
-    :param names: inserted column names, sorted
-    :type names: Tuple[str, ...]
-    :return: insert statement with ``ormar_v{i}`` binds
-    :rtype: Executable
-    """
-    table = model_cls.ormar_config.table
-    return cached_statement(
-        model_cls=model_cls,
-        key=("insert", names),
-        builder=build_insert,
-        table=table,
-        names=names,
-    )
-
-
-def conflict_insert_statement(
+def insert_statement(
     model_cls: Type[Any],
     names: Tuple[str, ...],
-    on_conflict: str,
+    on_conflict: Optional[str] = None,
     conflict_target: Optional[Sequence[str]] = None,
     update_fields: Optional[Sequence[str]] = None,
     on_update: Tuple[str, ...] = (),
     returning: bool = False,
 ) -> Executable:
     """
-    Return the insert of a model that skips or updates conflicting rows, from
-    the model's template cache (see ``build_conflict_insert``).
+    Return the insert of a model for the given sorted column names, from the
+    model's template cache. ``save()`` binds one row to it and
+    ``bulk_create`` runs it with ``executemany`` for every row with the same
+    columns.
 
-    The target defaults to the primary key columns and the updated columns to
-    the inserted ones other than the target, the key and ``on_update``.
+    With ``on_conflict`` the insert skips or updates conflicting rows (see
+    ``build_conflict_insert``): the target defaults to the primary key and the
+    updated columns to the inserted ones but the target, the key and
+    ``on_update``.
 
     :param model_cls: inserted model
     :type model_cls: Type[Any]
     :param names: inserted column names, sorted
     :type names: Tuple[str, ...]
-    :param on_conflict: ``ignore`` or ``update``
-    :type on_conflict: str
+    :param on_conflict: ``ignore`` or ``update`` conflicting rows
+    :type on_conflict: Optional[str]
     :param conflict_target: names of the fields of the conflicting unique key
     :type conflict_target: Optional[Sequence[str]]
     :param update_fields: names of the fields updated from the inserted row
@@ -280,41 +254,35 @@ def conflict_insert_statement(
     :rtype: Executable
     """
     config = model_cls.ormar_config
-    aliases = model_cls.get_column_aliases
-    target = (
-        tuple(c for name in conflict_target for c in aliases(field_name=name))
-        if conflict_target
-        else config.pk.column_aliases()
-    )
-    update_names: Tuple[str, ...] = ()
-    if on_conflict == "update":
+    conflict: dict[str, Any] = {}
+    if on_conflict:
+        aliases = model_cls.get_column_aliases
+        pk = config.pk.column_aliases()
+        target = tuple(c for n in conflict_target or () for c in aliases(field_name=n))
+        target = target or pk
         update_names = tuple(
-            sorted(c for name in update_fields for c in aliases(field_name=name))
-            if update_fields
-            else (
-                name
-                for name in names
-                if name not in {*target, *config.pk.column_aliases(), *on_update}
-            )
+            sorted(c for n in update_fields or () for c in aliases(field_name=n))
+        ) or tuple(n for n in names if n not in {*target, *pk, *on_update})
+        conflict = dict(
+            dialect_name=config.database.dialect.name,
+            on_conflict=on_conflict,
+            target=target,
+            update_names=update_names,
+            on_update=on_update,
+            returning=returning,
         )
     return cached_statement(
         model_cls=model_cls,
-        key=("insert", names, on_conflict, target, update_names, on_update, returning),
-        builder=build_conflict_insert,
+        key=("insert", names, *conflict.values()),
+        builder=build_conflict_insert if conflict else build_insert,
         table=config.table,
         names=names,
-        primary_key=config.pk,
-        dialect_name=config.database.dialect.name,
-        on_conflict=on_conflict,
-        target=target,
-        update_names=update_names,
-        on_update=on_update,
-        returning=returning,
+        **conflict,
     )
 
 
 def insert_template(
-    model_cls: Type[Any], values: Mapping[str, Any]
+    model_cls: Type[Any], values: Mapping[str, Any], **statement_kwargs: Any
 ) -> StatementTemplate:
     """
     Return the insert of a model for the given column values, used by
@@ -331,11 +299,13 @@ def insert_template(
     :type model_cls: Type[Any]
     :param values: values by column name
     :type values: Mapping[str, Any]
+    :param statement_kwargs: conflict handling (see ``insert_statement``)
+    :type statement_kwargs: Any
     :return: statement and values to bind
     :rtype: StatementTemplate
     """
     names = tuple(sorted(values))
-    statement = insert_statement(model_cls=model_cls, names=names)
+    statement = insert_statement(model_cls=model_cls, names=names, **statement_kwargs)
     params = value_params(names=names, values=values)
     return StatementTemplate(statement=statement, params=params)
 

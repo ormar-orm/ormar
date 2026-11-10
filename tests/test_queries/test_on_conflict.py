@@ -5,7 +5,7 @@ from sqlalchemy.dialects import mysql, postgresql, sqlite
 
 import ormar
 from ormar.exceptions import QueryDefinitionError
-from ormar.queryset.templates import conflict_insert_statement, insert_statement
+from ormar.queryset.templates import insert_statement
 from ormar.queryset.templates.writes import build_conflict_insert
 from tests.lifespan import init_tests
 from tests.settings import create_config
@@ -228,7 +228,7 @@ async def test_conflict_options_need_update():
 def test_conflict_statements_per_dialect():
     table = Tag.ormar_config.table
     names = ("name", "score")
-    common = dict(table=table, names=names, primary_key=Tag.ormar_config.pk)
+    common = dict(table=table, names=names)
     ignore = dict(on_conflict="ignore", target=("id",), update_names=(), on_update=())
     update = dict(
         on_conflict="update",
@@ -268,17 +268,17 @@ def test_conflict_statements_per_dialect():
 async def test_conflict_statement_cache():
     names = ("name", "score")
     async with base_ormar_config.database:
-        ignore = conflict_insert_statement(
+        ignore = insert_statement(
             model_cls=Tag, names=names, on_conflict="ignore", returning=True
         )
-        assert ignore is conflict_insert_statement(
+        assert ignore is insert_statement(
             model_cls=Tag, names=names, on_conflict="ignore", returning=True
         )
         assert ignore is not insert_statement(model_cls=Tag, names=names)
-        assert ignore is not conflict_insert_statement(
+        assert ignore is not insert_statement(
             model_cls=Tag, names=names, on_conflict="ignore"
         )
-        assert ignore is not conflict_insert_statement(
+        assert ignore is not insert_statement(
             model_cls=Tag, names=names, on_conflict="update"
         )
 

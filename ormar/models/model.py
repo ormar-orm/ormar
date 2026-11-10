@@ -10,12 +10,10 @@ from ormar.exceptions import ModelPersistenceError, NoMatch
 from ormar.models import NewBaseModel  # noqa I100
 from ormar.models.model_row import ModelRow
 from ormar.queryset.templates import (
-    conflict_insert_statement,
     delete_template,
     insert_template,
     pk_select_template,
     update_template,
-    value_params,
 )
 from ormar.queryset.utils import subtract_dict, translate_list_to_dict
 
@@ -183,55 +181,12 @@ class Model(ModelRow):
         """
         return cast(T, await self._save())
 
-    async def _insert(
-        self, values: dict[str, Any], on_conflict: Optional[Literal["ignore"]]
-    ) -> tuple[bool, Any]:
-        """
-        Insert the row of this model, skipping it on a conflict with an existing
-        row when ``on_conflict="ignore"``.
-
-        :param values: inserted values by column name
-        :type values: dict[str, Any]
-        :param on_conflict: ``ignore`` to skip a conflicting row
-        :type on_conflict: Optional[Literal["ignore"]]
-        :return: whether the row was written, and the primary key the insert
-            returned
-        :rtype: tuple[bool, Any]
-        """
-        key = self.ormar_config.pk
-        if on_conflict and self.db_backend_name() != "mysql":  # pragma: no cover
-            names = tuple(sorted(values))
-            row = await self._execute_query(
-                expr=conflict_insert_statement(
-                    model_cls=type(self),
-                    names=names,
-                    on_conflict=on_conflict,
-                    returning=True,
-                ),
-                is_select=True,
-                params=value_params(names=names, values=values),
-            )
-            if row is None:
-                return False, None
-            return True, key.getter(keys=key.column_aliases())(row)
-        template = insert_template(model_cls=type(self), values=values)
-        try:
-            return True, await self._execute_query(
-                expr=template.statement, params=template.params
-            )
-        except IntegrityError as error:
-            # MySQL has no conflict clause telling an insert from a skipped row
-            if not on_conflict or error.orig.args[0] != 1062:  # type: ignore
-                raise
-            return False, None  # pragma: no cover
-
     async def _save(
         self: T, on_conflict: Optional[Literal["ignore"]] = None
     ) -> Optional[T]:
         """
-        Body of ``save()``. With ``on_conflict="ignore"`` a row conflicting
-        with an existing one is skipped: ``None`` is returned and
-        ``post_save`` is not sent.
+        Body of ``save()``. With ``on_conflict="ignore"`` a row conflicting with
+        an existing one is skipped: ``None`` is returned, ``post_save`` not sent.
 
         :param on_conflict: ``ignore`` to skip a conflicting row
         :type on_conflict: Optional[Literal["ignore"]]
@@ -263,9 +218,27 @@ class Model(ModelRow):
 
         self_fields = self.translate_columns_to_aliases(self_fields)
         self._verify_key_parts_set(row=self_fields)
-        written, pk = await self._insert(values=self_fields, on_conflict=on_conflict)
-        if not written:
-            return None
+        # MySQL has no conflict clause telling an insert from a skipped row, so
+        # it runs a plain insert and a duplicate key error means skipped
+        returning = bool(on_conflict) and self.db_backend_name() != "mysql"
+        template = insert_template(
+            model_cls=type(self),
+            values=self_fields,
+            on_conflict=on_conflict if returning else None,
+            returning=returning,
+        )
+        try:
+            pk = await self._execute_query(
+                expr=template.statement, is_select=returning, params=template.params
+            )
+        except IntegrityError as error:
+            if not on_conflict or error.orig.args[0] != 1062:  # type: ignore
+                raise
+            return None  # pragma: no cover
+        if returning:  # pragma: no cover
+            if pk is None:
+                return None
+            pk = key.getter(keys=key.column_aliases())(pk)
 
         pk_returned_from_insert = False
         if pk and self.pk is None and isinstance(pk, key.python_type()):
