@@ -30,6 +30,7 @@ import ormar
 from ormar.models.model_row import ModelRow, RowExtractionPlan
 from ormar.queryset import FilterQuery
 from ormar.queryset import queryset as queryset_module
+from ormar.queryset.expressions import Expression, expression_clause
 from ormar.queryset.queryset import QuerySet
 from ormar.queryset.templates import (
     StatementTemplate,
@@ -191,20 +192,30 @@ def value_types(values: Dict[str, Any]) -> Dict[str, type]:
 
 
 def literal_values(
-    table: sqlalchemy.Table, values: Mapping[str, Any]
+    table: sqlalchemy.Table, values: Mapping[str, Any], model: Any = None
 ) -> Dict[Any, Any]:
     """
     Return the written values keyed by column, in the template's column order
-    (sorted by name), to build a write with literal values.
+    (sorted by name), to build a write with literal values. Expressions keep
+    their literals as plain values, so SQLAlchemy types them on its own.
 
     :param table: written table
     :type table: sqlalchemy.Table
     :param values: written values by column name
     :type values: Mapping[str, Any]
+    :param model: written model, needed for expressions
+    :type model: Any
     :return: value per column
     :rtype: Dict[Any, Any]
     """
-    return {table.c[name]: values[name] for name in sorted(values)}
+    return {
+        table.c[name]: expression_clause(
+            node=values[name], model=model, table=table, slot=None
+        )
+        if isinstance(values[name], Expression)
+        else values[name]
+        for name in sorted(values)
+    }
 
 
 def checked_select_template(
@@ -275,7 +286,9 @@ def checked_write_template(
     if ENABLED:
         table = self.table
         expr: Any = (
-            table.update().values(literal_values(table=table, values=values))
+            table.update().values(
+                literal_values(table=table, values=values, model=self.model)
+            )
             if kind == "update"
             else table.delete()
         )

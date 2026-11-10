@@ -618,6 +618,7 @@ asyncio.run(cleanup_database())
 *  `order_by(columns:Union[list, str]) -> QuerySet`
 *  `values(fields: Union[list, str, set, dict])`
 *  `values_list(fields: Union[list, str, set, dict])`
+*  column expressions: `Model.field` or `ormar.F("field")` with `+ - *` as values of `filter()` and `update()`
 
 
 #### Relation types

@@ -29,6 +29,7 @@ from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.sqltypes import TupleType
 
 from ormar.queryset.actions.filter_action import FILTER_OPERATORS
+from ormar.queryset.expressions import Expression, expression_clause, expression_params
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.queryset.actions.filter_action import FilterAction
@@ -88,7 +89,9 @@ def template_params(
     params = {}
     for index, action in enumerate(actions):
         if action.binds_slot():
-            params[f"ormar_p{index}"] = action.bound_value()
+            params.update(
+                expression_params(value=action.bound_value(), slot=f"ormar_p{index}")
+            )
     if limit is not None:
         params[LIMIT_SLOT] = limit
     if offset:
@@ -261,10 +264,16 @@ class SlotBinder:
         )
 
 
-def value_binds(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Dict[Any, Any]:
+def value_binds(
+    table: sqlalchemy.Table,
+    names: Tuple[str, ...],
+    values: Optional[Mapping[str, Any]] = None,
+    model: Any = None,
+) -> Dict[Any, Any]:
     """
     Return named bind parameters for the written columns, ``ormar_v{i}`` in
-    the given column order, typed like their columns::
+    the given column order, typed like their columns. A column written with an
+    expression gets the expression, its literals named ``ormar_v{i}_{k}``::
 
         value_binds(table=authors, names=("name", "score"))
         # -> {authors.c.name: :ormar_v0, authors.c.score: :ormar_v1}
@@ -273,13 +282,20 @@ def value_binds(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Dict[Any, An
     :type table: sqlalchemy.Table
     :param names: written column names, sorted
     :type names: Tuple[str, ...]
+    :param values: written values by column name, needed for expressions
+    :type values: Optional[Mapping[str, Any]]
+    :param model: written model, needed for expressions
+    :type model: Any
     :return: bind parameter per column
     :rtype: Dict[Any, Any]
     """
+    values = values or {}
     return {
-        table.c[name]: sqlalchemy.bindparam(
-            key=f"ormar_v{index}", type_=table.c[name].type
+        table.c[name]: expression_clause(
+            node=values[name], model=model, table=table, slot=f"ormar_v{index}"
         )
+        if isinstance(values.get(name), Expression)
+        else sqlalchemy.bindparam(key=f"ormar_v{index}", type_=table.c[name].type)
         for index, name in enumerate(names)
     }
 
@@ -299,4 +315,10 @@ def value_params(names: Tuple[str, ...], values: Mapping[str, Any]) -> Dict[str,
     :return: values by bind parameter name
     :rtype: Dict[str, Any]
     """
-    return {f"ormar_v{index}": values[name] for index, name in enumerate(names)}
+    return {
+        key: value
+        for index, name in enumerate(names)
+        for key, value in expression_params(
+            value=values[name], slot=f"ormar_v{index}"
+        ).items()
+    }

@@ -191,6 +191,27 @@ Product.objects.filter(
     filters, it's added for you. If you include `%` in your search value it will be escaped
     and treated as literal percentage sign inside the text.
 
+### Comparing columns
+
+A filter value can be another column of the row, with a field accessor
+(`Model.field`) or `ormar.F("field")`, optionally combined with `+`, `-` and `*`.
+Expressions work with the `exact`, `gt`, `gte`, `lt` and `lte` operators, in
+`filter()`, `exclude()`, `or_()` / `and_()` and the methods taking filters (`get()`,
+`count()`, `exists()`, `values()` and others).
+
+```python
+# WHERE tracks.play_count > tracks.position * 10
+await Track.objects.filter(play_count__gt=F("position") * 10).all()
+await Track.objects.filter(Track.play_count > Track.position * 10).all()
+
+# both sides on the same related model
+await Track.objects.filter(album__sold__gt=F("album__printed")).all()
+await Track.objects.filter(Track.album.sold > Track.album.printed).all()
+```
+
+The field in the expression has to belong to the same model as the compared field:
+`filter(position__lt=F("album__rank"))` raises a `QueryDefinitionError`.
+
 ### exclude
 
 `exclude(*args, **kwargs) -> QuerySet`

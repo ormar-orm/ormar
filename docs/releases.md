@@ -1,5 +1,19 @@
 # Release notes
 
+## 0.29.0
+
+### 🆕 Features
+
+* **Column expressions in filters and `update()`** ([#782](https://github.com/ormar-orm/ormar/issues/782), [#PRNUM](https://github.com/ormar-orm/ormar/pull/PRNUM))
+
+    Field accessors and the new `ormar.F("field")` combine with `+`, `-` and `*` into expressions the database evaluates: compare two columns in a filter or update a column from its own value in one statement, so concurrent updates are not lost.
+
+    ```python
+    await Slot.objects.filter(taken__lt=F("capacity")).all()
+    await Slot.objects.filter(Slot.taken < Slot.capacity).all()
+    await Slot.objects.filter(id=1, taken__lt=F("capacity")).update(taken=Slot.taken + 1)
+    ```
+
 ## 0.28.0
 
 ### ✨ Breaking changes

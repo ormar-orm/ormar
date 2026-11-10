@@ -1,17 +1,22 @@
 from typing import TYPE_CHECKING, Any, Optional, cast
 
+from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions import OrderAction
 from ormar.queryset.actions.filter_action import METHODS_TO_OPERATORS
 from ormar.queryset.clause import FilterGroup, NullsOrdering
+from ormar.queryset.expressions import Expression, F
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import BaseField, Model
 
 
-class FieldAccessor:
+class FieldAccessor(Expression):
     """
     Helper to access ormar fields directly from Model class also for nested
     models attributes.
+
+    An accessor of a non-relation field is a column expression as well:
+    ``Slot.taken < Slot.capacity``, ``update(taken=Slot.taken + 1)``.
     """
 
     def __init__(
@@ -78,6 +83,19 @@ class FieldAccessor:
         if field is not None and not field.virtual and not field.is_multi:
             return
         raise AttributeError("Cannot filter by Model, you need to provide model name")
+
+    def _node(self) -> F:
+        """
+        :raises QueryDefinitionError: for relation and composite key accessors
+        :return: the field as an ``F`` node, which survives the deep copies of
+            prefetch querysets
+        :rtype: F
+        """
+        if self._field is None:
+            raise QueryDefinitionError(
+                "Only non-relation fields can be used in expressions"
+            )
+        return F(path=self._access_chain)
 
     def _select_operator(self, op: str, other: Any) -> FilterGroup:
         self._check_field()

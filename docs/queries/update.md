@@ -42,6 +42,31 @@ JSON field accepts a value to dump or a JSON string.
 
     To update whole database table `each=True` needs to be provided as a safety switch
 
+### Column expressions
+
+A value can be computed by the database from the row's own columns, with a field
+accessor (`Model.field`) or `ormar.F("field")` combined with `+`, `-` and `*`. The
+row is changed in one `UPDATE`, so concurrent updates are not lost:
+
+```python
+# UPDATE products SET stock = products.stock + 1 WHERE products.id = 1
+await Product.objects.filter(id=1).update(stock=Product.stock + 1)
+
+# take one item only while any is left; returns 0 when sold out
+sold = await Product.objects.filter(id=1, stock__gt=0).update(stock=F("stock") - 1)
+
+await Product.objects.update(each=True, price=F("price") * 2 + F("shipping"))
+```
+
+* The literal goes on the right side (`F("stock") + 1`), `None` and booleans are
+  rejected. A `NULL` column makes the result `NULL`.
+* An expression reads own non-relation columns of the updated model and cannot set a
+  relation.
+* It cannot read a column set by the same `update()` (MySQL would read the new value,
+  other databases the old one), including fields with `on_update`. Reading the
+  column it sets is fine.
+* The database computes the value, so pydantic validators of the field do not run.
+
 ## update_or_create
 
 `update_or_create(**kwargs) -> Model`

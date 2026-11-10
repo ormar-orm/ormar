@@ -6,7 +6,7 @@ from sqlalchemy import TextClause
 import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.query_action import QueryAction
-from ormar.relations.aliases import prefixed_table
+from ormar.queryset.expressions import Expression, expression_clause, expression_fields
 
 if TYPE_CHECKING:  # pragma: nocover
     from ormar import ForeignKeyField, Model
@@ -59,6 +59,16 @@ class FilterAction(QueryAction):
 
     def __init__(self, filter_str: str, value: Any, model_cls: type["Model"]) -> None:
         super().__init__(query_str=filter_str, model_cls=model_cls)
+        if isinstance(value, Expression):
+            value = value._node()
+            if self.operator not in ("exact", "gt", "gte", "lt", "lte"):
+                raise QueryDefinitionError(
+                    f"Expressions only take exact, gt, gte, lt and lte filters, "
+                    f"not '{self.operator}'"
+                )
+            expression_fields(
+                node=value, model=self.target_model, prefix=self.related_parts
+            )
         self.filter_value = value
         self._escape_characters_in_clause()
 
@@ -190,17 +200,18 @@ class FilterAction(QueryAction):
         if self.operator == "isnull":
             op_attr = "is_" if value else "isnot"
             filter_value = None
+        elif isinstance(value, Expression):
+            filter_value = expression_clause(
+                node=value,
+                model=self.target_model,
+                table=self.aliased_table,
+                slot=binder.slots[id(self)] if binder is not None else None,
+            )
         else:
             filter_value = value
             if binder is not None and self.binds_slot():
                 filter_value = binder.bind(action=self, value=value)
-        if self.table_prefix:
-            aliased_table = prefixed_table(
-                alias=self.table_prefix, table=self.column.table
-            )
-            aliased_column = getattr(aliased_table.c, self.column.name)
-        else:
-            aliased_column = self.column
+        aliased_column = self.aliased_table.c[self.column.name]
         clause = getattr(aliased_column, op_attr)(filter_value)
         if self.has_escaped_character:
             clause.modifiers["escape"] = "\\"
@@ -274,10 +285,7 @@ class KeyInFilterAction(FilterAction):
         names = self.columns or tuple(
             column.name for column in self.target_model.ormar_config.pk.columns()
         )
-        table: Any = self.table
-        if self.table_prefix:
-            table = prefixed_table(alias=self.table_prefix, table=table)
-        return [table.c[name] for name in names]
+        return [self.aliased_table.c[name] for name in names]
 
     def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
         """
