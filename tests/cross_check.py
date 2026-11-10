@@ -30,6 +30,7 @@ import ormar
 from ormar.models.model_row import ModelRow, RowExtractionPlan
 from ormar.queryset import FilterQuery
 from ormar.queryset import queryset as queryset_module
+from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.expressions import Expression, expression_clause
 from ormar.queryset.queryset import QuerySet
 from ormar.queryset.templates import (
@@ -210,7 +211,9 @@ def literal_values(
     """
     return {
         table.c[name]: expression_clause(
-            node=values[name], model=model, table=table, slot=None
+            node=values[name],
+            columns=expression_columns(node=values[name], model=model),
+            slot=None,
         )
         if isinstance(values[name], Expression)
         else values[name]

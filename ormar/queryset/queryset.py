@@ -28,11 +28,11 @@ from ormar.exceptions import (
 from ormar.models.row_registry import RowRegistry
 from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
 from ormar.queryset.actions.order_action import OrderAction, expand_pk_orders
+from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.expressions import (
     Expression,
     expression_clause,
-    expression_fields,
     expression_key,
     expression_params,
 )
@@ -600,8 +600,7 @@ class QuerySet(Generic[T]):
                 if isinstance(values[name], Expression):
                     binds[table.c[name]] = expression_clause(
                         node=values[name],
-                        model=self.model,
-                        table=table,
+                        columns=expression_columns(node=values[name], model=self.model),
                         slot=f"ormar_v{index}",
                     )
             expr = table.update().values(binds)
@@ -1282,7 +1281,7 @@ class QuerySet(Generic[T]):
         for clause in self.filter_clauses + self.exclude_clauses:
             actions = clause._iter() if isinstance(clause, FilterGroup) else [clause]
             for action in actions:
-                if action.related_parts:
+                if any(path.related_parts for path in action.path_actions()):
                     raise QueryDefinitionError(
                         f"{operation}() does not support filters on related models "
                         f"('{action.query_str}'). Select the pks first and "
@@ -1329,7 +1328,13 @@ class QuerySet(Generic[T]):
             if isinstance(value, Expression)
         }
         for name, node in expressions.items():
-            read = expression_fields(node=node, model=self.model, prefix=[])
+            columns = expression_columns(node=node, model=self.model)
+            if any(column.related_parts for column in columns.values()):
+                raise QueryDefinitionError(
+                    f"update() does not support expressions reading related "
+                    f"models yet ({list(columns)}), only own fields."
+                )
+            read = [column.field_name for column in columns.values()]
             if name in self.model.extract_related_names() or any(
                 field != name and field in updates for field in read
             ):

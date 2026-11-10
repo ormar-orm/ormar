@@ -204,13 +204,17 @@ Expressions work with the `exact`, `gt`, `gte`, `lt` and `lte` operators, in
 await Track.objects.filter(play_count__gt=F("position") * 10).all()
 await Track.objects.filter(Track.play_count > Track.position * 10).all()
 
-# both sides on the same related model
-await Track.objects.filter(album__sold__gt=F("album__printed")).all()
-await Track.objects.filter(Track.album.sold > Track.album.printed).all()
+# fields of related models, joined like in filter(album__rank=1)
+await Track.objects.filter(position__lt=F("album__rank")).all()
+await Track.objects.filter(Track.position < Track.album.rank).all()
+
+# both sides on different related models
+await Track.objects.filter(album__sold__gt=F("label__budget")).all()
 ```
 
-The field in the expression has to belong to the same model as the compared field:
-`filter(position__lt=F("album__rank"))` raises a `QueryDefinitionError`.
+A field of a related model is joined automatically, like in a filter on that
+relation. Through a reverse foreign key or a many-to-many relation the
+expression is compared per related row, as in `filter(tracks__position=1)`.
 
 ### exclude
 

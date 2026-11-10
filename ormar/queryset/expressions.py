@@ -12,15 +12,14 @@ names, so they never shadow a field reached through a ``FieldAccessor``.
 
 import itertools
 import operator
-from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Optional
 
-import sqlalchemy
 from sqlalchemy.sql.elements import BindParameter
 
 from ormar.exceptions import QueryDefinitionError
 
 if TYPE_CHECKING:  # pragma: no cover
-    from ormar import Model
+    from ormar.queryset.actions.query_action import QueryAction
 
 
 class Expression:
@@ -67,9 +66,8 @@ class Expression:
 
 class F(Expression):
     """
-    Field of the model a filter or an update applies to, by its path:
-    ``F("capacity")``, or ``F("owner__limit")`` when compared with another field
-    of the same related model (``filter(owner__score__gt=F("owner__limit"))``).
+    Field by its path from the queried model: ``F("capacity")``, or in filters
+    also a field of a related model (``filter(taken__lt=F("owner__limit"))``).
     """
 
     def __init__(self, path: str) -> None:
@@ -115,37 +113,6 @@ def expression_leaves(node: Any) -> Iterator[Any]:
         yield node
 
 
-def expression_fields(node: Any, model: type["Model"], prefix: list[str]) -> list[str]:
-    """
-    Return the names of the fields an expression reads, checking that each one
-    is a non-relation field of ``model`` reached through ``prefix``, the
-    relation path of the compared field (``[]`` in updates).
-
-    :param node: expression node
-    :type node: Any
-    :param model: model owning the fields
-    :type model: type[Model]
-    :param prefix: relation path every field path has to start with
-    :type prefix: list[str]
-    :raises QueryDefinitionError: if a field is missing, is a relation or is
-        on another model
-    :return: field names
-    :rtype: list[str]
-    """
-    names = []
-    for leaf in expression_leaves(node=node):
-        if isinstance(leaf, F):
-            *parts, name = leaf._path.split("__")
-            field = model.ormar_config.model_fields.get(name)
-            if parts != prefix or field is None or field.is_relation:
-                raise QueryDefinitionError(
-                    f"F('{leaf._path}') has to name a non-relation field of the "
-                    f"model it is compared with or written to."
-                )
-            names.append(name)
-    return names
-
-
 def expression_key(node: Any) -> Any:
     """
     Return the shape of an expression for template cache keys: operators,
@@ -189,23 +156,22 @@ def expression_params(value: Any, slot: str) -> dict[str, Any]:
 
 def expression_clause(
     node: Any,
-    model: type["Model"],
-    table: sqlalchemy.Table,
+    columns: Mapping[str, "QueryAction"],
     slot: Optional[str],
     index: Optional[Iterator[int]] = None,
 ) -> Any:
     """
-    Build the SQL of an expression over the columns of ``table``. With a
-    ``slot`` the literals become bind parameters named ``{slot}_{k}`` and typed
-    from the left operand and the literal (``release_values`` drops the
-    literal afterwards), without one they stay plain values.
+    Build the SQL of an expression, reading each field from the aliased column
+    of its action in ``columns``. With a ``slot`` the literals become bind
+    parameters named ``{slot}_{k}`` and typed from the left operand and the
+    literal (``release_values`` drops the literal afterwards), without one
+    they stay plain values.
 
     :param node: expression node
     :type node: Any
-    :param model: model owning the fields
-    :type model: type[Model]
-    :param table: table (or its alias) the columns are taken from
-    :type table: sqlalchemy.Table
+    :param columns: resolved field actions by field path
+        (see ``expression_columns``)
+    :type columns: Mapping[str, QueryAction]
     :param slot: slot name of a statement template, if built for one
     :type slot: Optional[str]
     :param index: counter of the literals already named
@@ -214,16 +180,12 @@ def expression_clause(
     :rtype: Any
     """
     if isinstance(node, F):
-        return table.c[model.get_column_alias(node._path.split("__")[-1])]
+        return columns[node._path].aliased_column
     index = index or itertools.count()
-    left = expression_clause(
-        node=node._left, model=model, table=table, slot=slot, index=index
-    )
+    left = expression_clause(node=node._left, columns=columns, slot=slot, index=index)
     right = node._right
     if isinstance(right, Expression):
-        right = expression_clause(
-            node=right, model=model, table=table, slot=slot, index=index
-        )
+        right = expression_clause(node=right, columns=columns, slot=slot, index=index)
     elif slot is not None:
         right = BindParameter(
             key=f"{slot}_{next(index)}",

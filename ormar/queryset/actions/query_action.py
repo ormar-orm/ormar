@@ -65,6 +65,11 @@ class QueryAction(abc.ABC):
         return prefixed_table(alias=self.table_prefix, table=self.table)
 
     @property
+    def aliased_column(self) -> Any:
+        """Column of the target field in the aliased table of its join"""
+        return self.aliased_table.c[self.column.name]
+
+    @property
     def column(self) -> sqlalchemy.Column:
         """Shortcut to sqlalchemy column of filtered target model"""
         aliased_name = self.target_model.get_column_alias(self.field_name)

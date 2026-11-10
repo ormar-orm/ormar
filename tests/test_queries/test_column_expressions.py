@@ -21,6 +21,13 @@ class Owner(ormar.Model):
     limit: int = ormar.Integer(default=0)
 
 
+class Zone(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="fx_zones")
+
+    id: int = ormar.Integer(primary_key=True)
+    budget: int = ormar.Integer(default=0)
+
+
 class Slot(ormar.Model):
     ormar_config = base_ormar_config.copy(tablename="fx_slots")
 
@@ -31,6 +38,7 @@ class Slot(ormar.Model):
     price: Optional[float] = ormar.Float(nullable=True)
     revision: int = ormar.Integer(default=0, on_update=0)
     owner: Optional[Owner] = ormar.ForeignKey(Owner, nullable=True)
+    zone: Optional[Zone] = ormar.ForeignKey(Zone, nullable=True)
 
 
 class Tag(ormar.Model):
@@ -45,6 +53,7 @@ class Event(ormar.Model):
     ormar_config = base_ormar_config.copy(tablename="fx_events")
 
     id: int = ormar.Integer(primary_key=True)
+    level: int = ormar.Integer(default=0)
     tags: list[Tag] = ormar.ManyToMany(Tag)
 
 
@@ -85,6 +94,117 @@ async def test_filter_compares_columns_of_the_same_related_model(slots):
     by_accessor = Slot.objects.filter(Slot.owner.score > Slot.owner.limit)
     assert [s.name for s in await by_kwargs.all()] == ["full"]
     assert [s.name for s in await by_accessor.all()] == ["full"]
+
+
+@pytest_asyncio.fixture()
+async def related():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            first = await Owner.objects.create(score=5, limit=3)
+            second = await Owner.objects.create(score=1, limit=9)
+            for name, taken, capacity, owner, budget in [
+                ("a", 3, 6, first, 4),
+                ("b", 2, 8, second, 2),
+            ]:
+                zone = await Zone.objects.create(budget=budget)
+                await Slot.objects.create(
+                    name=name, taken=taken, capacity=capacity, owner=owner, zone=zone
+                )
+            await Slot.objects.create(name="c", taken=1, capacity=3)
+            yield
+
+
+async def names(queryset):
+    return sorted(slot.name for slot in await queryset.all())
+
+
+@pytest.mark.asyncio
+async def test_filter_reads_columns_of_related_models(related):
+    queryset = Slot.objects.filter(taken__gte=F("owner__limit"))
+    assert queryset._select_related == ["owner"]
+    assert await names(queryset=queryset) == ["a"]
+    assert await names(queryset=Slot.objects.filter(Slot.taken >= Slot.owner.limit))
+    selected = Slot.objects.select_related("owner").filter(taken__gte=F("owner__limit"))
+    assert selected._select_related == ["owner"]
+    assert (await selected.get()).owner.score == 5
+    shared = Slot.objects.filter(capacity__lt=F("owner__score") + F("owner__limit"))
+    assert shared._select_related == ["owner"]
+    assert await names(queryset=shared) == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_filter_compares_fields_of_different_related_models(related):
+    for queryset in [
+        Slot.objects.filter(owner__score__gt=F("zone__budget")),
+        Slot.objects.filter(Slot.owner.score > Slot.zone.budget),
+    ]:
+        assert sorted(queryset._select_related) == ["owner", "zone"]
+        assert await names(queryset=queryset) == ["a"]
+    two_models = Slot.objects.filter(
+        taken__lt=F("owner__limit") * 2 - F("zone__budget")
+    )
+    assert await names(queryset=two_models) == ["b"]
+    assert await names(
+        queryset=Slot.objects.filter(capacity__lt=F("owner__score") + Slot.zone.budget)
+    ) == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_related_expressions_in_exclude_groups_and_shortcuts(related):
+    by_limit = {"taken__gte": F("owner__limit")}
+    assert await names(queryset=Slot.objects.exclude(**by_limit)) == await names(
+        queryset=Slot.objects.exclude(owner__limit__lte=3)
+    )
+    either = ormar.or_(taken__gte=F("owner__limit"), capacity__gt=F("zone__budget") * 3)
+    assert await names(queryset=Slot.objects.filter(either)) == ["a", "b"]
+    assert (await Slot.objects.get(Slot.taken >= Slot.owner.limit)).name == "a"
+    assert await Slot.objects.filter(**by_limit).count() == 1
+    assert await Slot.objects.filter(**by_limit).exists()
+    assert await Slot.objects.filter(**by_limit).values_list("name", flatten=True) == [
+        "a"
+    ]
+    assert await Slot.objects.filter(**by_limit).values(["name", "owner__score"]) == [
+        {"name": "a", "owner__score": 5}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_expressions_read_reverse_and_many_to_many_relations(related):
+    owners = await Owner.objects.filter(limit__gt=F("slots__taken")).all()
+    assert [owner.score for owner in owners] == [1]
+    event = await Event.objects.create(level=3)
+    await Event.objects.create(level=0)
+    for score in (1, 5):
+        await event.tags.add(await Tag.objects.create(score=score))
+    loaded = (
+        await Event.objects.prefetch_related("tags")
+        .filter(Event.level > Event.tags.score)
+        .all()
+    )
+    assert [(item.level, [tag.score for tag in item.tags]) for item in loaded] == [
+        (3, [1])
+    ]
+    by_value = Event.objects.prefetch_related("tags").filter(tags__score__lt=3)
+    assert [len(item.tags) for item in await by_value.all()] == [1]
+
+
+@pytest.mark.asyncio
+async def test_related_expressions_get_their_own_statement(related):
+    template_cache_for(model_cls=Slot).clear()
+
+    def template(value):
+        return Slot.objects.filter(taken__lt=value).build_select_template()
+
+    score, limit = (
+        template(value=F("owner__score") + 1),
+        template(value=F("owner__limit") + 1),
+    )
+    assert score.statement is not limit.statement
+    assert template(value=F("owner__score") + 2).statement is score.statement
+    assert template(value=F("zone__budget") + 1).statement is not score.statement
+    assert await Slot.objects.filter(taken__lt=F("owner__score") + 1).count() == 1
+    assert await Slot.objects.filter(taken__lt=F("owner__limit") + 1).count() == 2
+    assert await Slot.objects.filter(taken__lt=F("zone__budget") + 1).count() == 2
 
 
 @pytest.mark.asyncio
@@ -160,31 +280,35 @@ async def test_update_rejects_reading_columns_assigned_in_the_same_update(slots)
 
 
 @pytest.mark.asyncio
-async def test_expressions_reference_own_fields_of_the_compared_model(slots):
+async def test_expressions_reference_non_relation_fields(slots):
     invalid_filters = [
-        {"taken__lt": F("owner__score")},
-        {"taken__lt": F("owner__id")},
-        {"owner__score__lt": F("id")},
-        {"owner__score__lt": F("capacity")},
         {"taken__lt": F("owner")},
         {"taken__lt": F("missing")},
-        {"taken__lt": Slot.owner.score},
+        {"taken__lt": F("owner__missing")},
+        {"taken__lt": F("nowhere__score")},
+        {"taken__lt": F("name__score")},
+        {"taken__lt": F("owner__slots")},
         {"name__contains": F("name")},
         {"taken__in": F("capacity")},
     ]
     for kwargs in invalid_filters:
         with pytest.raises(QueryDefinitionError):
             await Slot.objects.filter(**kwargs).all()
-    for kwargs in [
-        {"owner": F("taken")},
-        {"taken": F("owner__score")},
-        {"taken": F("owner__id")},
-        {"taken": F("owner")},
-    ]:
+    for kwargs in [{"owner": F("taken")}, {"taken": F("owner")}]:
         with pytest.raises(QueryDefinitionError):
             await Slot.objects.filter(id=1).update(**kwargs)
-    with pytest.raises(QueryDefinitionError):
-        await Slot.objects.filter(owner__score__lt=F("owner__limit")).update(taken=1)
+    for kwargs in [{"taken": F("owner__score")}, {"taken": Slot.owner.id + 1}]:
+        with pytest.raises(QueryDefinitionError, match="not support .* yet"):
+            await Slot.objects.filter(id=1).update(**kwargs)
+    for related_filter in [
+        Slot.objects.filter(owner__score__lt=F("owner__limit")),
+        Slot.objects.filter(taken__lt=F("owner__score")),
+        Slot.objects.exclude(ormar.or_(taken__lt=F("zone__budget"), id=1)),
+    ]:
+        with pytest.raises(QueryDefinitionError, match="related models"):
+            await related_filter.update(taken=1)
+        with pytest.raises(QueryDefinitionError, match="related models"):
+            await related_filter.delete()
 
 
 def test_expression_operands():
@@ -216,3 +340,9 @@ async def test_many_to_many_prefetch_filters_with_expressions():
                 ormar.Prefetch("tags", queryset=Tag.objects.filter(score__lt=Tag.cap))
             ).get()
             assert [tag.score for tag in loaded.tags] == [1]
+            with pytest.raises(QueryDefinitionError, match="many to many"):
+                await Event.objects.prefetch_related(
+                    ormar.Prefetch(
+                        "tags", queryset=Tag.objects.filter(score__lt=F("events__id"))
+                    )
+                ).get()

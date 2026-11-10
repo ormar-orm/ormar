@@ -6,7 +6,8 @@ from sqlalchemy import TextClause
 import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.query_action import QueryAction
-from ormar.queryset.expressions import Expression, expression_clause, expression_fields
+from ormar.queryset.actions.select_action import SelectAction, expression_columns
+from ormar.queryset.expressions import Expression, expression_clause
 
 if TYPE_CHECKING:  # pragma: nocover
     from ormar import ForeignKeyField, Model
@@ -59,6 +60,7 @@ class FilterAction(QueryAction):
 
     def __init__(self, filter_str: str, value: Any, model_cls: type["Model"]) -> None:
         super().__init__(query_str=filter_str, model_cls=model_cls)
+        self.expression_columns: dict[str, SelectAction] = {}
         if isinstance(value, Expression):
             value = value._node()
             if self.operator not in ("exact", "gt", "gte", "lt", "lte"):
@@ -66,11 +68,32 @@ class FilterAction(QueryAction):
                     f"Expressions only take exact, gt, gte, lt and lte filters, "
                     f"not '{self.operator}'"
                 )
-            expression_fields(
-                node=value, model=self.target_model, prefix=self.related_parts
-            )
+            self.expression_columns = expression_columns(node=value, model=model_cls)
         self.filter_value = value
         self._escape_characters_in_clause()
+
+    def path_actions(self) -> list[QueryAction]:
+        """
+        :return: the action and the fields its expression reads, each resolving
+            one relation path to a joined table
+        :rtype: list[QueryAction]
+        """
+        return [self, *self.expression_columns.values()]
+
+    def update_select_related(self, select_related: list[str]) -> list[str]:
+        """
+        Add the joins of the filtered field and of the fields its expression
+        reads (see ``QueryAction.update_select_related``).
+
+        :param select_related: list of relation join strings
+        :type select_related: list[str]
+        :return: list of relation joins with implied joins from filter added
+        :rtype: list[str]
+        """
+        select_related = super().update_select_related(select_related=select_related)
+        for column in self.expression_columns.values():
+            select_related = column.update_select_related(select_related=select_related)
+        return select_related
 
     def has_escaped_characters(self) -> bool:
         """Check if value is a string that contains characters to escape"""
@@ -203,16 +226,14 @@ class FilterAction(QueryAction):
         elif isinstance(value, Expression):
             filter_value = expression_clause(
                 node=value,
-                model=self.target_model,
-                table=self.aliased_table,
+                columns=self.expression_columns,
                 slot=binder.slots[id(self)] if binder is not None else None,
             )
         else:
             filter_value = value
             if binder is not None and self.binds_slot():
                 filter_value = binder.bind(action=self, value=value)
-        aliased_column = self.aliased_table.c[self.column.name]
-        clause = getattr(aliased_column, op_attr)(filter_value)
+        clause = getattr(self.aliased_column, op_attr)(filter_value)
         if self.has_escaped_character:
             clause.modifiers["escape"] = "\\"
         return clause

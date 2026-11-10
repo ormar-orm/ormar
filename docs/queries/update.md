@@ -61,7 +61,8 @@ await Product.objects.update(each=True, price=F("price") * 2 + F("shipping"))
 * The literal goes on the right side (`F("stock") + 1`), `None` and booleans are
   rejected. A `NULL` column makes the result `NULL`.
 * An expression reads own non-relation columns of the updated model and cannot set a
-  relation.
+  relation. Reading fields of related models is not supported yet
+  ([#1967](https://github.com/ormar-orm/ormar/issues/1967)).
 * It cannot read a column set by the same `update()` (MySQL would read the new value,
   other databases the old one), including fields with `on_update`. Reading the
   column it sets is fine.

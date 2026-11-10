@@ -15,10 +15,11 @@
 
 * **Column expressions in filters and `update()`** ([#782](https://github.com/ormar-orm/ormar/issues/782), [#1962](https://github.com/ormar-orm/ormar/pull/1962))
 
-    Field accessors and the new `ormar.F("field")` combine with `+`, `-` and `*` into expressions the database evaluates: compare two columns in a filter or update a column from its own value in one statement, so concurrent updates are not lost.
+    Field accessors and the new `ormar.F("field")` combine with `+`, `-` and `*` into expressions the database evaluates: compare two columns in a filter, also of related models (joined automatically), or update a column from its own value in one statement, so concurrent updates are not lost.
 
     ```python
     await Slot.objects.filter(taken__lt=F("capacity")).all()
+    await Slot.objects.filter(taken__lt=F("owner__limit")).all()
     await Slot.objects.filter(Slot.taken < Slot.capacity).all()
     await Slot.objects.filter(id=1, taken__lt=F("capacity")).update(taken=Slot.taken + 1)
     ```
