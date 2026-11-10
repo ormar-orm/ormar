@@ -5,6 +5,7 @@
 ### 🐛 Fixes
 
 * `get_or_create()` (also on relations) inside `database.transaction()` now runs the insert in a savepoint. On PostgreSQL a lost race used to abort the whole transaction and raise `InFailedSQLTransactionError`; now it returns the concurrent caller's row, and an unrelated constraint error is raised as `IntegrityError` with the transaction still usable. [#1960](https://github.com/ormar-orm/ormar/pull/1960)
+* `prefixed_table()` (`ormar.relations.aliases`) takes keyword arguments only. A positional call, e.g. when building a custom `where()` on a `select_related()` query, returned a second aliased table under the same name, so PostgreSQL failed with `table name "..." specified more than once`; it raises a `TypeError` now. The other cached helpers `build_prefixed_columns()`, `build_shared_row_plan()` and `key_dict_type()` are keyword-only too. [#1961](https://github.com/ormar-orm/ormar/pull/1961)
 
 ## 0.28.0
 

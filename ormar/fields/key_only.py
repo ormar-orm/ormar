@@ -86,7 +86,7 @@ def placeholder_key(target: type["Model"]) -> dict[str, Any]:
 
 
 @lru_cache(maxsize=1024)
-def key_dict_type(target: type["Model"], fields: tuple[str, ...]) -> Any:
+def key_dict_type(*, target: type["Model"], fields: tuple[str, ...]) -> Any:
     """
     Build the ``TypedDict`` of a key of several fields of the target, used as
     the type of flattened relations (``{"tenant_id": 1, "number": 7}``) so
