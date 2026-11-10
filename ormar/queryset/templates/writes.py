@@ -50,7 +50,11 @@ def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:
     return table.insert().values(value_binds(table=table, names=names))
 
 
+# MariaDB reports its own dialect name but takes the MySQL statements
+MYSQL_DIALECTS = frozenset({"mysql", "mariadb"})
+
 DIALECT_INSERTS: dict[str, Callable[..., Any]] = {
+    "mariadb": mysql.insert,
     "mysql": mysql.insert,
     "postgresql": postgresql.insert,
     "sqlite": sqlite.insert,
@@ -102,13 +106,15 @@ def build_conflict_insert(
     statement = DIALECT_INSERTS[dialect_name](table).values(
         value_binds(table=table, names=names)
     )
-    excluded = statement.inserted if dialect_name == "mysql" else statement.excluded
+    excluded = (
+        statement.inserted if dialect_name in MYSQL_DIALECTS else statement.excluded
+    )
     conflict_updates = {name: excluded[name] for name in update_names}
     for name in on_update:
         conflict_updates[name] = sqlalchemy.bindparam(
             key=f"ormar_on_update_{name}", type_=table.c[name].type
         )
-    if dialect_name == "mysql":
+    if dialect_name in MYSQL_DIALECTS:
         return statement.on_duplicate_key_update(
             conflict_updates
             if on_conflict == "update"

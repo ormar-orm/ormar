@@ -10,6 +10,7 @@ from ormar.exceptions import ModelPersistenceError, NoMatch
 from ormar.models import NewBaseModel  # noqa I100
 from ormar.models.model_row import ModelRow
 from ormar.queryset.templates import (
+    MYSQL_DIALECTS,
     delete_template,
     insert_template,
     pk_select_template,
@@ -223,7 +224,7 @@ class Model(ModelRow):
         self._verify_key_parts_set(row=self_fields)
         # MySQL has no conflict clause telling an insert from a skipped row, so
         # it runs a plain insert and a duplicate key error means skipped
-        returning = bool(on_conflict) and self.db_backend_name() != "mysql"
+        returning = bool(on_conflict) and self.db_backend_name() not in MYSQL_DIALECTS
         template = insert_template(
             model_cls=type(self),
             values=self_fields,

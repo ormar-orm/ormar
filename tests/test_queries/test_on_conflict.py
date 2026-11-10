@@ -262,6 +262,12 @@ def test_conflict_statements_per_dialect():
     )
     assert "ON DUPLICATE KEY UPDATE score = VALUES(score)" in my_update
     assert "is_dirty = %s" in my_update
+    maria_ignore = str(
+        build_conflict_insert(
+            dialect_name="mariadb", returning=False, **common, **ignore
+        ).compile(dialect=mysql.dialect(is_mariadb=True))
+    )
+    assert "ON DUPLICATE KEY UPDATE id = oc_tags.id" in maria_ignore
 
 
 @pytest.mark.asyncio
