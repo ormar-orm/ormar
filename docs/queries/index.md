@@ -50,6 +50,7 @@ To read more about any specific section or function please refer to the details 
 * `get_or_create(_defaults: Optional[dict[str, Any]] = None, **kwargs) -> tuple[Model, bool]`
 * `first() -> Model`
 * `all(**kwargs) -> list[Optional[Model]]`
+* `select_for_update(nowait = False, skip_locked = False, read = False, no_key = False) -> QuerySet`
 
 
 * `Model`

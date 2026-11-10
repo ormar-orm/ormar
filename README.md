@@ -607,6 +607,7 @@ asyncio.run(cleanup_database())
 *  `prefetch_related(related: Union[list, str]) -> QuerySet`
 *  `limit(limit_count: int) -> QuerySet`
 *  `offset(offset: int) -> QuerySet`
+*  `select_for_update(nowait: bool = False, skip_locked: bool = False, read: bool = False, no_key: bool = False) -> QuerySet`
 *  `count(distinct: bool = True) -> int`
 *  `exists() -> bool`
 *  `max(columns: list[str]) -> Any`

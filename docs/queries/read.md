@@ -282,6 +282,23 @@ async for album in Album.objects.iterate():
 
     If `iterate()` & `prefetch_related()` are used together the `QueryDefinitionError` exception is raised.
 
+## select_for_update
+
+`select_for_update(nowait: bool = False, skip_locked: bool = False, read: bool = False, no_key: bool = False) -> QuerySet`
+
+Locks the rows of the main model read by the query until the end of the transaction
+(`SELECT ... FOR UPDATE`). It has to be used inside a transaction.
+
+```python
+async with database.transaction():
+    album = await Album.objects.select_for_update().get(name="The Cat")
+    album.name = "The Lion"
+    await album.update()
+```
+
+!!!tip
+    Options and caveats are described in [transactions](../transactions.md#row-locks-with-select_for_update).
+
 ## Model methods
 
 Each model instance have a set of methods to `save`, `update` or `load` itself.

@@ -1,5 +1,18 @@
 # Release notes
 
+## 0.29.0
+
+### 🆕 Features
+
+* **`select_for_update()` row locks** ([#781](https://github.com/ormar-orm/ormar/issues/781))
+
+    Locks the rows of the queried model until the end of the transaction, with `nowait`, `skip_locked`, `read` (`FOR SHARE`) and `no_key` (PostgreSQL `FOR NO KEY UPDATE` / `FOR KEY SHARE`) options. It raises `QueryDefinitionError` outside a transaction and with count, exists and aggregates; on SQLite it's a no-op. See [transactions](transactions.md#row-locks-with-select_for_update).
+
+    ```python
+    async with database.transaction():
+        jobs = await Job.objects.select_for_update(skip_locked=True).order_by("id").limit(10).all()
+    ```
+
 ## 0.28.1
 
 ### 🐛 Fixes
