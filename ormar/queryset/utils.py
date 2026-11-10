@@ -1,15 +1,38 @@
+import asyncio
 import collections.abc
 import copy
+from contextlib import nullcontext
+from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Iterable,
+    Optional,
+    TypeVar,
+    Union,
+)
+from weakref import WeakKeyDictionary
 
 import ormar_rust_utils
+import sqlalchemy.exc
+from sqlalchemy.ext.asyncio import AsyncConnection
 
-from ormar.exceptions import QueryDefinitionError
+from ormar.exceptions import NoMatch, QueryDefinitionError
 from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import BaseField, Model
+    from ormar.databases.connection import DatabaseConnection
+
+T = TypeVar("T")
+
+savepoint_locks: "WeakKeyDictionary[AsyncConnection, asyncio.Lock]" = (
+    WeakKeyDictionary()
+)
+holds_savepoint_lock = ContextVar("holds_savepoint_lock", default=False)
 
 
 PathParts = tuple[str, ...]
@@ -518,3 +541,49 @@ def resolve_implicit_through_relation(
     if len(previous_models) > 1 and previous_models[-2] == through_field.to:
         return None
     return related_field.related_name
+
+
+async def get_or_create_with_retry(
+    database: "DatabaseConnection",
+    get: Callable[[], Awaitable[T]],
+    create: Callable[[], Awaitable[T]],
+) -> tuple[T, bool]:
+    """
+    Shared body of ``get_or_create`` for querysets and relation proxies.
+
+    On ``IntegrityError`` from ``create`` the ``get`` is retried once and the
+    error re-raised if it still finds nothing. Inside a transaction ``create``
+    runs in a savepoint, serialised per transaction connection because
+    releasing a savepoint releases the ones opened after it; nested calls in
+    the same task (e.g. from a ``pre_save`` signal) reuse the held lock.
+
+    :param database: database the model belongs to
+    :type database: DatabaseConnection
+    :param get: coroutine factory looking up the row
+    :type get: Callable[[], Awaitable[T]]
+    :param create: coroutine factory creating the row
+    :type create: Callable[[], Awaitable[T]]
+    :return: model instance and whether it was created
+    :rtype: tuple[T, bool]
+    """
+    try:
+        return await get(), False
+    except NoMatch:
+        pass
+    connection = database.get_transaction_connection()
+    try:
+        if connection is None:
+            return await create(), True
+        lock = savepoint_locks.setdefault(connection, asyncio.Lock())
+        async with nullcontext() if holds_savepoint_lock.get() else lock:
+            token = holds_savepoint_lock.set(True)
+            try:
+                async with database.transaction():
+                    return await create(), True
+            finally:
+                holds_savepoint_lock.reset(token)
+    except sqlalchemy.exc.IntegrityError as integrity_error:
+        try:
+            return await get(), False
+        except NoMatch:
+            raise integrity_error from None
