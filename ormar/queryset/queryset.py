@@ -1315,10 +1315,16 @@ class QuerySet(Generic[T]):
         self_fields = self.model.extract_db_own_fields().union(
             self.model.extract_related_names()
         )
-        updates = {k: v for k, v in kwargs.items() if k in self_fields}
+        updates = {
+            field_name: value
+            for field_name, value in kwargs.items()
+            if field_name in self_fields
+        }
         updates = self.model.populate_onupdate_value(updates)
         expressions = {
-            k: v._node() for k, v in updates.items() if isinstance(v, Expression)
+            field_name: value._node()
+            for field_name, value in updates.items()
+            if isinstance(value, Expression)
         }
         for name, node in expressions.items():
             read = expression_fields(node=node, model=self.model, prefix=[])
@@ -1331,7 +1337,11 @@ class QuerySet(Generic[T]):
                     f"set by the same update."
                 )
         updates = self.model.validate_update_values(
-            {k: v for k, v in updates.items() if k not in expressions}
+            {
+                field_name: value
+                for field_name, value in updates.items()
+                if field_name not in expressions
+            }
         )
         updates = self.model.reconvert_str_to_bytes(updates)
         updates = self.model.translate_columns_to_aliases({**updates, **expressions})
