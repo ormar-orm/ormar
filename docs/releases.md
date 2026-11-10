@@ -19,7 +19,7 @@
 
 ### 🐛 Fixes
 
-* `order_by()` with `nulls_ordering` on MariaDB emulates `NULLS FIRST` / `NULLS LAST` like on MySQL; it used to emit the `NULLS` clause, which MariaDB rejects.
+* `order_by()` with `nulls_ordering` on a `mariadb://` database URL emulates `NULLS FIRST` / `NULLS LAST` like on MySQL; it used to emit the `NULLS` clause, which MariaDB rejects.
 
 ## 0.28.1
 

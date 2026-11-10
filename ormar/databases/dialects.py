@@ -279,22 +279,9 @@ class MysqlRules(DialectRules):
         MySQL reacts to a conflict on any unique key, so the target is not
         emitted and ``ignore`` becomes a no-op update of a key column (a
         duplicate key error would abort the whole ``executemany``). There is no
-        RETURNING, so ``returning`` is not used.
+        RETURNING, so ``returning`` is not used. The other parameters are
+        described in ``DialectRules.conflict_insert``.
 
-        :param table: written table
-        :type table: sqlalchemy.Table
-        :param values: bind parameter per inserted column
-        :type values: Dict[Any, Any]
-        :param on_conflict: ``ignore`` or ``update``
-        :type on_conflict: str
-        :param target: conflicting column names (the primary key for ``ignore``)
-        :type target: Tuple[str, ...]
-        :param update_names: columns updated from the inserted row
-        :type update_names: Tuple[str, ...]
-        :param on_update: columns updated with their ``on_update`` value
-        :type on_update: Tuple[str, ...]
-        :param returning: not used
-        :type returning: bool
         :return: insert statement
         :rtype: Executable
         """

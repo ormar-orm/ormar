@@ -53,11 +53,16 @@ def build_conflict_insert(
     table: sqlalchemy.Table,
     names: Tuple[str, ...],
     rules: "DialectRules",
-    **conflict: Any,
+    on_conflict: str,
+    target: Tuple[str, ...],
+    update_names: Tuple[str, ...],
+    on_update: Tuple[str, ...],
+    returning: bool,
 ) -> Executable:
     """
     Build the insert of the database's dialect that skips or updates a row
-    conflicting with an existing one, with named value binds::
+    conflicting with an existing one. The value binds are built here, on a
+    cache miss only, so the rules get them ready made::
 
         INSERT INTO tags (name, score) VALUES (:ormar_v0, :ormar_v1)
         ON CONFLICT (name) DO UPDATE SET score = excluded.score
@@ -69,13 +74,27 @@ def build_conflict_insert(
     :type names: Tuple[str, ...]
     :param rules: rules of the database dialect
     :type rules: DialectRules
-    :param conflict: conflict handling, see ``DialectRules.conflict_insert``
-    :type conflict: Any
+    :param on_conflict: ``ignore`` or ``update``
+    :type on_conflict: str
+    :param target: conflicting column names (the primary key for ``ignore``)
+    :type target: Tuple[str, ...]
+    :param update_names: columns updated from the inserted row
+    :type update_names: Tuple[str, ...]
+    :param on_update: columns updated with their ``on_update`` value
+    :type on_update: Tuple[str, ...]
+    :param returning: return the primary key of a written row
+    :type returning: bool
     :return: insert statement
     :rtype: Executable
     """
     return rules.conflict_insert(
-        table=table, values=value_binds(table=table, names=names), **conflict
+        table=table,
+        values=value_binds(table=table, names=names),
+        on_conflict=on_conflict,
+        target=target,
+        update_names=update_names,
+        on_update=on_update,
+        returning=returning,
     )
 
 
