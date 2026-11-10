@@ -1,5 +1,11 @@
 # Release notes
 
+## 0.28.1
+
+### 🐛 Fixes
+
+* `prefixed_table()` (`ormar.relations.aliases`) takes keyword arguments only. A positional call, e.g. when building a custom `where()` on a `select_related()` query, returned a second aliased table under the same name, so PostgreSQL failed with `table name "..." specified more than once`; it raises a `TypeError` now. The other cached helpers `build_prefixed_columns()`, `build_shared_row_plan()` and `key_dict_type()` are keyword-only too.
+
 ## 0.28.0
 
 ### ✨ Breaking changes
