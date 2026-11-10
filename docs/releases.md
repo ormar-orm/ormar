@@ -4,7 +4,7 @@
 
 ### 🆕 Features
 
-* **Column expressions in filters and `update()`** ([#782](https://github.com/ormar-orm/ormar/issues/782), [#PRNUM](https://github.com/ormar-orm/ormar/pull/PRNUM))
+* **Column expressions in filters and `update()`** ([#782](https://github.com/ormar-orm/ormar/issues/782), [#1962](https://github.com/ormar-orm/ormar/pull/1962))
 
     Field accessors and the new `ormar.F("field")` combine with `+`, `-` and `*` into expressions the database evaluates: compare two columns in a filter or update a column from its own value in one statement, so concurrent updates are not lost.
 
