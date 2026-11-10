@@ -3,6 +3,7 @@ from typing import Any, ForwardRef, Optional
 import pytest
 
 import ormar
+from ormar.exceptions import QueryDefinitionError
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -355,3 +356,33 @@ async def test_excluding_fields_on_through_model() -> Any:
         for category in post3.categories:
             assert category.postcategory.param_name is None
             assert category.postcategory.sort_order is None
+
+
+@pytest.mark.asyncio
+async def test_implicit_through_paths_in_chains_proxies_and_prefetch() -> Any:
+    async with base_ormar_config.database:
+        first_blog = await Blog(title="first").save()
+        second_blog = await Blog(title="second").save()
+        post = await Post(title="Test post", blog=first_blog).save()
+        other_post = await Post(title="Other post", blog=second_blog).save()
+        for name, sort_order in [("a", 3), ("b", 1), ("c", 2)]:
+            await post.categories.create(
+                name=name, postcategory={"sort_order": sort_order}
+            )
+        await other_post.categories.create(name="d", postcategory={"sort_order": 5})
+
+        blogs = await Blog.objects.filter(posts__postcategory__sort_order__gt=4).all()
+        assert [blog.title for blog in blogs] == ["second"]
+
+        ascending = await post.categories.order_by("postcategory__sort_order").all()
+        assert [category.name for category in ascending] == ["b", "c", "a"]
+        descending = await post.categories.order_by("-postcategory__sort_order").all()
+        assert [category.name for category in descending] == ["a", "c", "b"]
+
+        with pytest.raises(QueryDefinitionError, match="many to many"):
+            await Post.objects.prefetch_related(
+                ormar.Prefetch(
+                    "categories",
+                    queryset=Category.objects.order_by("postcategory__sort_order"),
+                )
+            ).all()
