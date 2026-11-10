@@ -52,6 +52,7 @@ from ormar.queryset.templates import (
 )
 from ormar.queryset.utils import (
     extract_access_chains,
+    get_or_create_with_retry,
     get_relationship_alias_model_and_str,
     normalize_slice,
 )
@@ -1587,7 +1588,8 @@ class QuerySet(Generic[T]):
         ``sqlalchemy.exc.IntegrityError`` and ``get`` is retried once.
         If the retry still finds no row, the original ``IntegrityError`` is
         re-raised because the violation isn't a race but a legitimate
-        constraint conflict (e.g. a different unique key).
+        constraint conflict (e.g. a different unique key). Inside a transaction
+        the ``create`` runs in a savepoint, so the transaction stays usable.
 
         Passing a criteria is actually calling filter(*args, **kwargs) method described
         below.
@@ -1599,19 +1601,12 @@ class QuerySet(Generic[T]):
         :return: model instance and a boolean
         :rtype: tuple("T", bool)
         """
-        try:
-            return await self.get(*args, **kwargs), False
-        except NoMatch:
-            pass
-
         _defaults = _defaults or {}
-        try:
-            return await self.create(**{**kwargs, **_defaults}), True
-        except sqlalchemy.exc.IntegrityError as integrity_error:
-            try:
-                return await self.get(*args, **kwargs), False
-            except NoMatch:
-                raise integrity_error from None
+        return await get_or_create_with_retry(
+            database=self.model_config.database,
+            get=lambda: self.get(*args, **kwargs),
+            create=lambda: self.create(**{**kwargs, **_defaults}),
+        )
 
     async def update_or_create(self, **kwargs: Any) -> "T":
         """

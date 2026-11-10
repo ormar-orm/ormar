@@ -1,5 +1,11 @@
 # Release notes
 
+## 0.28.1
+
+### 🐛 Fixes
+
+* `get_or_create()` (also on relations) inside `database.transaction()` now runs the insert in a savepoint. On PostgreSQL a lost race used to abort the whole transaction and raise `InFailedSQLTransactionError`; now it returns the concurrent caller's row, and an unrelated constraint error is raised as `IntegrityError` with the transaction still usable. [#1960](https://github.com/ormar-orm/ormar/pull/1960)
+
 ## 0.28.0
 
 ### ✨ Breaking changes
