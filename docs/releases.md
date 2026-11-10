@@ -1,5 +1,11 @@
 # Release notes
 
+## 0.28.1
+
+### 🐛 Fixes
+
+* `get_or_create()` (also on relations) inside `database.transaction()` returns the row a concurrent caller inserted first on PostgreSQL. The failed insert used to abort the whole transaction, so the retried lookup raised `InFailedSQLTransactionError`; the insert now runs in a savepoint, and an unrelated constraint error is raised as `IntegrityError` with the transaction still usable. [#XXXX](https://github.com/ormar-orm/ormar/pull/XXXX)
+
 ## 0.28.0
 
 ### ✨ Breaking changes
