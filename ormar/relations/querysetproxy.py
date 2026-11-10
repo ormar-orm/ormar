@@ -4,12 +4,14 @@ from typing import (  # noqa: I100, I201
     Any,
     AsyncGenerator,
     Generic,
+    Literal,
     MutableSequence,
     Optional,
     Sequence,
     TypeVar,
     Union,
     cast,
+    overload,
 )
 
 import ormar  # noqa: I100, I202
@@ -551,7 +553,17 @@ class QuerysetProxy(Generic[T]):
         async for item in self.queryset.iterate(*args, **kwargs):
             yield item
 
-    async def create(self, **kwargs: Any) -> "T":
+    @overload
+    async def create(
+        self, *, on_conflict: Literal["ignore"], **kwargs: Any
+    ) -> Optional["T"]: ...
+
+    @overload
+    async def create(self, *, on_conflict: None = None, **kwargs: Any) -> "T": ...
+
+    async def create(
+        self, *, on_conflict: Optional[Literal["ignore"]] = None, **kwargs: Any
+    ) -> Optional["T"]:
         """
         Creates the model instance, saves it in a database and returns the updates model
         (with pk populated if not passed and autoincrement is set).
@@ -562,16 +574,26 @@ class QuerysetProxy(Generic[T]):
 
         Actual call delegated to QuerySet.
 
+        :raises QueryDefinitionError: for ``on_conflict`` on a many to many relation
+        :param on_conflict: ``ignore`` to skip a conflicting row, not for many to
+            many relations
+        :type on_conflict: Optional[Literal["ignore"]]
         :param kwargs: fields names and proper value types
         :type kwargs: Any
-        :return: created model
-        :rtype: Model
+        :return: created model, ``None`` when the row was skipped
+        :rtype: Optional[Model]
         """
         self.to.verify_writable()
+        if on_conflict and self.type_ == ormar.RelationType.MULTIPLE:
+            raise QueryDefinitionError(
+                "on_conflict is not supported for many to many relations"
+            )
         through_kwargs = kwargs.pop(self.through_model_name, {})
         if self.type_ == ormar.RelationType.REVERSE:
             kwargs[self.related_field_name] = self._owner
-        created = await self.queryset.create(**kwargs)
+        created = await self.queryset.create(on_conflict=on_conflict, **kwargs)
+        if created is None:
+            return None
         self._register_related(created)
         if self.type_ == ormar.RelationType.MULTIPLE:
             await self.create_through_instance(created, **through_kwargs)
