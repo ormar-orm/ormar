@@ -529,7 +529,7 @@ def validate_prefetch_queryset(
     Check that a ``Prefetch`` queryset can be applied to its relation.
 
     :raises QueryDefinitionError: if the queryset is of another model or uses
-        limit, offset or prefetch_related
+        limit, offset, prefetch_related or select_for_update
     :param relation_field: prefetched relation
     :type relation_field: ForeignKeyField
     :param queryset: queryset passed with ``Prefetch``
@@ -544,10 +544,12 @@ def validate_prefetch_queryset(
         queryset.limit_count is not None
         or queryset.query_offset is not None
         or queryset._prefetch_related
+        or queryset.row_lock
     ):
         raise QueryDefinitionError(
-            "A Prefetch queryset cannot use limit, offset, paginate or "
-            "prefetch_related; prefetch nested relations with their own paths."
+            "A Prefetch queryset cannot use limit, offset, paginate, "
+            "prefetch_related or select_for_update; prefetch nested relations "
+            "with their own paths."
         )
 
 
