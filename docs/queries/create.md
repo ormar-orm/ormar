@@ -103,6 +103,11 @@ assert album == album2
     Note that if you want to create a new object you either have to pass pk column
     value or pk column has to be set as autoincrement
 
+If a concurrent caller inserts the matching row first, the failed insert is caught and the row is fetched again. Inside `database.transaction()` the insert runs in a savepoint, so a failed insert doesn't abort the transaction.
+
+!!!warning
+    On MySQL with the default `REPEATABLE READ` isolation, the retried lookup inside a transaction reads the snapshot taken at the transaction's first read, so it can't see the row a concurrent transaction committed later and the `IntegrityError` is raised instead.
+
 ## update_or_create
 
 `update_or_create(**kwargs) -> Model`
