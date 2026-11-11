@@ -1,5 +1,18 @@
 # Release notes
 
+## 0.30.0
+
+### 🆕 Features
+
+* **`Greatest`, `Least` and `Coalesce` in column expressions** ([#1974](https://github.com/ormar-orm/ormar/issues/1974))
+
+    Functions for filters and `update()`, e.g. atomic "never go back" or "never below zero" updates. On SQLite `Greatest` / `Least` compile to the scalar `max()` / `min()`; with a `NULL` argument PostgreSQL ignores it, MySQL and SQLite return `NULL`. See [update](queries/update.md#functions).
+
+    ```python
+    await Member.objects.filter(id=1).update(read_id=Greatest(F("read_id"), newest))
+    await Pass.objects.filter(id=1).update(refunded=Coalesce(F("refunded"), 0) + amount)
+    ```
+
 ## 0.29.0
 
 ### 🆕 Features

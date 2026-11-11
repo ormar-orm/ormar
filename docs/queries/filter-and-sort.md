@@ -227,6 +227,13 @@ A field of a related model is joined automatically, like in a filter on that
 relation. Through a reverse foreign key or a many-to-many relation the
 expression is compared per related row, as in `filter(tracks__position=1)`.
 
+Expressions can also use the functions `ormar.Greatest`, `ormar.Least` and
+`ormar.Coalesce`, see [update](update.md#functions):
+
+```python
+await Track.objects.filter(play_count__gt=Greatest(F("position"), 10)).all()
+```
+
 ### exclude
 
 `exclude(*args, **kwargs) -> QuerySet`

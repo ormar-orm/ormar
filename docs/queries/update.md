@@ -68,6 +68,29 @@ await Product.objects.update(each=True, price=F("price") * 2 + F("shipping"))
   column it sets is fine.
 * The database computes the value, so pydantic validators of the field do not run.
 
+#### Functions
+
+`ormar.Greatest`, `ormar.Least` and `ormar.Coalesce` take two or more arguments,
+at least one of them a field or an expression, and combine with other expressions:
+
+```python
+from ormar import Coalesce, F, Greatest, Least
+
+# never move the read marker back
+await Member.objects.filter(id=1).update(read_id=Greatest(F("read_id"), newest))
+# never go below zero
+await Link.objects.filter(id=1).update(uses=Greatest(F("uses") - n, 0))
+await Pass.objects.filter(id=1).update(refunded=Coalesce(F("refunded"), 0) + amount)
+await Product.objects.update(each=True, price=Least(F("price"), F("max_price") * 2))
+```
+
+* `Greatest` / `Least` compile to `GREATEST()` / `LEAST()`, on SQLite to the
+  scalar `max()` / `min()`.
+* With a `NULL` argument PostgreSQL ignores it, while MySQL and SQLite return
+  `NULL`. Wrap nullable fields in `Coalesce` for the same result everywhere.
+* Literal arguments are bound with the type of the first field or expression
+  argument.
+
 ## update_or_create
 
 `update_or_create(**kwargs) -> Model`

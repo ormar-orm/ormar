@@ -78,7 +78,10 @@ from ormar.fields import (
 from ormar.databases.connection import DatabaseConnection
 from ormar.models import ExcludableItems, Extra, Model, OrmarConfig
 from ormar.queryset import (
+    Coalesce,
     F,
+    Greatest,
+    Least,
     NullsOrdering,
     OrderAction,
     Prefetch,
@@ -154,7 +157,10 @@ __all__ = [
     "NullsOrdering",
     "ExcludableItems",
     "and_",
+    "Coalesce",
     "F",
+    "Greatest",
+    "Least",
     "or_",
     "EncryptBackends",
     "ENCODERS_MAP",
