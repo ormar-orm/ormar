@@ -244,6 +244,28 @@ class RandomOrderAction(OrderAction):
         return order_text_clause(self._random_order())
 
 
+class RandomOrder:
+    """
+    Random order of the queried model, the ``ormar.random()`` form of
+    ``order_by("?")``.
+    """
+
+    def __repr__(self) -> str:
+        return "ormar.random()"
+
+
+def random() -> RandomOrder:
+    """
+    Order the rows randomly, same as ``"?"``::
+
+        await User.objects.order_by(ormar.random()).limit(3).all()
+
+    :return: random order to pass to ``order_by()``
+    :rtype: RandomOrder
+    """
+    return RandomOrder()
+
+
 def order_actions_for(
     order_str: str,
     model_cls: type["Model"],
@@ -301,14 +323,16 @@ def expand_pk_orders(model_cls: type["Model"], columns: list[Any]) -> list[Order
 
     :param model_cls: ordered model
     :type model_cls: type[Model]
-    :param columns: order strings or ``OrderAction`` instances
+    :param columns: order strings, ``OrderAction`` or ``RandomOrder`` instances
     :type columns: list[Any]
     :return: order actions with ``pk`` expanded
     :rtype: list[OrderAction]
     """
     expanded: list[OrderAction] = []
     for column in columns:
-        if isinstance(column, str):
+        if isinstance(column, RandomOrder):
+            expanded.append(RandomOrderAction(model_cls=model_cls))
+        elif isinstance(column, str):
             expanded.extend(order_actions_for(order_str=column, model_cls=model_cls))
         elif column.field_name == "pk":
             expanded.extend(

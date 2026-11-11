@@ -116,13 +116,15 @@ async def test_random_first_get_and_slices():
 async def test_random_order_after_a_field_order():
 
     async def grouped():
-        users = await User.objects.order_by(["group", "?"]).all()
+        users = await User.objects.order_by(["group", ormar.random()]).all()
         assert [user.group for user in users] == [0] * 5 + [1] * 5
         return [user.name for user in users]
 
     assert len(await orderings(grouped)) > 1
     assert len(User.objects.order_by("?").order_by("-?").order_bys) == 1
+    assert len(User.objects.order_by(ormar.random()).order_by("?").order_bys) == 1
     assert isinstance(User.objects.order_by("?").order_bys[0], RandomOrderAction)
+    assert repr(ormar.random()) == "ormar.random()"
 
 
 @pytest.mark.asyncio
@@ -130,11 +132,12 @@ async def test_random_order_on_relations_and_prefetch():
     user = await User.objects.get(name="user0")
 
     async def related_notes():
-        return [note.text for note in await user.notes.order_by("?").all()]
+        notes = await user.notes.order_by(ormar.random()).all()
+        return [note.text for note in notes]
 
     async def prefetched_tags():
         users = await User.objects.prefetch_related(
-            ormar.Prefetch("tags", queryset=Tag.objects.order_by("?"))
+            ormar.Prefetch("tags", queryset=Tag.objects.order_by(ormar.random()))
         ).all()
         return [tag.name for tag in users[0].tags]
 

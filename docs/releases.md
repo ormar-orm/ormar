@@ -33,10 +33,10 @@
     `create(on_conflict="ignore")` skips a row that conflicts with an existing one on any unique key and returns `None` instead of raising `IntegrityError`, so concurrent creates of the same row no longer fail. `bulk_create(on_conflict="ignore")` skips such rows, and `bulk_create(on_conflict="update", conflict_target=[...], update_fields=[...])` updates the existing rows (an upsert). See [conflict handling](queries/create.md#conflict-handling).
 * **Random order** ([#605](https://github.com/ormar-orm/ormar/issues/605))
 
-    `order_by("?")` orders the rows randomly (`random()`, `rand()` on MySQL), also with `limit()`, `select_related()`, relations and `Prefetch` querysets.
+    `order_by("?")` or `order_by(ormar.random())` orders the rows randomly (`random()`, `rand()` on MySQL), also with `limit()`, `select_related()`, relations and `Prefetch` querysets.
 
     ```python
-    winners = await User.objects.order_by("?").limit(3).all()
+    winners = await User.objects.order_by(ormar.random()).limit(3).all()
     ```
 
 ### 🐛 Fixes

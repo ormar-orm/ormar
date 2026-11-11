@@ -20,9 +20,9 @@ You can use following methods to filter the data (sql where clause).
 
 And following methods to sort the data (sql order by clause).
 
-* `order_by(columns:Union[list, str, OrderAction]) -> QuerySet`
+* `order_by(columns:Union[list, str, OrderAction, RandomOrder]) -> QuerySet`
 * `QuerysetProxy`
-    * `QuerysetProxy.order_by(columns:Union[list, str, OrderAction])` method
+    * `QuerysetProxy.order_by(columns:Union[list, str, OrderAction, RandomOrder])` method
 
 ## Filtering
 
@@ -725,7 +725,7 @@ objects from other side of the relation.
 
 ### order_by
 
-`order_by(columns: Union[list, str, OrderAction]) -> QuerySet`
+`order_by(columns: Union[list, str, OrderAction, RandomOrder]) -> QuerySet`
 
 With `order_by()` you can order the results from database based on your choice of
 fields.
@@ -844,11 +844,13 @@ assert owner.toys[1].name == "Toy 1"
 
 #### Random order
 
-`"?"` orders the rows randomly, with `random()` (`rand()` on MySQL and MariaDB):
+`"?"` or `ormar.random()` orders the rows randomly, with `random()` (`rand()` on
+MySQL and MariaDB):
 
 ```python
 # three random users
 users = await User.objects.order_by("?").limit(3).all()
+users = await User.objects.order_by(ormar.random()).limit(3).all()
 
 # random order within the same name
 users = await User.objects.order_by(["name", "?"]).all()
