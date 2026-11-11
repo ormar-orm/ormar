@@ -1005,6 +1005,8 @@ class QuerysetProxy(Generic[T]):
 
         To sort in descending order provide a hyphen in front of the field name
 
+        To sort randomly provide ``"?"``
+
         Actual call delegated to QuerySet.
 
         :param columns: columns by which models should be sorted

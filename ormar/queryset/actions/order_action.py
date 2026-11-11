@@ -11,6 +11,10 @@ if TYPE_CHECKING:  # pragma: nocover
     from ormar import Model
 
 
+#: order string of a random order, as in Django
+RANDOM_ORDER = "?"
+
+
 @lru_cache(maxsize=2048)
 def order_text_clause(expression: str) -> sqlalchemy.sql.expression.TextClause:
     """
@@ -198,6 +202,48 @@ class OrderAction(QueryAction):
         return target_model == self.target_model and alias == self.table_prefix
 
 
+class RandomOrderAction(OrderAction):
+    """
+    Orders the rows of the queried model randomly, created for
+    ``order_by("?")``. It reads no field, so it has no relation path, and like
+    an order on the model's own field it replaces the default primary key
+    order.
+    """
+
+    def __init__(self, model_cls: type["Model"]) -> None:
+        super().__init__(order_str=RANDOM_ORDER, model_cls=model_cls)
+
+    def _split_value_into_parts(self, order_str: str) -> None:
+        self.field_name = ""
+        self.related_parts = []
+
+    def _random_order(self) -> str:
+        return self.source_model.ormar_config.database.rules.random_order
+
+    def get_field_name_text(self) -> str:
+        """
+        :return: the random function, which keys the ordering of the limited
+            sub query of the main model
+        :rtype: str
+        """
+        return self._random_order()
+
+    def get_min_or_max(self) -> sqlalchemy.sql.expression.TextClause:
+        """
+        :return: the random function, it needs no aggregate in the grouped
+            limit sub query
+        :rtype: sqlalchemy.sql.elements.TextClause
+        """
+        return self.get_text_clause()
+
+    def get_text_clause(self) -> sqlalchemy.sql.expression.TextClause:
+        """
+        :return: the random function of the database dialect
+        :rtype: sqlalchemy.sql.elements.TextClause
+        """
+        return order_text_clause(self._random_order())
+
+
 def order_actions_for(
     order_str: str,
     model_cls: type["Model"],
@@ -207,11 +253,12 @@ def order_actions_for(
     """
     Build the order actions for one order string, expanding ``pk`` (also after
     relations) into the primary key fields of the model it points at, in key
-    order::
+    order, and ``?`` into a random order::
 
         "-pk"         -> ["-tenant_id", "-number"]
         "-stock__pk"  -> ["-stock__code", "-stock__sku"]
         "shop__pk"    -> ["shop__id"]
+        "?"           -> [RandomOrderAction]
 
     :param order_str: order string, ``-`` prefixed for descending order
     :type order_str: str
@@ -224,6 +271,8 @@ def order_actions_for(
     :return: order actions, one per key field for a ``pk`` order
     :rtype: list[OrderAction]
     """
+    if order_str.lstrip("-") == RANDOM_ORDER:
+        return [RandomOrderAction(model_cls=model_cls)]
     action = OrderAction(
         order_str=order_str,
         model_cls=model_cls,

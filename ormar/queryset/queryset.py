@@ -1045,6 +1045,8 @@ class QuerySet(Generic[T]):
 
         To sort in descending order provide a hyphen in front of the field name
 
+        To sort randomly provide ``"?"``
+
         :param columns: columns by which models should be sorted
         :type columns: Union[list, str]
         :return: QuerySet

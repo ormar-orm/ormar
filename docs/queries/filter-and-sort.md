@@ -842,6 +842,31 @@ assert owner.toys[1].name == "Toy 1"
     
     Something like `Track.objects.select_related("album").filter(album__name="Malibu").offset(1).limit(1).all()`
 
+#### Random order
+
+`"?"` orders the rows randomly, with `random()` (`rand()` on MySQL and MariaDB):
+
+```python
+# three random users
+users = await User.objects.order_by("?").limit(3).all()
+
+# random order within the same name
+users = await User.objects.order_by(["name", "?"]).all()
+```
+
+It replaces the default primary key order of the queried model, so `first()` and
+`get()` return a random row. With `select_related()` and `limit()` the limit
+picks random main models and each keeps all its related rows.
+
+!!!note
+    The random key comes first in the whole query, so related rows loaded with
+    `select_related()` of a reverse foreign key or many to many relation come in
+    random order too. Load them with `prefetch_related()` to keep their order.
+
+!!!note
+    The database sorts the whole filtered table to pick the rows, so on large
+    tables filter the rows first.
+
 #### Controlling NULL placement with `nulls_ordering`
 
 Both `.asc()` and `.desc()` accept an optional `nulls_ordering` argument so you can
