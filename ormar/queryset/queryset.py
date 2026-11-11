@@ -20,6 +20,7 @@ import sqlalchemy
 
 import ormar  # noqa I100
 from ormar import MultipleMatches, NoMatch
+from ormar.databases.dialects import on_update_assignment
 from ormar.exceptions import (
     ModelListEmptyError,
     ModelPersistenceError,
@@ -1948,9 +1949,32 @@ class QuerySet(Generic[T]):
         several_statements = len(rows_by_keys) > 1 or (
             len(ready_objects) > 1 and not database.atomic_execute_many
         )
+        on_update_columns = tuple(sorted(on_update))
+        # MySQL drivers turn executemany into one multi-row VALUES and leave
+        # the on_update binds after it unfilled, so a batch reads the values
+        # from user variables set once before it
+        on_update_variables = (
+            bool(on_update)
+            and not database.rules.execute_many_with_trailing_binds
+            and any(len(rows) > 1 for rows in rows_by_keys.values())
+        )
         async with database.get_query_executor(
             transactional=several_statements
         ) as executor:
+            if on_update_variables:  # pragma: no cover
+                await executor.execute(
+                    query=cached_statement(
+                        model_cls=self.model,
+                        key=("on_update_assignment", on_update_columns),
+                        builder=on_update_assignment,
+                        table=self.table,
+                        on_update=on_update_columns,
+                    ),
+                    params={
+                        f"ormar_on_update_{index}": on_update[column]
+                        for index, column in enumerate(on_update_columns)
+                    },
+                )
             for rows in rows_by_keys.values():
                 names = tuple(sorted(rows[0]))
                 # duplicates in one batch: the last wins, only while there is no
@@ -1962,19 +1986,16 @@ class QuerySet(Generic[T]):
                     on_conflict=on_conflict,
                     conflict_target=conflict_target,
                     update_fields=update_fields,
-                    on_update=tuple(sorted(on_update)),
+                    on_update=on_update_columns,
+                    on_update_variables=on_update_variables,
                 )
+                bound_on_update = {} if on_update_variables else on_update_params
                 params = [
-                    {**value_params(names=names, values=row), **on_update_params}
+                    {**value_params(names=names, values=row), **bound_on_update}
                     for row in rows
                 ]
-                # MySQL drivers turn executemany into one multi-row VALUES and
-                # leave the on_update binds after it unfilled
-                if len(rows) == 1 or (
-                    on_update and not database.rules.execute_many_with_trailing_binds
-                ):
-                    for row_params in params:
-                        await executor.execute(query=statement, params=row_params)
+                if len(rows) == 1:
+                    await executor.execute(query=statement, params=params[0])
                 else:
                     await executor.execute_many(query=statement, values=params)
 
