@@ -12,7 +12,6 @@ Each runs one cached statement per model and set of written columns::
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
     Mapping,
     Optional,
     Sequence,
@@ -21,13 +20,13 @@ from typing import (
 )
 
 import sqlalchemy
-from sqlalchemy.dialects import mysql, postgresql, sqlite
 from sqlalchemy.sql import Executable
 
 from ormar.queryset.templates.cache import StatementTemplate, cached_statement
 from ormar.queryset.templates.slots import value_binds, value_params
 
 if TYPE_CHECKING:  # pragma: no cover
+    from ormar.databases.dialects import DialectRules
     from ormar.models.primary_key import PrimaryKey
 
 
@@ -50,21 +49,10 @@ def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:
     return table.insert().values(value_binds(table=table, names=names))
 
 
-# MariaDB reports its own dialect name but takes the MySQL statements
-MYSQL_DIALECTS = frozenset({"mysql", "mariadb"})
-
-DIALECT_INSERTS: dict[str, Callable[..., Any]] = {
-    "mariadb": mysql.insert,
-    "mysql": mysql.insert,
-    "postgresql": postgresql.insert,
-    "sqlite": sqlite.insert,
-}
-
-
 def build_conflict_insert(
     table: sqlalchemy.Table,
     names: Tuple[str, ...],
-    dialect_name: str,
+    rules: "DialectRules",
     on_conflict: str,
     target: Tuple[str, ...],
     update_names: Tuple[str, ...],
@@ -72,24 +60,20 @@ def build_conflict_insert(
     returning: bool,
 ) -> Executable:
     """
-    Build an insert that skips or updates a row conflicting with an existing
-    one::
+    Build the insert of the database's dialect that skips or updates a row
+    conflicting with an existing one. The value binds are built here, on a
+    cache miss only, so the rules get them ready made::
 
         INSERT INTO tags (name, score) VALUES (:ormar_v0, :ormar_v1)
         ON CONFLICT (name) DO UPDATE SET score = excluded.score
         -- MySQL: ON DUPLICATE KEY UPDATE score = VALUES(score)
 
-    MySQL reacts to a conflict on any unique key, so the target is not emitted
-    there and ``ignore`` becomes a no-op update of a key column (a duplicate
-    key error would abort the whole ``executemany``). Columns in ``on_update``
-    are set from ``ormar_on_update_<column>`` parameters.
-
     :param table: written table
     :type table: sqlalchemy.Table
     :param names: inserted column names, sorted
     :type names: Tuple[str, ...]
-    :param dialect_name: name of the database dialect
-    :type dialect_name: str
+    :param rules: rules of the database dialect
+    :type rules: DialectRules
     :param on_conflict: ``ignore`` or ``update``
     :type on_conflict: str
     :param target: conflicting column names (the primary key for ``ignore``)
@@ -103,30 +87,15 @@ def build_conflict_insert(
     :return: insert statement
     :rtype: Executable
     """
-    statement = DIALECT_INSERTS[dialect_name](table).values(
-        value_binds(table=table, names=names)
+    return rules.conflict_insert(
+        table=table,
+        values=value_binds(table=table, names=names),
+        on_conflict=on_conflict,
+        target=target,
+        update_names=update_names,
+        on_update=on_update,
+        returning=returning,
     )
-    excluded = (
-        statement.inserted if dialect_name in MYSQL_DIALECTS else statement.excluded
-    )
-    conflict_updates = {name: excluded[name] for name in update_names}
-    for name in on_update:
-        conflict_updates[name] = sqlalchemy.bindparam(
-            key=f"ormar_on_update_{name}", type_=table.c[name].type
-        )
-    if dialect_name in MYSQL_DIALECTS:
-        return statement.on_duplicate_key_update(
-            conflict_updates
-            if on_conflict == "update"
-            else {target[0]: table.c[target[0]]}
-        )
-    if on_conflict == "update":
-        statement = statement.on_conflict_do_update(
-            index_elements=target, set_=conflict_updates
-        )
-    else:
-        statement = statement.on_conflict_do_nothing()
-    return statement.returning(*table.primary_key) if returning else statement
 
 
 def build_update(
@@ -264,40 +233,45 @@ def insert_statement(
     :rtype: Executable
     """
     config = model_cls.ormar_config
-    conflict: dict[str, Any] = {}
-    if on_conflict:
-        pk = config.pk.column_aliases()
-        target = (
-            tuple(
-                column
-                for field_name in conflict_target or ()
-                for column in model_cls.get_column_aliases(field_name=field_name)
-            )
-            or pk
+    if not on_conflict:
+        return cached_statement(
+            model_cls=model_cls,
+            key=("insert", names),
+            builder=build_insert,
+            table=config.table,
+            names=names,
         )
-        update_names = tuple(
-            sorted(
-                column
-                for field_name in update_fields or ()
-                for column in model_cls.get_column_aliases(field_name=field_name)
-            )
-        ) or tuple(
-            column for column in names if column not in {*target, *pk, *on_update}
+    pk = config.pk.column_aliases()
+    target = (
+        tuple(
+            column
+            for field_name in conflict_target or ()
+            for column in model_cls.get_column_aliases(field_name=field_name)
         )
-        conflict = dict(
-            dialect_name=config.database.dialect.name,
-            on_conflict=on_conflict,
-            target=target,
-            update_names=update_names,
-            on_update=on_update,
-            returning=returning,
+        or pk
+    )
+    update_names = tuple(
+        sorted(
+            column
+            for field_name in update_fields or ()
+            for column in model_cls.get_column_aliases(field_name=field_name)
         )
+    ) or tuple(column for column in names if column not in {*target, *pk, *on_update})
+    rules = config.database.rules
+    conflict = dict(
+        on_conflict=on_conflict,
+        target=target,
+        update_names=update_names,
+        on_update=on_update,
+        returning=returning,
+    )
     return cached_statement(
         model_cls=model_cls,
-        key=("insert", names, *conflict.values()),
-        builder=build_conflict_insert if conflict else build_insert,
+        key=("insert", names, rules.backend_name, *conflict.values()),
+        builder=build_conflict_insert,
         table=config.table,
         names=names,
+        rules=rules,
         **conflict,
     )
 

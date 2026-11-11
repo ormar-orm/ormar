@@ -62,14 +62,6 @@ class OrderAction(QueryAction):
         """
         return self.target_model.get_column_aliases(field_name=self.field_name)
 
-    @property
-    def is_postgres_bool(self) -> bool:
-        dialect = self.target_model.ormar_config.database.dialect.name
-        field_type = self.target_model.ormar_config.model_fields[
-            self.field_name
-        ].__type__
-        return dialect == "postgresql" and field_type is bool
-
     def get_field_name_text(self) -> str:
         """
         Escapes characters if it's required.
@@ -93,12 +85,12 @@ class OrderAction(QueryAction):
         :rtype: sqlalchemy.sql.elements.TextClause
         """
         prefix = f"{self.table_prefix}_" if self.table_prefix else ""
-        if self.direction == "":
-            function = "min" if not self.is_postgres_bool else "bool_or"
-            suffix = ""
-        else:
-            function = "max" if not self.is_postgres_bool else "bool_or"
-            suffix = " desc"
+        config = self.target_model.ormar_config
+        function = config.database.rules.ordering_aggregate(
+            field_type=config.model_fields[self.field_name].__type__,
+            descending=bool(self.direction),
+        )
+        suffix = " desc" if self.direction else ""
         return text(
             ", ".join(
                 f"{function}({prefix}{self.table.name}.{alias}){suffix}"
@@ -129,10 +121,8 @@ class OrderAction(QueryAction):
     def _build_order_expression(self, full_column: str) -> str:
         """
         Builds the final ORDER BY expression for a fully-qualified column,
-        optionally including a `NULLS FIRST`/`NULLS LAST` annotation. On MySQL,
-        which lacks the SQL:2003 `NULLS` syntax, emulate it by prepending an
-        `IS NULL` / `IS NOT NULL` sort key — it only affects ordering,
-        not the result set.
+        optionally including a `NULLS FIRST`/`NULLS LAST` annotation (emulated
+        by the dialect rules where the syntax is missing).
 
         :param full_column: fully-qualified, quoted column reference
         :type full_column: str
@@ -143,11 +133,9 @@ class OrderAction(QueryAction):
         base = f"{full_column}{direction}"
         if self.nulls_ordering is None:
             return base
-        dialect_name = self.target_model.ormar_config.database.dialect.name
-        if dialect_name == "mysql":  # pragma: no cover
-            not_kw = "not " if self.nulls_ordering == "first" else ""
-            return f"{full_column} is {not_kw}null, {base}"
-        return f"{base} nulls {self.nulls_ordering}"  # pragma: no cover
+        return self.target_model.ormar_config.database.rules.nulls_order(
+            full_column=full_column, ordered=base, nulls_ordering=self.nulls_ordering
+        )
 
     def _split_value_into_parts(self, order_str: str) -> None:
         if order_str.startswith("-"):

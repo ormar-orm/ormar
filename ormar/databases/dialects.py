@@ -1,0 +1,352 @@
+"""
+Dialect rules: the SQL behaviour that differs between database backends.
+
+One rules object per ``DatabaseConnection``, picked by the backend name of its
+url, so it is known before ``connect()``::
+
+    database.rules.conflict_insert(table=tags, values=binds, ...)
+    # PostgreSQL / SQLite: INSERT ... ON CONFLICT (name) DO UPDATE ...
+    # MySQL / MariaDB:     INSERT ... ON DUPLICATE KEY UPDATE ...
+
+Rules only build statements and answer questions about the dialect. Running
+statements and reading results stays with the driver adapters.
+"""
+
+from typing import Any, ClassVar, Dict, Tuple, Type, Union
+
+import sqlalchemy
+from sqlalchemy.dialects import mysql, postgresql, sqlite
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.sql import Executable
+
+from ormar.exceptions import QueryDefinitionError
+
+# MySQL server error ER_DUP_ENTRY: an insert hit an existing unique key
+MYSQL_DUPLICATE_ENTRY_ERROR = 1062
+
+
+def conflict_updates(
+    *,
+    table: sqlalchemy.Table,
+    inserted: Any,
+    update_names: Tuple[str, ...],
+    on_update: Tuple[str, ...],
+) -> Dict[str, Any]:
+    """
+    Return the columns a conflicting row is updated with: ``update_names`` from
+    the inserted row, ``on_update`` columns from ``ormar_on_update_<column>``
+    parameters.
+
+    :param table: written table
+    :type table: sqlalchemy.Table
+    :param inserted: the inserted row (``excluded`` or MySQL ``inserted``)
+    :type inserted: Any
+    :param update_names: columns updated from the inserted row
+    :type update_names: Tuple[str, ...]
+    :param on_update: columns updated with their ``on_update`` value
+    :type on_update: Tuple[str, ...]
+    :return: value per updated column
+    :rtype: Dict[str, Any]
+    """
+    updates: Dict[str, Any] = {name: inserted[name] for name in update_names}
+    for name in on_update:
+        updates[name] = sqlalchemy.bindparam(
+            key=f"ormar_on_update_{name}", type_=table.c[name].type
+        )
+    return updates
+
+
+class DialectRules:
+    """
+    Rules of a backend ormar has no specific rules for, and the base of the
+    ones it has. Its conflict insert is the ``ON CONFLICT`` of PostgreSQL and
+    SQLite, which only lack the insert construct here.
+    """
+
+    #: the engine runs in AUTOCOMMIT and only transactions leave it, because
+    #: switching a pooled connection into AUTOCOMMIT and back costs round trips
+    autocommit_engine: ClassVar[bool] = False
+    #: a skipping conflict insert returns the written primary key
+    conflict_returning: ClassVar[bool] = True
+    #: ``execute_many`` fills binds placed after the VALUES clause
+    execute_many_with_trailing_binds: ClassVar[bool] = True
+    #: foreign keys may reference a table in another schema
+    cross_schema_foreign_keys: ClassVar[bool] = True
+    #: connections run ``PRAGMA foreign_keys=ON`` when opened
+    foreign_keys_pragma: ClassVar[bool] = False
+    #: transactions send an explicit ``BEGIN`` so a released savepoint does
+    #: not commit
+    explicit_begin: ClassVar[bool] = False
+
+    def __init__(self, *, backend_name: str) -> None:
+        """
+        :param backend_name: backend name of the database url
+        :type backend_name: str
+        """
+        self.backend_name = backend_name
+
+    def make_insert(
+        self, *, table: sqlalchemy.Table
+    ) -> Union[postgresql.Insert, sqlite.Insert]:
+        """
+        Return the dialect insert construct that takes a conflict clause.
+
+        :raises QueryDefinitionError: the backend has no conflict insert
+        :param table: written table
+        :type table: sqlalchemy.Table
+        :return: insert of the table
+        :rtype: Union[postgresql.Insert, sqlite.Insert]
+        """
+        raise QueryDefinitionError(
+            f"on_conflict is not supported on the {self.backend_name} backend"
+        )
+
+    def conflict_insert(
+        self,
+        *,
+        table: sqlalchemy.Table,
+        values: Dict[Any, Any],
+        on_conflict: str,
+        target: Tuple[str, ...],
+        update_names: Tuple[str, ...],
+        on_update: Tuple[str, ...],
+        returning: bool,
+    ) -> Executable:
+        """
+        Build an insert that skips or updates a row conflicting with an
+        existing one::
+
+            INSERT INTO tags (name, score) VALUES (:ormar_v0, :ormar_v1)
+            ON CONFLICT (name) DO UPDATE SET score = excluded.score
+
+        :param table: written table
+        :type table: sqlalchemy.Table
+        :param values: bind parameter per inserted column
+        :type values: Dict[Any, Any]
+        :param on_conflict: ``ignore`` or ``update``
+        :type on_conflict: str
+        :param target: conflicting column names (the primary key for ``ignore``)
+        :type target: Tuple[str, ...]
+        :param update_names: columns updated from the inserted row
+        :type update_names: Tuple[str, ...]
+        :param on_update: columns updated with their ``on_update`` value
+        :type on_update: Tuple[str, ...]
+        :param returning: return the primary key of a written row
+        :type returning: bool
+        :return: insert statement
+        :rtype: Executable
+        """
+        statement = self.make_insert(table=table).values(values)
+        if on_conflict == "update":
+            statement = statement.on_conflict_do_update(
+                index_elements=target,
+                set_=conflict_updates(
+                    table=table,
+                    inserted=statement.excluded,
+                    update_names=update_names,
+                    on_update=on_update,
+                ),
+            )
+        else:
+            statement = statement.on_conflict_do_nothing()
+        return statement.returning(*table.primary_key) if returning else statement
+
+    def is_duplicate_key(self, *, error: IntegrityError) -> bool:
+        """
+        Tell whether the error of a plain insert run with ``on_conflict`` means
+        the row was skipped. Dialects with ``conflict_returning`` skip in the
+        statement and never run that plain insert.
+
+        :param error: error raised by the insert
+        :type error: IntegrityError
+        :return: the row conflicted with an existing unique key
+        :rtype: bool
+        """
+        return False
+
+    def ordering_aggregate(self, *, field_type: Any, descending: bool) -> str:
+        """
+        Return the aggregate that orders by a column not in the GROUP BY of a
+        limited sub query.
+
+        :param field_type: python type of the ordered field
+        :type field_type: Any
+        :param descending: the order is descending
+        :type descending: bool
+        :return: name of the aggregate function
+        :rtype: str
+        """
+        return "max" if descending else "min"
+
+    def nulls_order(
+        self, *, full_column: str, ordered: str, nulls_ordering: str
+    ) -> str:
+        """
+        Return an ORDER BY expression that puts nulls first or last::
+
+            authors.name desc nulls last
+
+        :param full_column: fully-qualified, quoted column reference
+        :type full_column: str
+        :param ordered: the column with its direction
+        :type ordered: str
+        :param nulls_ordering: ``first`` or ``last``
+        :type nulls_ordering: str
+        :return: ORDER BY expression as raw SQL text
+        :rtype: str
+        """
+        return f"{ordered} nulls {nulls_ordering}"
+
+
+class SqliteRules(DialectRules):
+    """
+    SQLite: ``ON CONFLICT`` inserts, foreign keys switched on per connection,
+    an explicit ``BEGIN`` in transactions and no cross-schema foreign keys.
+    """
+
+    autocommit_engine = True
+    cross_schema_foreign_keys = False
+    foreign_keys_pragma = True
+    explicit_begin = True
+
+    def make_insert(self, *, table: sqlalchemy.Table) -> sqlite.Insert:
+        """
+        :param table: written table
+        :type table: sqlalchemy.Table
+        :return: SQLite insert of the table
+        :rtype: sqlite.Insert
+        """
+        return sqlite.insert(table=table)
+
+
+class PostgresRules(DialectRules):
+    """
+    PostgreSQL: ``ON CONFLICT`` inserts and ``bool_or`` to order by booleans,
+    which ``min`` and ``max`` do not take.
+    """
+
+    def make_insert(self, *, table: sqlalchemy.Table) -> postgresql.Insert:
+        """
+        :param table: written table
+        :type table: sqlalchemy.Table
+        :return: PostgreSQL insert of the table
+        :rtype: postgresql.Insert
+        """
+        return postgresql.insert(table=table)
+
+    def ordering_aggregate(self, *, field_type: Any, descending: bool) -> str:
+        """
+        :param field_type: python type of the ordered field
+        :type field_type: Any
+        :param descending: the order is descending
+        :type descending: bool
+        :return: ``bool_or`` for booleans, else ``min`` or ``max``
+        :rtype: str
+        """
+        if field_type is bool:
+            return "bool_or"
+        return super().ordering_aggregate(field_type=field_type, descending=descending)
+
+
+class MysqlRules(DialectRules):
+    """
+    MySQL and MariaDB: ``ON DUPLICATE KEY UPDATE`` inserts without RETURNING,
+    no ``NULLS FIRST`` / ``NULLS LAST`` and an AUTOCOMMIT engine.
+    """
+
+    autocommit_engine = True
+    conflict_returning = False
+    execute_many_with_trailing_binds = False
+
+    def conflict_insert(
+        self,
+        *,
+        table: sqlalchemy.Table,
+        values: Dict[Any, Any],
+        on_conflict: str,
+        target: Tuple[str, ...],
+        update_names: Tuple[str, ...],
+        on_update: Tuple[str, ...],
+        returning: bool,
+    ) -> Executable:
+        """
+        Build an insert that skips or updates a row conflicting with an
+        existing one::
+
+            INSERT INTO tags (name, score) VALUES (%s, %s)
+            ON DUPLICATE KEY UPDATE score = VALUES(score)
+
+        MySQL reacts to a conflict on any unique key, so the target is not
+        emitted and ``ignore`` becomes a no-op update of a key column (a
+        duplicate key error would abort the whole ``executemany``). There is no
+        RETURNING, so ``returning`` is not used. The other parameters are
+        described in ``DialectRules.conflict_insert``.
+
+        :return: insert statement
+        :rtype: Executable
+        """
+        statement = mysql.insert(table=table).values(values)
+        if on_conflict == "update":
+            return statement.on_duplicate_key_update(
+                conflict_updates(
+                    table=table,
+                    inserted=statement.inserted,
+                    update_names=update_names,
+                    on_update=on_update,
+                )
+            )
+        return statement.on_duplicate_key_update({target[0]: table.c[target[0]]})
+
+    def is_duplicate_key(self, *, error: IntegrityError) -> bool:
+        """
+        :param error: error raised by the insert
+        :type error: IntegrityError
+        :return: the server reported ER_DUP_ENTRY
+        :rtype: bool
+        """
+        return error.orig is not None and error.orig.args[:1] == (
+            MYSQL_DUPLICATE_ENTRY_ERROR,
+        )
+
+    def nulls_order(
+        self, *, full_column: str, ordered: str, nulls_ordering: str
+    ) -> str:
+        """
+        Emulate ``NULLS FIRST`` / ``NULLS LAST`` with an ``IS [NOT] NULL`` sort
+        key in front, it only changes the order of the rows::
+
+            authors.name is not null, authors.name desc
+
+        :param full_column: fully-qualified, quoted column reference
+        :type full_column: str
+        :param ordered: the column with its direction
+        :type ordered: str
+        :param nulls_ordering: ``first`` or ``last``
+        :type nulls_ordering: str
+        :return: ORDER BY expression as raw SQL text
+        :rtype: str
+        """
+        negation = "not " if nulls_ordering == "first" else ""
+        return f"{full_column} is {negation}null, {ordered}"
+
+
+DIALECT_RULES: Dict[str, Type[DialectRules]] = {
+    "sqlite": SqliteRules,
+    "postgresql": PostgresRules,
+    "mysql": MysqlRules,
+    "mariadb": MysqlRules,
+}
+
+
+def rules_for(*, backend_name: str) -> DialectRules:
+    """
+    Return the rules of a backend; one without its own rules gets the base
+    ones, which keep the standard SQL and reject ``on_conflict``.
+
+    :param backend_name: backend name of the database url, e.g. ``mariadb``
+    :type backend_name: str
+    :return: rules of the backend
+    :rtype: DialectRules
+    """
+    rules_class = DIALECT_RULES.get(backend_name, DialectRules)
+    return rules_class(backend_name=backend_name)

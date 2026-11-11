@@ -4,9 +4,9 @@ import pytest
 from sqlalchemy.dialects import mysql, postgresql, sqlite
 
 import ormar
+from ormar.databases.dialects import MysqlRules, PostgresRules, SqliteRules, rules_for
 from ormar.exceptions import QueryDefinitionError
-from ormar.queryset.templates import insert_statement
-from ormar.queryset.templates.writes import build_conflict_insert
+from ormar.queryset.templates import insert_statement, value_binds
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -227,8 +227,7 @@ async def test_conflict_options_need_update():
 
 def test_conflict_statements_per_dialect():
     table = Tag.ormar_config.table
-    names = ("name", "score")
-    common = dict(table=table, names=names)
+    common = dict(table=table, values=value_binds(table=table, names=("name", "score")))
     ignore = dict(on_conflict="ignore", target=("id",), update_names=(), on_update=())
     update = dict(
         on_conflict="update",
@@ -237,37 +236,62 @@ def test_conflict_statements_per_dialect():
         on_update=("is_dirty",),
     )
     pg = str(
-        build_conflict_insert(
-            dialect_name="postgresql", returning=True, **common, **ignore
-        ).compile(dialect=postgresql.dialect())
+        PostgresRules(backend_name="postgresql")
+        .conflict_insert(returning=True, **common, **ignore)
+        .compile(dialect=postgresql.dialect())
     )
     assert "ON CONFLICT DO NOTHING RETURNING oc_tags.id" in pg
+    pg_update = str(
+        PostgresRules(backend_name="postgresql")
+        .conflict_insert(returning=False, **common, **update)
+        .compile(dialect=postgresql.dialect())
+    )
+    assert "ON CONFLICT (name) DO UPDATE SET score = excluded.score" in pg_update
     lite = str(
-        build_conflict_insert(
-            dialect_name="sqlite", returning=False, **common, **update
-        ).compile(dialect=sqlite.dialect())
+        SqliteRules(backend_name="sqlite")
+        .conflict_insert(returning=False, **common, **update)
+        .compile(dialect=sqlite.dialect())
     )
     assert "ON CONFLICT (name) DO UPDATE SET score = excluded.score" in lite
     assert lite.endswith("score = excluded.score, is_dirty = ?")
+    lite_ignore = str(
+        SqliteRules(backend_name="sqlite")
+        .conflict_insert(returning=True, **common, **ignore)
+        .compile(dialect=sqlite.dialect())
+    )
+    assert "ON CONFLICT DO NOTHING RETURNING id" in lite_ignore
     my_ignore = str(
-        build_conflict_insert(
-            dialect_name="mysql", returning=False, **common, **ignore
-        ).compile(dialect=mysql.dialect())
+        MysqlRules(backend_name="mysql")
+        .conflict_insert(returning=False, **common, **ignore)
+        .compile(dialect=mysql.dialect())
     )
     assert "ON DUPLICATE KEY UPDATE id = oc_tags.id" in my_ignore
     my_update = str(
-        build_conflict_insert(
-            dialect_name="mysql", returning=False, **common, **update
-        ).compile(dialect=mysql.dialect())
+        MysqlRules(backend_name="mysql")
+        .conflict_insert(returning=False, **common, **update)
+        .compile(dialect=mysql.dialect())
     )
     assert "ON DUPLICATE KEY UPDATE score = VALUES(score)" in my_update
     assert "is_dirty = %s" in my_update
     maria_ignore = str(
-        build_conflict_insert(
-            dialect_name="mariadb", returning=False, **common, **ignore
-        ).compile(dialect=mysql.dialect(is_mariadb=True))
+        rules_for(backend_name="mariadb")
+        .conflict_insert(returning=False, **common, **ignore)
+        .compile(dialect=mysql.dialect(is_mariadb=True))
     )
     assert "ON DUPLICATE KEY UPDATE id = oc_tags.id" in maria_ignore
+
+
+def test_conflict_insert_rejected_on_unknown_backend():
+    with pytest.raises(QueryDefinitionError, match="not supported on the oracle"):
+        rules_for(backend_name="oracle").conflict_insert(
+            table=Tag.ormar_config.table,
+            values={},
+            on_conflict="ignore",
+            target=("id",),
+            update_names=(),
+            on_update=(),
+            returning=True,
+        )
 
 
 @pytest.mark.asyncio

@@ -863,7 +863,7 @@ await Owner.objects.order_by(
 
 !!!note
     On PostgreSQL and SQLite (3.30+) this emits the standard `NULLS FIRST` /
-    `NULLS LAST` clause. MySQL does not support that syntax, so `ormar`
+    `NULLS LAST` clause. MySQL and MariaDB do not support that syntax, so `ormar`
     emulates it by prepending an `IS NULL` / `IS NOT NULL` sort key — the
     result set is unchanged, only the ordering.
 

@@ -45,17 +45,17 @@ class Transaction:
         # ``begin_nested()`` savepoints below both work.
         if self._depth == 0:
             self._connection = await self._database.engine.connect().__aenter__()
-            is_sqlite = self._database.engine.dialect.name == "sqlite"
+            explicit_begin = self._database.rules.explicit_begin
             # SQLite gets an explicit BEGIN below, which opens a real transaction
             # even on an AUTOCOMMIT connection, so its isolation level stays as is.
-            if not is_sqlite:  # pragma: nocover
+            if not explicit_begin:  # pragma: nocover
                 await self._database.restore_transaction_isolation(self._connection)
             self._database.set_transaction_connection(self._connection)
             self._transaction = await self._connection.begin()
             # SQLite requires an explicit BEGIN before SAVEPOINTs to prevent
             # RELEASE SAVEPOINT from auto-committing when no outer transaction exists.
             # Issue after conn.begin() to avoid conflicting with SQLAlchemy's autobegin.
-            if is_sqlite:  # pragma: nocover
+            if explicit_begin:  # pragma: nocover
                 await self._connection.exec_driver_sql("BEGIN")
             # Natively executed statements bypass SQLAlchemy, whose asyncpg
             # adapter only starts the transaction on its own first statement.

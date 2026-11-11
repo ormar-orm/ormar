@@ -40,7 +40,6 @@ from ormar.queryset.prefetch import Prefetch
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
 from ormar.queryset.templates import (
-    MYSQL_DIALECTS,
     SlotBinder,
     StatementTemplate,
     aggregate_statement,
@@ -1964,7 +1963,7 @@ class QuerySet(Generic[T]):
                 # MySQL drivers turn executemany into one multi-row VALUES and
                 # leave the on_update binds after it unfilled
                 if len(rows) == 1 or (
-                    on_update and database.dialect.name in MYSQL_DIALECTS
+                    on_update and not database.rules.execute_many_with_trailing_binds
                 ):
                     for row_params in params:
                         await executor.execute(query=statement, params=row_params)

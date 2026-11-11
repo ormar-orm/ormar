@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, ForwardRef, Optional, Union, cast
 import sqlalchemy
 
 import ormar  # noqa: I100, I202
+from ormar.databases.dialects import rules_for
 from ormar.fields.link import qualified_fk_reference
 from ormar.models.descriptors import PkDescriptor, RelationDescriptor
 from ormar.models.helpers.pydantic import create_pydantic_field
@@ -37,7 +38,7 @@ def validate_cross_schema_constraints(
     :param dialect_name: name of the dialect about to issue DDL
     :type dialect_name: str
     """
-    if dialect_name != "sqlite":
+    if rules_for(backend_name=dialect_name).cross_schema_foreign_keys:
         return
     for table in metadata.sorted_tables:
         for fk in table.foreign_keys:
