@@ -73,16 +73,11 @@ jobs:
         DATABASE_URL: "mysql://username:password@127.0.0.1:3306/testsuite"
       run: bash scripts/test.sh
 
-    - name: Install postgresql-client
-      run: |
-        sudo apt-get update
-        sudo apt-get install --yes postgresql-client
-
     - name: Connect to PostgreSQL with CLI
-      run: env PGPASSWORD=password psql -h localhost -U username -c 'SELECT VERSION();' testsuite
+      run: docker exec postgres psql -U username -c 'SELECT VERSION();' testsuite
 
     - name: Show max connections
-      run: env PGPASSWORD=password psql -h localhost -U username -c 'SHOW max_connections;' testsuite
+      run: docker exec postgres psql -U username -c 'SHOW max_connections;' testsuite
 
     - name: Alter max connections
       run: |
@@ -92,10 +87,10 @@ jobs:
           sed -i -e 's/shared_buffers = 128MB/shared_buffers = 512MB/' /var/lib/postgresql/data/postgresql.conf
         EOF
         docker restart --time 0 postgres
-        sleep 5
+        until docker exec postgres pg_isready -U username -h localhost; do sleep 1; done
 
     - name: Show max connections
-      run: env PGPASSWORD=password psql -h localhost -U username -c 'SHOW max_connections;' testsuite
+      run: docker exec postgres psql -U username -c 'SHOW max_connections;' testsuite
 
     - name: Run postgres
       env:
