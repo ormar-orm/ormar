@@ -241,18 +241,25 @@ saved, the skipped ones too.
     existing row that conflicts on a different key than `conflict_target`. The target is
     used only on PostgreSQL and SQLite, which reject it when it does not match a unique
     key or constraint. `create(on_conflict="update")` reads the row back by the target
-    values and raises `NoMatch` when the conflict was on another key. MariaDB is not
-    tested.
+    values and raises `NoMatch` when none matches: the conflict was on another key (that
+    row is updated already), or the database stored a target value differently (floats,
+    datetimes with fractional seconds). MariaDB is not tested.
 
 !!!note
     SQLite supports `ON CONFLICT` with `RETURNING` from version 3.35.
 
 !!!note
-    `on_conflict` is a reserved keyword argument of `create()`. To create a model with
-    a field named `on_conflict` use `Model(on_conflict=...).save()`.
+    `on_conflict`, `conflict_target` and `update_fields` are reserved keyword arguments
+    of `create()`. To create a model with a field of such a name use
+    `Model(on_conflict=...).save()`.
 
 `QuerysetProxy.create()` accepts `on_conflict` too, except for many to many
-relations.
+relations. Through a reverse foreign key the relation is always updated, so a
+conflicting row of another owner moves to the one it was created through.
+
+`create(on_conflict="update")` with nothing to update (only the target fields passed)
+works as an atomic get or create by a unique key: the conflicting row is returned
+unchanged.
 
 ## Model methods
 

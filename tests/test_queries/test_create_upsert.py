@@ -41,6 +41,13 @@ class Slot(ormar.Model):
     taken: int = ormar.Integer(default=0)
 
 
+class Label(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="ups_labels")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=20, unique=True)
+
+
 create_test_database = init_tests(base_ormar_config)
 
 
@@ -218,3 +225,48 @@ async def test_mysql_conflict_on_another_unique_key():  # pragma: no cover
                     on_conflict="update",
                     conflict_target=["endpoint_hash"],
                 )
+
+
+@pytest.mark.asyncio
+async def test_create_update_with_nothing_to_update_returns_the_row():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            created = await Label.objects.create(
+                name="a", on_conflict="update", conflict_target=["name"]
+            )
+            again = await Label.objects.create(
+                name="a", on_conflict="update", conflict_target=["name"]
+            )
+            assert again.pk == created.pk
+            assert await Label.objects.count() == 1
+
+
+@pytest.mark.asyncio
+async def test_create_update_through_a_relation_moves_the_row_to_the_owner():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            first = await Owner.objects.create(name="first")
+            second = await Owner.objects.create(name="second")
+            await first.devices.create(endpoint_hash="m", keys="k1")
+            moved = await second.devices.create(
+                endpoint_hash="m",
+                keys="k2",
+                on_conflict="update",
+                conflict_target=["endpoint_hash"],
+                update_fields=["keys"],
+            )
+            assert moved.owner.pk == second.pk
+            assert [device.keys for device in await second.devices.all()] == ["k2"]
+            assert await first.devices.count() == 0
+
+
+@pytest.mark.asyncio
+async def test_create_update_rejects_unknown_target_fields():
+    async with base_ormar_config.database:
+        with pytest.raises(QueryDefinitionError, match="does not have: \\['nope'\\]"):
+            await Device.objects.create(
+                endpoint_hash="u",
+                keys="k",
+                on_conflict="update",
+                conflict_target=["nope"],
+            )

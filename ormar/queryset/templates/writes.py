@@ -257,6 +257,10 @@ def insert_statement(
             for column in model_cls.get_column_aliases(field_name=field_name)
         )
     ) or tuple(column for column in names if column not in {*target, *pk, *on_update})
+    if on_conflict == "update" and not update_names and not on_update:
+        # nothing left to update: set a target column to itself, so the
+        # conflicting row is still returned (DO NOTHING would return no row)
+        update_names = target[:1]
     rules = config.database.rules
     conflict = dict(
         on_conflict=on_conflict,

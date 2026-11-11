@@ -611,6 +611,10 @@ class QuerysetProxy(Generic[T]):
         through_kwargs = kwargs.pop(self.through_model_name, {})
         if self.type_ == ormar.RelationType.REVERSE:
             kwargs[self.related_field_name] = self._owner
+            # a conflicting row of another owner moves to this one, so the
+            # created model belongs to the relation it was created through
+            if update_fields and self.related_field_name not in update_fields:
+                update_fields = [*update_fields, self.related_field_name]
         created = await self.queryset.create(
             on_conflict=on_conflict,
             conflict_target=conflict_target,

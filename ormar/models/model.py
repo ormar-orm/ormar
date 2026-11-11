@@ -311,8 +311,9 @@ class Model(ModelRow):
         :param update_fields: names of the fields updated on conflict
         :type update_fields: Optional[list[str]]
         :raises QueryDefinitionError: if a field of the target has no value
-        :raises NoMatch: if MySQL updated a row conflicting on another unique key
-            and no row matches the target values
+        :raises NoMatch: if on MySQL no row matches the target values after the
+            write (a conflict on another unique key, or values the database
+            stores rounded)
         :return: the stored row
         :rtype: Model
         """
@@ -321,6 +322,11 @@ class Model(ModelRow):
         self_fields = self._prepare_insert_row()
         config = self.ormar_config
         target_fields = conflict_target or list(config.pk.fields)
+        unknown = [name for name in target_fields if name not in config.model_fields]
+        if unknown:
+            raise QueryDefinitionError(
+                f"conflict_target names fields the model does not have: {unknown}"
+            )
         target = {
             column: self_fields.get(column)
             for field_name in target_fields
@@ -375,8 +381,10 @@ class Model(ModelRow):
             )
             if row is None:
                 raise NoMatch(
-                    f"The row conflicted on another unique key, no row matches "
-                    f"the conflict target {target}"
+                    f"The row was written, but no row matches the conflict target "
+                    f"{target} when read back: the conflict was on another unique "
+                    f"key, or the database stored different values (rounded "
+                    f"floats or datetimes)"
                 )
         self.update_from_dict(self.translate_row_to_fields(row=dict(row)))
         self.set_save_status(True)
