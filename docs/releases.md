@@ -4,7 +4,7 @@
 
 ### 🆕 Features
 
-* **`select_for_update()` row locks** ([#781](https://github.com/ormar-orm/ormar/issues/781))
+* **`select_for_update()` row locks** ([#781](https://github.com/ormar-orm/ormar/issues/781), [#1963](https://github.com/ormar-orm/ormar/pull/1963))
 
     Locks the rows of the queried model until the end of the transaction, with `nowait`, `skip_locked`, `read` (`FOR SHARE`) and `no_key` (PostgreSQL `FOR NO KEY UPDATE` / `FOR KEY SHARE`) options. It raises `QueryDefinitionError` outside a transaction and with count, exists and aggregates; on SQLite it's a no-op. See [transactions](transactions.md#row-locks-with-select_for_update).
 
@@ -24,16 +24,17 @@
     await Slot.objects.filter(id=1, taken__lt=F("capacity")).update(taken=Slot.taken + 1)
     ```
 
-* **`ne` filter operator**
+* **`ne` filter operator** ([#1962](https://github.com/ormar-orm/ormar/pull/1962))
 
     `filter(name__ne="a")` and `Model.name != "a"` filter by not equal (`IS NOT NULL` for `None`), also with column expressions (`filter(taken__ne=F("capacity"))`). A trailing `ne` is now always the operator, like the other operators: filter a field named `ne` with `ne__exact=...` (`location__ne=5` compares the `location` key, not `location.ne`).
 
-* **Conflict handling in `create()` and `bulk_create()`** ([#1016](https://github.com/ormar-orm/ormar/issues/1016), [#1437](https://github.com/ormar-orm/ormar/discussions/1437))
+* **Conflict handling in `create()` and `bulk_create()`** ([#1016](https://github.com/ormar-orm/ormar/issues/1016), [#1437](https://github.com/ormar-orm/ormar/discussions/1437), [#1964](https://github.com/ormar-orm/ormar/pull/1964))
 
     `create(on_conflict="ignore")` skips a row that conflicts with an existing one on any unique key and returns `None` instead of raising `IntegrityError`, so concurrent creates of the same row no longer fail. `bulk_create(on_conflict="ignore")` skips such rows, and `bulk_create(on_conflict="update", conflict_target=[...], update_fields=[...])` updates the existing rows (an upsert). See [conflict handling](queries/create.md#conflict-handling).
-* **Random order** ([#605](https://github.com/ormar-orm/ormar/issues/605))
 
-    `order_by("?")` or `order_by(ormar.random())` orders the rows randomly (`random()`, `rand()` on MySQL), also with `limit()`, `select_related()`, relations and `Prefetch` querysets.
+* **Random order** ([#605](https://github.com/ormar-orm/ormar/issues/605), [#1971](https://github.com/ormar-orm/ormar/pull/1971))
+
+    `order_by("?")` or `order_by(ormar.random())` orders the rows randomly (`random()`, `rand()` on MySQL and MariaDB), also with `limit()`, `select_related()`, relations and `Prefetch` querysets.
 
     ```python
     winners = await User.objects.order_by(ormar.random()).limit(3).all()
@@ -43,7 +44,7 @@
 
 * `get_or_create()` (also on relations) inside `database.transaction()` now runs the insert in a savepoint. On PostgreSQL a lost race used to abort the whole transaction and raise `InFailedSQLTransactionError`; now it returns the concurrent caller's row, and an unrelated constraint error is raised as `IntegrityError` with the transaction still usable. [#1960](https://github.com/ormar-orm/ormar/pull/1960)
 * `prefixed_table()` (`ormar.relations.aliases`) takes keyword arguments only. A positional call, e.g. when building a custom `where()` on a `select_related()` query, returned a second aliased table under the same name, so PostgreSQL failed with `table name "..." specified more than once`; it raises a `TypeError` now. The other cached helpers `build_prefixed_columns()`, `build_shared_row_plan()` and `key_dict_type()` are keyword-only too. [#1961](https://github.com/ormar-orm/ormar/pull/1961)
-* `order_by()` with `nulls_ordering` on a `mariadb://` database URL emulates `NULLS FIRST` / `NULLS LAST` like on MySQL; it used to emit the `NULLS` clause, which MariaDB rejects.
+* `order_by()` with `nulls_ordering` on a `mariadb://` database URL emulates `NULLS FIRST` / `NULLS LAST` like on MySQL; it used to emit the `NULLS` clause, which MariaDB rejects. [#1966](https://github.com/ormar-orm/ormar/pull/1966)
 * Paths to the through model of a many to many relation that omit the relation (e.g. `postcategory__sort_order` from `Post`) now resolve like the explicit `categories__postcategory__sort_order`: filters join the relation instead of producing a cross join, and `update()`/`delete()` reject them like other related filters. In a many to many `Prefetch` queryset, ordering by a through field raises a clear `QueryDefinitionError` (it was an SQL "no such column" error) and filtering on one, which used to be silently ignored, is rejected. Aggregates on through fields no longer raise `KeyError` for a single column, and multi-column results are keyed by the requested paths. [#1962](https://github.com/ormar-orm/ormar/pull/1962)
 
 ## 0.28.0
