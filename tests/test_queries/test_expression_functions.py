@@ -1,3 +1,4 @@
+from decimal import Decimal
 from typing import Optional
 
 import pytest
@@ -82,6 +83,17 @@ async def test_filter_with_functions(members):
     assert [member.name for member in await by_related.all()] == ["a"]
     assert await Member.objects.exclude(
         uses=Greatest(1, Coalesce(F("refunded"), F("uses")))
+    ).values_list("name", flatten=True) == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_literal_arguments_keep_their_type(members):
+    for limit in (3.5, Decimal("3.5")):
+        for function in (Greatest(F("read_id") * 0, limit), Least(F("read_id"), limit)):
+            queryset = Member.objects.filter(uses__lt=function)
+            assert [member.name for member in await queryset.all()] == ["a", "b"]
+    assert await Member.objects.filter(
+        uses__lt=Greatest(2.5, F("refunded") * 0)
     ).values_list("name", flatten=True) == ["b"]
 
 

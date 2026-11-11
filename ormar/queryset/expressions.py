@@ -16,6 +16,7 @@ import operator
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Optional
 
 from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql import operators as sql_operators
 from sqlalchemy.sql.compiler import SQLCompiler
 from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.functions import ReturnTypeFromArgs, coalesce
@@ -320,7 +321,9 @@ def function_clause(
 ) -> Any:
     """
     Build the SQL of a function. Literal arguments are bound like the literals
-    of ``expression_clause``, typed as the first expression argument.
+    of ``expression_clause``: named ``{slot}_{k}`` in order and typed from the
+    first expression argument and the literal, so ``Greatest(F("count"), 2.5)``
+    binds a float.
 
     :param node: function node
     :type node: Function
@@ -333,34 +336,28 @@ def function_clause(
     :return: SQL function call
     :rtype: Any
     """
-    clauses: list[Any] = []
-    literal_slots: dict[int, Optional[str]] = {}
+    # literals are named in argument order, but typed after the first
+    # expression argument, which may come later
+    expression_clauses: dict[int, Any] = {}
+    literal_keys: dict[int, Optional[str]] = {}
     for position, argument in enumerate(node._arguments):
         if isinstance(argument, Expression):
-            clauses.append(
-                expression_clause(
-                    node=argument, columns=columns, slot=slot, index=index
-                )
+            expression_clauses[position] = expression_clause(
+                node=argument, columns=columns, slot=slot, index=index
             )
         else:
-            clauses.append(argument)
-            literal_slots[position] = (
-                f"{slot}_{next(index)}" if slot is not None else None
-            )
-    reference_type = next(
-        clause.type
-        for position, clause in enumerate(clauses)
-        if position not in literal_slots
-    )
+            literal_keys[position] = f"{slot}_{next(index)}" if slot else None
+    reference_type = next(iter(expression_clauses.values())).type
     arguments = [
-        BindParameter(
-            key=literal_slots[position],
-            value=clause,
-            type_=reference_type,
-            unique=literal_slots[position] is None,
+        expression_clauses[position]
+        if position in expression_clauses
+        else BindParameter(
+            key=literal_keys[position],
+            value=argument,
+            unique=literal_keys[position] is None,
+            _compared_to_operator=sql_operators.eq,
+            _compared_to_type=reference_type,
         )
-        if position in literal_slots
-        else clause
-        for position, clause in enumerate(clauses)
+        for position, argument in enumerate(node._arguments)
     ]
     return SQL_FUNCTIONS[node._sql_name](*arguments)

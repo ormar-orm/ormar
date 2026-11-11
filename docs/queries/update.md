@@ -88,8 +88,8 @@ await Product.objects.update(each=True, price=Least(F("price"), F("max_price") *
   scalar `max()` / `min()`.
 * With a `NULL` argument PostgreSQL ignores it, while MySQL and SQLite return
   `NULL`. Wrap nullable fields in `Coalesce` for the same result everywhere.
-* Literal arguments are bound with the type of the first field or expression
-  argument.
+* Literal arguments are typed like in arithmetic, from the first field or expression
+  argument and the literal (`Greatest(F("count"), 2.5)` compares with a float).
 
 ## update_or_create
 
