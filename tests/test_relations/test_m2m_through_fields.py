@@ -386,3 +386,21 @@ async def test_implicit_through_paths_in_chains_proxies_and_prefetch() -> Any:
                     queryset=Category.objects.order_by("postcategory__sort_order"),
                 )
             ).all()
+
+
+@pytest.mark.asyncio
+async def test_aggregates_on_through_fields_keep_requested_keys() -> Any:
+    async with base_ormar_config.database:
+        post = await Post(title="Test post").save()
+        for name, sort_order in [("a", 3), ("b", 7)]:
+            await post.categories.create(
+                name=name, postcategory={"sort_order": sort_order}
+            )
+        queryset = Post.objects.select_related("categories")
+
+        assert await queryset.max("postcategory__sort_order") == 7
+        assert await queryset.min("categories__postcategory__sort_order") == 3
+        assert await queryset.max(["postcategory__sort_order", "title"]) == {
+            "postcategory__sort_order": 7,
+            "title": "Test post",
+        }

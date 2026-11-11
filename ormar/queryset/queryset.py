@@ -1220,7 +1220,8 @@ class QuerySet(Generic[T]):
             result = await executor.fetch_one(
                 query=template.statement, params=template.params
             )
-        return dict(result) if len(result) > 1 else result[columns[0]]  # type: ignore
+        values_by_column = dict(zip(columns, result.values()))  # type: ignore
+        return values_by_column if len(columns) > 1 else values_by_column[columns[0]]
 
     async def max(self, columns: Union[str, list[str]]) -> Any:  # noqa: A003
         """
