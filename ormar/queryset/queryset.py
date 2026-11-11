@@ -36,6 +36,7 @@ from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.expressions import (
     Expression,
+    Random,
     expression_clause,
     expression_key,
     expression_params,
@@ -1023,7 +1024,7 @@ class QuerySet(Generic[T]):
         return self.fields(columns=columns, slot="exclude")
 
     def order_by(
-        self, columns: Union[list, str, OrderAction, RandomOrder]
+        self, columns: Union[list, str, OrderAction, RandomOrder, Random]
     ) -> "QuerySet[T]":
         """
         With `order_by()` you can order the results from database based on your
@@ -1051,7 +1052,7 @@ class QuerySet(Generic[T]):
 
         To sort in descending order provide a hyphen in front of the field name
 
-        To sort randomly provide ``"?"`` or ``ormar.random()``
+        To sort randomly provide ``"?"``, ``ormar.random()`` or ``ormar.Random()``
 
         :param columns: columns by which models should be sorted
         :type columns: Union[list, str]

@@ -13,6 +13,14 @@
     await Pass.objects.filter(id=1).update(refunded=Coalesce(F("refunded"), 0) + amount)
     ```
 
+* **`Random()` in column expressions**
+
+    A random float in `[0, 1)` per row for filters and `update()`, also accepted by `order_by()` like `"?"` and `ormar.random()`.
+
+    ```python
+    await Player.objects.update(each=True, score=Random())
+    ```
+
 ## 0.29.0
 
 ### 🆕 Features

@@ -20,9 +20,9 @@ You can use following methods to filter the data (sql where clause).
 
 And following methods to sort the data (sql order by clause).
 
-* `order_by(columns:Union[list, str, OrderAction, RandomOrder]) -> QuerySet`
+* `order_by(columns:Union[list, str, OrderAction, RandomOrder, Random]) -> QuerySet`
 * `QuerysetProxy`
-    * `QuerysetProxy.order_by(columns:Union[list, str, OrderAction, RandomOrder])` method
+    * `QuerysetProxy.order_by(columns:Union[list, str, OrderAction, RandomOrder, Random])` method
 
 ## Filtering
 
@@ -227,8 +227,8 @@ A field of a related model is joined automatically, like in a filter on that
 relation. Through a reverse foreign key or a many-to-many relation the
 expression is compared per related row, as in `filter(tracks__position=1)`.
 
-Expressions can also use the functions `ormar.Greatest`, `ormar.Least` and
-`ormar.Coalesce`, see [update](update.md#functions):
+Expressions can also use the functions `ormar.Greatest`, `ormar.Least`,
+`ormar.Coalesce` and `ormar.Random`, see [update](update.md#functions):
 
 ```python
 await Track.objects.filter(play_count__gt=Greatest(F("position"), 10)).all()
@@ -732,7 +732,7 @@ objects from other side of the relation.
 
 ### order_by
 
-`order_by(columns: Union[list, str, OrderAction, RandomOrder]) -> QuerySet`
+`order_by(columns: Union[list, str, OrderAction, RandomOrder, Random]) -> QuerySet`
 
 With `order_by()` you can order the results from database based on your choice of
 fields.
@@ -851,8 +851,8 @@ assert owner.toys[1].name == "Toy 1"
 
 #### Random order
 
-`"?"` or `ormar.random()` orders the rows randomly, with `random()` (`rand()` on
-MySQL and MariaDB):
+`"?"`, `ormar.random()` or `ormar.Random()` orders the rows randomly, with
+`random()` (`rand()` on MySQL and MariaDB):
 
 ```python
 # three random users

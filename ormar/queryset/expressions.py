@@ -5,6 +5,7 @@ database, used as filter values and as values of ``QuerySet.update()``::
     Slot.objects.filter(taken__lt=F("capacity"))
     Slot.objects.filter(id=1).update(taken=Slot.taken + 1)
     Member.objects.filter(id=1).update(read_id=Greatest(F("read_id"), 10))
+    Player.objects.update(each=True, score=Random())
 
 ``Model.field`` accessors are expressions themselves, ``F("path")`` names a
 field by its path. Expression classes define only dunders and underscored
@@ -19,7 +20,8 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import operators as sql_operators
 from sqlalchemy.sql.compiler import SQLCompiler
 from sqlalchemy.sql.elements import BindParameter
-from sqlalchemy.sql.functions import ReturnTypeFromArgs, coalesce
+from sqlalchemy.sql.functions import GenericFunction, ReturnTypeFromArgs, coalesce
+from sqlalchemy.types import Float
 
 from ormar.exceptions import QueryDefinitionError
 
@@ -158,6 +160,13 @@ class Coalesce(Function):
     _sql_name = "coalesce"
 
 
+class Random(Expression):
+    """
+    Random float from 0 (inclusive) to 1 (exclusive), drawn by the database
+    for each row: ``update(each=True, score=Random())``, ``Random() * 100``.
+    """
+
+
 class GreatestOf(ReturnTypeFromArgs):
     """SQL ``greatest()``, the scalar ``max()`` on SQLite."""
 
@@ -196,6 +205,37 @@ def compile_least_on_sqlite(
     return f"min({compiler.process(element.clauses, **kwargs)})"
 
 
+class RandomFloat(GenericFunction):
+    """
+    SQL ``random()`` returning a float in ``[0, 1)``: ``rand()`` on MySQL, the
+    low 53 bits of SQLite's 64-bit integer ``random()`` scaled into the range.
+    """
+
+    name = "random"
+    type = Float()
+    inherit_cache = True
+    _register = False
+
+
+@compiles(RandomFloat, "mysql")
+def compile_random_on_mysql(
+    element: RandomFloat, compiler: SQLCompiler, **kwargs: Any
+) -> str:
+    """MySQL names the function ``rand()``."""
+    return "rand()"
+
+
+@compiles(RandomFloat, "sqlite")
+def compile_random_on_sqlite(
+    element: RandomFloat, compiler: SQLCompiler, **kwargs: Any
+) -> str:
+    """
+    SQLite's ``random()`` is a 64-bit integer; its remainder by 2**53 is exact
+    as a double, so the absolute value divided by 2**53 stays below 1.
+    """
+    return "(abs(random() % 9007199254740992) / 9007199254740992.0)"
+
+
 SQL_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "greatest": GreatestOf,
     "least": LeastOf,
@@ -205,7 +245,8 @@ SQL_FUNCTIONS: dict[str, Callable[..., Any]] = {
 
 def expression_leaves(node: Any) -> Iterator[Any]:
     """
-    Yield the fields (``F``) and literals of an expression, left to right.
+    Yield the fields (``F``) and literals of an expression, left to right;
+    ``Random()`` is neither.
 
     :param node: expression node
     :type node: Any
@@ -218,7 +259,7 @@ def expression_leaves(node: Any) -> Iterator[Any]:
     elif isinstance(node, Function):
         for argument in node._arguments:
             yield from expression_leaves(node=argument)
-    else:
+    elif not isinstance(node, Random):
         yield node
 
 
@@ -229,6 +270,7 @@ def expression_key(node: Any) -> Any:
 
         F("a") + 1  # -> (operator.add, ("f", "a"), int)
         Greatest(F("a"), 0)  # -> ("greatest", (("f", "a"), int))
+        Random()  # -> ("random",)
 
     :param node: expression node
     :type node: Any
@@ -246,6 +288,8 @@ def expression_key(node: Any) -> Any:
             node._sql_name,
             tuple(expression_key(node=argument) for argument in node._arguments),
         )
+    if isinstance(node, Random):
+        return ("random",)
     return ("f", node._path) if isinstance(node, F) else type(node)
 
 
@@ -296,6 +340,8 @@ def expression_clause(
     """
     if isinstance(node, F):
         return columns[node._path].aliased_column
+    if isinstance(node, Random):
+        return RandomFloat()
     index = index or itertools.count()
     if isinstance(node, Function):
         return function_clause(node=node, columns=columns, slot=slot, index=index)

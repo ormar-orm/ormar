@@ -10,7 +10,7 @@ from ormar.queryset.actions import (
     random,
 )
 from ormar.queryset.clause import NullsOrdering, and_, or_
-from ormar.queryset.expressions import Coalesce, F, Greatest, Least
+from ormar.queryset.expressions import Coalesce, F, Greatest, Least, Random
 from ormar.queryset.field_accessor import FieldAccessor
 from ormar.queryset.prefetch import Prefetch
 from ormar.queryset.queries import FilterQuery, LimitQuery, OffsetQuery, OrderQuery
@@ -33,6 +33,7 @@ __all__ = [
     "F",
     "Greatest",
     "Least",
+    "Random",
     "FieldAccessor",
     "Prefetch",
     "random",

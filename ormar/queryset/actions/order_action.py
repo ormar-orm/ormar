@@ -6,6 +6,7 @@ import sqlalchemy
 from sqlalchemy import text
 
 from ormar.queryset.actions.query_action import QueryAction  # noqa: I100, I202
+from ormar.queryset.expressions import Random
 
 if TYPE_CHECKING:  # pragma: nocover
     from ormar import Model
@@ -323,14 +324,15 @@ def expand_pk_orders(model_cls: type["Model"], columns: list[Any]) -> list[Order
 
     :param model_cls: ordered model
     :type model_cls: type[Model]
-    :param columns: order strings, ``OrderAction`` or ``RandomOrder`` instances
+    :param columns: order strings, ``OrderAction``, ``RandomOrder`` or
+        ``Random`` instances
     :type columns: list[Any]
     :return: order actions with ``pk`` expanded
     :rtype: list[OrderAction]
     """
     expanded: list[OrderAction] = []
     for column in columns:
-        if isinstance(column, RandomOrder):
+        if isinstance(column, (RandomOrder, Random)):
             expanded.append(RandomOrderAction(model_cls=model_cls))
         elif isinstance(column, str):
             expanded.extend(order_actions_for(order_str=column, model_cls=model_cls))

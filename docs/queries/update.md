@@ -91,6 +91,21 @@ await Product.objects.update(each=True, price=Least(F("price"), F("max_price") *
 * Literal arguments are typed like in arithmetic, from the first field or expression
   argument and the literal (`Greatest(F("count"), 2.5)` compares with a float).
 
+`ormar.Random()` is a random float from 0 (inclusive) to 1 (exclusive), drawn by
+the database for each row:
+
+```python
+from ormar import F, Random
+
+await Player.objects.update(each=True, score=Random())
+await Player.objects.update(each=True, score=Random() * 10 + F("bonus"))
+```
+
+It compiles to `random()` on PostgreSQL, `rand()` on MySQL and on SQLite to its
+integer `random()` scaled into the same range. Use it with float or decimal
+columns: an integer column rounds the value on PostgreSQL and MySQL, while SQLite
+stores the fraction.
+
 ## update_or_create
 
 `update_or_create(**kwargs) -> Model`
