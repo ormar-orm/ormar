@@ -42,8 +42,8 @@ JSON field accepts a value to dump or a JSON string.
 
     To update whole database table `each=True` needs to be provided as a safety switch
 
-Filters may follow relations of any kind, the update changes exactly the rows `all()`
-of the same queryset returns:
+Filters may follow relations of any kind, the update changes the rows the same filters
+select in `all()` (limit and offset do not apply to updates):
 
 ```python
 await Booking.objects.filter(
@@ -92,7 +92,7 @@ await Track.objects.update(each=True, position=F("album__label__bonus") + Track.
 ```
 
 * The related tables are joined in the `UPDATE` (`UPDATE ... FROM` on PostgreSQL
-  and SQLite, a multi-table `UPDATE` on MySQL and MariaDB).
+  and SQLite 3.33+, a multi-table `UPDATE` on MySQL and MariaDB).
 * Rows with no related row on the path (a `NULL` foreign key) are not updated and
   not counted in the returned number.
 * Reverse and many to many relations are rejected with `QueryDefinitionError`, as

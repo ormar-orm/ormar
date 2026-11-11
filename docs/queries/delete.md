@@ -26,8 +26,8 @@ If you do not provide this flag or a filter a `QueryDefinitionError` will be rai
 
 Return number of rows deleted.
 
-Filters may follow relations of any kind, the delete removes exactly the rows `all()`
-of the same queryset returns:
+Filters may follow relations of any kind, the delete removes the rows the same filters
+select in `all()` (limit and offset do not apply to deletes):
 
 ```python
 await Booking.objects.filter(training__instructor=instructor).delete()

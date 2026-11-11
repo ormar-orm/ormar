@@ -591,7 +591,7 @@ class QuerySet(Generic[T]):
 
         Filters on related models restrict the rows to the primary keys the
         same queryset selects (see ``matched_rows_clause``), so the statement
-        touches exactly the rows ``all()`` returns. Expressions reading related
+        touches the rows the filters select in ``all()``. Expressions reading related
         models join those tables in the statement (``UPDATE ... FROM`` or a
         multi-table ``UPDATE`` on MySQL, as SQLAlchemy renders it).
 
@@ -1362,14 +1362,14 @@ class QuerySet(Generic[T]):
         You have to either pass a filter to narrow down a query or explicitly pass
         each=True flag to affect whole table.
 
+        Filters on related models (``filter(album__name="A")``) are supported,
+        the update touches the rows the same filters select in ``all()`` (limit
+        and offset do not apply). Expressions may read fields of models reached
+        through foreign keys (``position=F("album__rank")``); rows without a
+        related row on such a path are not updated and not counted.
+
         :param each: flag if whole table should be affected if no filter is passed
         :type each: bool
-        Filters on related models (``filter(album__name="A")``) are supported,
-        the update touches the rows ``all()`` would return. Expressions may read
-        fields of models reached through foreign keys
-        (``position=F("album__rank")``); rows without a related row on such a
-        path are not updated and not counted.
-
         :param kwargs: fields names and proper value types, or column expressions
             (``taken=Slot.taken + 1``, ``position=F("album__rank")``)
         :type kwargs: Any
@@ -1403,6 +1403,7 @@ class QuerySet(Generic[T]):
         for name, node in expressions.items():
             columns = expression_columns(node=node, model=self.model)
             for column in columns.values():
+                # only validates the path here, the joins are built with the statement
                 forward_join_conditions(model=self.model, path=column.related_parts)
             read = [
                 column.field_name
@@ -1443,15 +1444,16 @@ class QuerySet(Generic[T]):
         You have to either pass a filter to narrow down a query or explicitly pass
         each=True flag to affect whole table.
 
+        Filters on related models (``filter(training__instructor=instructor)``)
+        are supported, the delete removes the rows the same filters select in
+        ``all()`` (limit and offset do not apply).
+
         :param each: flag if whole table should be affected if no filter is passed
         :type each: bool
-        Filters on related models (``filter(training__instructor=instructor)``)
-        are supported, the delete removes the rows ``all()`` would return.
-
         :param kwargs: fields names and proper value types
         :type kwargs: Any
         :return: number of deleted rows
-        :rtype:int
+        :rtype: int
         """
         self.model.verify_writable()
         if kwargs or args:

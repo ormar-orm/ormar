@@ -277,8 +277,10 @@ async def test_update_and_delete_with_related_filters_touch_matched_rows():
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
             category = await Category.objects.create(name="x")
+            other = await Category.objects.create(name="y")
             await Note.objects.create(text="a", category=category)
             await Note.objects.create(text="b")
+            await Note.objects.create(text="c", category=other)
 
             for index, queryset in enumerate(
                 [
@@ -295,11 +297,11 @@ async def test_update_and_delete_with_related_filters_touch_matched_rows():
                 updated = await Note.objects.filter(text=f"z{index}").all()
                 assert sorted(note.id for note in updated) == expected
 
-            uncategorized = Note.objects.exclude(category__name="x")
-            expected = len(await uncategorized.all())
-            assert await uncategorized.delete() == expected
+            other_category = Note.objects.exclude(category__name="x")
+            assert [note.text for note in await other_category.all()] == ["z1"]
+            assert await other_category.delete() == 1
             assert await Note.objects.delete(category__name="x") == 1
-            assert await Note.objects.count() == 1 - expected
+            assert await Note.objects.values_list("text", flatten=True) == ["z2"]
 
 
 @pytest.mark.asyncio
