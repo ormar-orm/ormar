@@ -13,6 +13,21 @@
         jobs = await Job.objects.select_for_update(skip_locked=True).order_by("id").limit(10).all()
     ```
 
+* **Column expressions in filters and `update()`** ([#782](https://github.com/ormar-orm/ormar/issues/782), [#1962](https://github.com/ormar-orm/ormar/pull/1962))
+
+    Field accessors and the new `ormar.F("field")` combine with `+`, `-` and `*` into expressions the database evaluates: compare two columns in a filter, also of related models (joined automatically), or update a column from its own value in one statement, so concurrent updates are not lost.
+
+    ```python
+    await Slot.objects.filter(taken__lt=F("capacity")).all()
+    await Slot.objects.filter(taken__lt=F("owner__limit")).all()
+    await Slot.objects.filter(Slot.taken < Slot.capacity).all()
+    await Slot.objects.filter(id=1, taken__lt=F("capacity")).update(taken=Slot.taken + 1)
+    ```
+
+* **`ne` filter operator**
+
+    `filter(name__ne="a")` and `Model.name != "a"` filter by not equal (`IS NOT NULL` for `None`), also with column expressions (`filter(taken__ne=F("capacity"))`). A trailing `ne` is now always the operator, like the other operators: filter a field named `ne` with `ne__exact=...` (`location__ne=5` compares the `location` key, not `location.ne`).
+
 * **Conflict handling in `create()` and `bulk_create()`** ([#1016](https://github.com/ormar-orm/ormar/issues/1016), [#1437](https://github.com/ormar-orm/ormar/discussions/1437))
 
     `create(on_conflict="ignore")` skips a row that conflicts with an existing one on any unique key and returns `None` instead of raising `IntegrityError`, so concurrent creates of the same row no longer fail. `bulk_create(on_conflict="ignore")` skips such rows, and `bulk_create(on_conflict="update", conflict_target=[...], update_fields=[...])` updates the existing rows (an upsert). See [conflict handling](queries/create.md#conflict-handling).
@@ -22,6 +37,7 @@
 * `get_or_create()` (also on relations) inside `database.transaction()` now runs the insert in a savepoint. On PostgreSQL a lost race used to abort the whole transaction and raise `InFailedSQLTransactionError`; now it returns the concurrent caller's row, and an unrelated constraint error is raised as `IntegrityError` with the transaction still usable. [#1960](https://github.com/ormar-orm/ormar/pull/1960)
 * `prefixed_table()` (`ormar.relations.aliases`) takes keyword arguments only. A positional call, e.g. when building a custom `where()` on a `select_related()` query, returned a second aliased table under the same name, so PostgreSQL failed with `table name "..." specified more than once`; it raises a `TypeError` now. The other cached helpers `build_prefixed_columns()`, `build_shared_row_plan()` and `key_dict_type()` are keyword-only too. [#1961](https://github.com/ormar-orm/ormar/pull/1961)
 * `order_by()` with `nulls_ordering` on a `mariadb://` database URL emulates `NULLS FIRST` / `NULLS LAST` like on MySQL; it used to emit the `NULLS` clause, which MariaDB rejects.
+* Paths to the through model of a many to many relation that omit the relation (e.g. `postcategory__sort_order` from `Post`) now resolve like the explicit `categories__postcategory__sort_order`: filters join the relation instead of producing a cross join, and `update()`/`delete()` reject them like other related filters. In a many to many `Prefetch` queryset, ordering by a through field raises a clear `QueryDefinitionError` (it was an SQL "no such column" error) and filtering on one, which used to be silently ignored, is rejected. Aggregates on through fields no longer raise `KeyError` for a single column, and multi-column results are keyed by the requested paths. [#1962](https://github.com/ormar-orm/ormar/pull/1962)
 
 ## 0.28.0
 

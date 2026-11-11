@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 import sqlalchemy
 
 from ormar.queryset.utils import get_relationship_alias_model_and_str  # noqa: I202
+from ormar.relations.aliases import prefixed_table
 
 if TYPE_CHECKING:  # pragma: nocover
     from ormar import Model
@@ -55,6 +56,18 @@ class QueryAction(abc.ABC):
     def table(self) -> sqlalchemy.Table:
         """Shortcut to sqlalchemy Table of filtered target model"""
         return self.target_model.ormar_config.table
+
+    @property
+    def aliased_table(self) -> Any:
+        """Table of the target model under the alias of its join, if joined"""
+        if not self.table_prefix:
+            return self.table
+        return prefixed_table(alias=self.table_prefix, table=self.table)
+
+    @property
+    def aliased_column(self) -> Any:
+        """Column of the target field in the aliased table of its join"""
+        return self.aliased_table.c[self.column.name]
 
     @property
     def column(self) -> sqlalchemy.Column:

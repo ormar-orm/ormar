@@ -63,8 +63,15 @@ tracks = Track.objects.filter(album__name="Fantasies").all()
 
 You can use special filter suffix to change the filter operands:
 
+A trailing operator name is always the operator, filter a field named like one
+(e.g. `gt`) with an explicit operator: `gt__exact=1`.
+
 *  **exact** - exact match to value, sql `column = <VALUE>` 
        * can be written as`album__name__exact='Malibu'`
+*  **ne** - not equal, sql `column != <VALUE>` (`column IS NOT NULL` for `None`)
+       * can be written as`album__name__ne='Malibu'`
+       * rows with `NULL` in the column never match, include them with
+         `ormar.or_(x__ne=v, x__isnull=True)`
 *  **iexact** - exact match sql `column = <VALUE>` (case insensitive)
       * can be written as`album__name__iexact='malibu'`
 *  **contains** - sql `column LIKE '%<VALUE>%'`
@@ -112,6 +119,10 @@ Product.objects.filter(
 
 *  **exact** - exact match to value, sql `column = <VALUE>` 
       * can be written as `Track.album.name == 'Malibu`
+*  **ne** - not equal, sql `column != <VALUE>` (`column IS NOT NULL` for `None`)
+      * can be written as `Track.album.name != 'Malibu'`
+      * rows with `NULL` in the column never match, include them with
+        `ormar.or_(Track.album.name != 'Malibu', Track.album.name.isnull(True))`
 *  **iexact** - exact match sql `column = <VALUE>` (case insensitive)
       * can be written as `Track.album.name.iexact('malibu')`
 *  **contains** - sql `column LIKE '%<VALUE>%'`
@@ -190,6 +201,31 @@ Product.objects.filter(
     Note that you do not have to specify the `%` wildcard in contains and other
     filters, it's added for you. If you include `%` in your search value it will be escaped
     and treated as literal percentage sign inside the text.
+
+### Comparing columns
+
+A filter value can be another column of the row, with a field accessor
+(`Model.field`) or `ormar.F("field")`, optionally combined with `+`, `-` and `*`.
+Expressions work with the `exact`, `ne`, `gt`, `gte`, `lt` and `lte` operators, in
+`filter()`, `exclude()`, `or_()` / `and_()` and the methods taking filters (`get()`,
+`count()`, `exists()`, `values()` and others).
+
+```python
+# WHERE tracks.play_count > tracks.position * 10
+await Track.objects.filter(play_count__gt=F("position") * 10).all()
+await Track.objects.filter(Track.play_count > Track.position * 10).all()
+
+# fields of related models, joined like in filter(album__name="Malibu")
+await Track.objects.filter(name=F("album__name")).all()
+await Track.objects.filter(Track.name == Track.album.name).all()
+
+# through a reverse relation, compared per track
+await Album.objects.filter(id__lt=F("tracks__position")).all()
+```
+
+A field of a related model is joined automatically, like in a filter on that
+relation. Through a reverse foreign key or a many-to-many relation the
+expression is compared per related row, as in `filter(tracks__position=1)`.
 
 ### exclude
 

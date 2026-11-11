@@ -29,6 +29,7 @@ from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.sqltypes import TupleType
 
 from ormar.queryset.actions.filter_action import FILTER_OPERATORS
+from ormar.queryset.expressions import expression_params
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.queryset.actions.filter_action import FilterAction
@@ -50,6 +51,7 @@ PK_SLOT = "ormar_pk"
 # values exactly like a plain ``column <op> value`` comparison would.
 COMPARISON_OPERATORS = {
     "__eq__": operators.eq,
+    "__ne__": operators.ne,
     "like": operators.like_op,
     "ilike": operators.ilike_op,
     "in_": operators.in_op,
@@ -88,7 +90,9 @@ def template_params(
     params = {}
     for index, action in enumerate(actions):
         if action.binds_slot():
-            params[f"ormar_p{index}"] = action.bound_value()
+            params.update(
+                expression_params(value=action.bound_value(), slot=f"ormar_p{index}")
+            )
     if limit is not None:
         params[LIMIT_SLOT] = limit
     if offset:
