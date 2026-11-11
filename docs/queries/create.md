@@ -220,6 +220,13 @@ saved, the skipped ones too.
     used only on PostgreSQL and SQLite, which reject it when it does not match a unique
     key or constraint. MariaDB is not tested.
 
+!!!warning
+    On MySQL a multi-row `bulk_create(on_conflict="update")` of a model with `on_update`
+    fields stores the `on_update` values in session user variables
+    (`@ormar_on_update_<n>`) right before the insert. Do not run such calls concurrently
+    on one connection (e.g. with `asyncio.gather()` inside one `transaction()`): one
+    call can overwrite the values of the other. Separate connections are not affected.
+
 !!!note
     SQLite supports `ON CONFLICT` with `RETURNING` from version 3.35.
 
