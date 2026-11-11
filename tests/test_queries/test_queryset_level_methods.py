@@ -273,38 +273,33 @@ async def test_get_or_create_with_defaults():
 
 
 @pytest.mark.asyncio
-async def test_update_and_delete_with_related_filter_raise():
+async def test_update_and_delete_with_related_filters_touch_matched_rows():
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
             category = await Category.objects.create(name="x")
             await Note.objects.create(text="a", category=category)
             await Note.objects.create(text="b")
 
-            with pytest.raises(QueryDefinitionError):
-                await Note.objects.filter(category__name="x").update(text="z")
-            with pytest.raises(QueryDefinitionError):
-                await Note.objects.exclude(category__name="x").update(text="z")
-            with pytest.raises(QueryDefinitionError):
-                await Note.objects.filter(
-                    ormar.or_(category__name="x", text="b")
-                ).delete()
-            with pytest.raises(QueryDefinitionError):
-                await Note.objects.delete(category__name="x")
+            for index, queryset in enumerate(
+                [
+                    Note.objects.filter(category__name="x"),
+                    Note.objects.exclude(category__name="x"),
+                    Note.objects.filter(ormar.or_(category__name="x", text="b")),
+                    Note.objects.filter(
+                        ormar.and_(ormar.or_(category__name__icontains="x"))
+                    ),
+                ]
+            ):
+                expected = sorted(note.id for note in await queryset.all())
+                assert await queryset.update(text=f"z{index}") == len(expected)
+                updated = await Note.objects.filter(text=f"z{index}").all()
+                assert sorted(note.id for note in updated) == expected
 
-            with pytest.raises(QueryDefinitionError):
-                await Note.objects.filter(
-                    ormar.and_(ormar.or_(category__name__icontains="x"))
-                ).delete()
-            with pytest.raises(QueryDefinitionError):
-                await Note.objects.exclude(category__name="x").delete()
-
-            assert await Note.objects.filter(text="z").count() == 0
-            assert await Note.objects.count() == 2
-
-            assert await Note.objects.filter(category=category).update(text="z") == 1
-            assert await Note.objects.filter(text="z").count() == 1
-            assert await Note.objects.filter(category=category).delete() == 1
-            assert await Note.objects.count() == 1
+            uncategorized = Note.objects.exclude(category__name="x")
+            expected = len(await uncategorized.all())
+            assert await uncategorized.delete() == expected
+            assert await Note.objects.delete(category__name="x") == 1
+            assert await Note.objects.count() == 1 - expected
 
 
 @pytest.mark.asyncio
