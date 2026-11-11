@@ -26,7 +26,7 @@
 
 * **`ne` filter operator**
 
-    `filter(name__ne="a")` and `Model.name != "a"` filter by not equal (`IS NOT NULL` for `None`), also with column expressions (`filter(taken__ne=F("capacity"))`).
+    `filter(name__ne="a")` and `Model.name != "a"` filter by not equal (`IS NOT NULL` for `None`), also with column expressions (`filter(taken__ne=F("capacity"))`). A trailing `ne` is now always the operator, like the other operators: filter a field named `ne` with `ne__exact=...` (`location__ne=5` compares the `location` key, not `location.ne`).
 
 * **Conflict handling in `create()` and `bulk_create()`** ([#1016](https://github.com/ormar-orm/ormar/issues/1016), [#1437](https://github.com/ormar-orm/ormar/discussions/1437))
 

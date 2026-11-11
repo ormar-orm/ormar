@@ -5,6 +5,7 @@ import pytest_asyncio
 
 import ormar
 from ormar import F
+from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.templates import template_cache_for
 from tests.lifespan import init_tests
 from tests.settings import create_config
@@ -127,7 +128,7 @@ async def test_ne_filters_updates_and_deletes(tracks):
 
 
 @pytest.mark.asyncio
-async def test_field_named_ne_takes_precedence_over_the_operator(tracks):
+async def test_operator_takes_precedence_over_a_field_named_like_it(tracks):
     first = await Location.objects.create(ne=5)
     second = await Location.objects.create(ne=7)
     await Corner.objects.create(ne=1, location=first)
@@ -136,10 +137,13 @@ async def test_field_named_ne_takes_precedence_over_the_operator(tracks):
     async def corners(queryset):
         return sorted(corner.ne for corner in await queryset.all())
 
-    assert await corners(queryset=Corner.objects.filter(ne=1)) == [1]
-    assert await corners(queryset=Corner.objects.filter(location__ne=5)) == [1]
+    assert await corners(queryset=Corner.objects.filter(ne__exact=1)) == [1]
     assert await corners(queryset=Corner.objects.filter(ne__ne=1)) == [2]
     assert await corners(queryset=Corner.objects.filter(Corner.ne != 1)) == [2]
+    assert await corners(queryset=Corner.objects.filter(location__ne=first.id)) == [2]
+    assert await corners(queryset=Corner.objects.filter(location__ne__exact=5)) == [1]
     assert await corners(queryset=Corner.objects.filter(location__ne__ne=5)) == [2]
+    with pytest.raises(QueryDefinitionError, match="ne__exact"):
+        await Corner.objects.filter(ne=1).all()
     malibu = await Album.objects.get(name="Malibu")
     assert await names(queryset=Track.objects.filter(album__ne=malibu)) == ["Hits"]

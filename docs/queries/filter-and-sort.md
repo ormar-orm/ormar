@@ -63,13 +63,15 @@ tracks = Track.objects.filter(album__name="Fantasies").all()
 
 You can use special filter suffix to change the filter operands:
 
+A trailing operator name is always the operator, filter a field named like one
+(e.g. `gt`) with an explicit operator: `gt__exact=1`.
+
 *  **exact** - exact match to value, sql `column = <VALUE>` 
        * can be written as`album__name__exact='Malibu'`
 *  **ne** - not equal, sql `column != <VALUE>` (`column IS NOT NULL` for `None`)
        * can be written as`album__name__ne='Malibu'`
        * rows with `NULL` in the column never match, include them with
          `ormar.or_(x__ne=v, x__isnull=True)`
-       * a field named `ne` takes precedence over the operator, compare it with `ne__ne=...`
 *  **iexact** - exact match sql `column = <VALUE>` (case insensitive)
       * can be written as`album__name__iexact='malibu'`
 *  **contains** - sql `column LIKE '%<VALUE>%'`

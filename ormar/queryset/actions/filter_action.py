@@ -51,35 +51,29 @@ METHODS_TO_OPERATORS = {
 ESCAPE_CHARACTERS = ["%", "_"]
 
 
-def split_filter_key(model_cls: type["Model"], key: str) -> tuple[str, list[str]]:
+def split_filter_key(key: str) -> tuple[str, list[str]]:
     """
     Split a filter key into its operator and the path of the filtered field.
-    A field named ``ne`` takes precedence over the ``ne`` operator::
+    A trailing operator name is always the operator, so a field named like an
+    operator is filtered with an explicit one::
 
-        split_filter_key(model_cls=Track, key="album__name__ne")
-        # -> ("ne", ["album", "name"])
-        split_filter_key(model_cls=Corner, key="ne")  # Corner has a field ne
-        # -> ("exact", ["ne"])
+        split_filter_key(key="album__name__ne")  # -> ("ne", ["album", "name"])
+        split_filter_key(key="gt__exact")  # field gt -> ("exact", ["gt"])
 
-    :param model_cls: model the filter starts from
-    :type model_cls: type[Model]
     :param key: filter key
     :type key: str
+    :raises QueryDefinitionError: if the key is only an operator
     :return: operator (``exact`` when none is given) and the field path parts
     :rtype: tuple[str, list[str]]
     """
     parts = key.split("__")
     if parts[-1] not in FILTER_OPERATORS:
         return "exact", parts
-    if parts[-1] == "ne":
-        target = model_cls
-        for part in parts[:-1]:
-            field = target.ormar_config.model_fields.get(part)
-            if field is None or not field.is_relation:
-                return "ne", parts[:-1]
-            target = field.to
-        if "ne" in target.ormar_config.model_fields:
-            return "exact", parts
+    if len(parts) == 1:
+        raise QueryDefinitionError(
+            f"Filter key '{key}' is an operator without a field, "
+            f"filter a field named '{key}' with '{key}__exact'"
+        )
     return parts[-1], parts[:-1]
 
 
@@ -136,9 +130,7 @@ class FilterAction(QueryAction):
         )
 
     def _split_value_into_parts(self, query_str: str) -> None:
-        self.operator, path = split_filter_key(
-            model_cls=self.source_model, key=query_str
-        )
+        self.operator, path = split_filter_key(key=query_str)
         self.field_name = path[-1]
         self.related_parts = path[:-1]
 

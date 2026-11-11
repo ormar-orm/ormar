@@ -342,7 +342,7 @@ def multi_column_filter_actions(
     :return: filter actions, ``None`` if the key is not such a filter
     :rtype: Optional[list[FilterAction]]
     """
-    operator, path = split_filter_key(model_cls=model_cls, key=name)
+    operator, path = split_filter_key(key=name)
     target = model_cls
     field = None
     for part in path:
