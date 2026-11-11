@@ -20,9 +20,9 @@ You can use following methods to filter the data (sql where clause).
 
 And following methods to sort the data (sql order by clause).
 
-* `order_by(columns:Union[list, str, OrderAction]) -> QuerySet`
+* `order_by(columns:Union[list, str, OrderAction, RandomOrder]) -> QuerySet`
 * `QuerysetProxy`
-    * `QuerysetProxy.order_by(columns:Union[list, str, OrderAction])` method
+    * `QuerysetProxy.order_by(columns:Union[list, str, OrderAction, RandomOrder])` method
 
 ## Filtering
 
@@ -725,7 +725,7 @@ objects from other side of the relation.
 
 ### order_by
 
-`order_by(columns: Union[list, str, OrderAction]) -> QuerySet`
+`order_by(columns: Union[list, str, OrderAction, RandomOrder]) -> QuerySet`
 
 With `order_by()` you can order the results from database based on your choice of
 fields.
@@ -841,6 +841,33 @@ assert owner.toys[1].name == "Toy 1"
     So operations like `filter()`, `select_related()`, `limit()` and `offset()` etc. can be chained.
     
     Something like `Track.objects.select_related("album").filter(album__name="Malibu").offset(1).limit(1).all()`
+
+#### Random order
+
+`"?"` or `ormar.random()` orders the rows randomly, with `random()` (`rand()` on
+MySQL and MariaDB):
+
+```python
+# three random users
+users = await User.objects.order_by("?").limit(3).all()
+users = await User.objects.order_by(ormar.random()).limit(3).all()
+
+# random order within the same name
+users = await User.objects.order_by(["name", "?"]).all()
+```
+
+It replaces the default primary key order of the queried model, so `first()` and
+`get()` return a random row. With `select_related()` and `limit()` the limit
+picks random main models and each keeps all its related rows.
+
+!!!note
+    The random key comes first in the whole query, so related rows loaded with
+    `select_related()` of a reverse foreign key or many to many relation come in
+    random order too. Load them with `prefetch_related()` to keep their order.
+
+!!!note
+    The database sorts the whole filtered table to pick the rows, so on large
+    tables filter the rows first.
 
 #### Controlling NULL placement with `nulls_ordering`
 

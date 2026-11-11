@@ -2,7 +2,13 @@
 Contains QuerySet and different Query classes to allow for constructing of sql queries.
 """
 
-from ormar.queryset.actions import FilterAction, OrderAction, SelectAction
+from ormar.queryset.actions import (
+    FilterAction,
+    OrderAction,
+    RandomOrder,
+    SelectAction,
+    random,
+)
 from ormar.queryset.clause import NullsOrdering, and_, or_
 from ormar.queryset.expressions import F
 from ormar.queryset.field_accessor import FieldAccessor
@@ -18,6 +24,7 @@ __all__ = [
     "OrderQuery",
     "FilterAction",
     "OrderAction",
+    "RandomOrder",
     "SelectAction",
     "NullsOrdering",
     "and_",
@@ -25,4 +32,5 @@ __all__ = [
     "F",
     "FieldAccessor",
     "Prefetch",
+    "random",
 ]

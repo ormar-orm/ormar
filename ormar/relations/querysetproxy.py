@@ -18,7 +18,7 @@ import ormar  # noqa: I100, I202
 from ormar.exceptions import ModelPersistenceError, NoMatch, QueryDefinitionError
 
 if TYPE_CHECKING:  # pragma no cover
-    from ormar import ManyToManyField, OrderAction, RelationType
+    from ormar import ManyToManyField, OrderAction, RandomOrder, RelationType
     from ormar.models import Model, T
     from ormar.queryset import QuerySet
     from ormar.queryset.prefetch import Prefetch
@@ -978,7 +978,9 @@ class QuerysetProxy(Generic[T]):
             relation=self.relation, type_=self.type_, to=self.to, qryset=queryset
         )
 
-    def order_by(self, columns: Union[list, str, "OrderAction"]) -> "QuerysetProxy[T]":
+    def order_by(
+        self, columns: Union[list, str, "OrderAction", "RandomOrder"]
+    ) -> "QuerysetProxy[T]":
         """
         With `order_by()` you can order the results from database based on your
         choice of fields.
@@ -1004,6 +1006,8 @@ class QuerysetProxy(Generic[T]):
         reverse virtual FK and `ManyToMany` fields.
 
         To sort in descending order provide a hyphen in front of the field name
+
+        To sort randomly provide ``"?"`` or ``ormar.random()``
 
         Actual call delegated to QuerySet.
 

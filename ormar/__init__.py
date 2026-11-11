@@ -83,8 +83,10 @@ from ormar.queryset import (
     OrderAction,
     Prefetch,
     QuerySet,
+    RandomOrder,
     and_,
     or_,
+    random,
 )
 from ormar.relations import RelationType
 from ormar.signals import Signal
@@ -147,6 +149,8 @@ __all__ = [
     "ManyToManyField",
     "ForeignKeyField",
     "OrderAction",
+    "RandomOrder",
+    "random",
     "NullsOrdering",
     "ExcludableItems",
     "and_",

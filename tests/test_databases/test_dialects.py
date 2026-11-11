@@ -60,6 +60,8 @@ def test_rules_flags():
     assert postgres_rules.cross_schema_foreign_keys
     assert sqlite_rules.foreign_keys_pragma and sqlite_rules.explicit_begin
     assert not mysql_rules.foreign_keys_pragma and not postgres_rules.explicit_begin
+    assert sqlite_rules.random_order == postgres_rules.random_order == "random()"
+    assert mysql_rules.random_order == "rand()"
 
 
 def integrity_error(*args):

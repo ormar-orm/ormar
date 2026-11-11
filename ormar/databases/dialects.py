@@ -77,6 +77,8 @@ class DialectRules:
     #: transactions send an explicit ``BEGIN`` so a released savepoint does
     #: not commit
     explicit_begin: ClassVar[bool] = False
+    #: function that orders rows randomly, used by ``order_by("?")``
+    random_order: ClassVar[str] = "random()"
 
     def __init__(self, *, backend_name: str) -> None:
         """
@@ -251,12 +253,13 @@ class PostgresRules(DialectRules):
 class MysqlRules(DialectRules):
     """
     MySQL and MariaDB: ``ON DUPLICATE KEY UPDATE`` inserts without RETURNING,
-    no ``NULLS FIRST`` / ``NULLS LAST`` and an AUTOCOMMIT engine.
+    no ``NULLS FIRST`` / ``NULLS LAST``, ``rand()`` and an AUTOCOMMIT engine.
     """
 
     autocommit_engine = True
     conflict_returning = False
     execute_many_with_trailing_binds = False
+    random_order = "rand()"
 
     def conflict_insert(
         self,

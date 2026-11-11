@@ -27,7 +27,11 @@ from ormar.exceptions import (
 )
 from ormar.models.row_registry import RowRegistry
 from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
-from ormar.queryset.actions.order_action import OrderAction, expand_pk_orders
+from ormar.queryset.actions.order_action import (
+    OrderAction,
+    RandomOrder,
+    expand_pk_orders,
+)
 from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.expressions import (
@@ -1018,7 +1022,9 @@ class QuerySet(Generic[T]):
         """
         return self.fields(columns=columns, slot="exclude")
 
-    def order_by(self, columns: Union[list, str, OrderAction]) -> "QuerySet[T]":
+    def order_by(
+        self, columns: Union[list, str, OrderAction, RandomOrder]
+    ) -> "QuerySet[T]":
         """
         With `order_by()` you can order the results from database based on your
         choice of fields.
@@ -1044,6 +1050,8 @@ class QuerySet(Generic[T]):
         reverse virtual FK and `ManyToMany` fields.
 
         To sort in descending order provide a hyphen in front of the field name
+
+        To sort randomly provide ``"?"`` or ``ormar.random()``
 
         :param columns: columns by which models should be sorted
         :type columns: Union[list, str]
