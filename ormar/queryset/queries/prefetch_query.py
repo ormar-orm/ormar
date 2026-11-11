@@ -326,15 +326,16 @@ class LoadNode(Node):
             *iter_filter_actions(clauses=filter_clauses),
             *iter_filter_actions(clauses=exclude_clauses),
         ]
-        if any(action.related_parts for action in actions) or any(
+        paths = [path for action in actions for path in action.path_actions()]
+        if any(path.related_parts for path in paths) or any(
             order.related_str for order in order_bys
         ):
             raise QueryDefinitionError(
                 "A Prefetch queryset of a many to many relation can only filter and "
                 "order by fields of the related model itself."
             )
-        for action in actions:
-            action.table_prefix = self.table_prefix
+        for path in paths:
+            path.table_prefix = self.table_prefix
         for order in order_bys:
             order.table_prefix = self.table_prefix
         return PrefetchQuerysetParts(

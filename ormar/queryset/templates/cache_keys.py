@@ -17,6 +17,8 @@ from typing import (
     Tuple,
 )
 
+from ormar.queryset.expressions import Expression, expression_key
+
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.models.excludable import ExcludableItems
     from ormar.queryset.actions.filter_action import FilterAction
@@ -32,6 +34,7 @@ def value_cache_key(action: "FilterAction") -> Any:
         filter(active=True)  # -> ("literal", True)  literal true
         filter(id__in=[1, 2])  # -> "in"               IN (expanding)
         filter(name="a")  # -> ("value", str)     = :ormar_p0
+        filter(a__lt=F("b") + 1)  # -> ("expr", <shape>)  < b + :ormar_p0_0
 
     Values written into the SQL text are part of the key as they are. For a
     bound value only its type is kept, so values of different types never
@@ -43,6 +46,8 @@ def value_cache_key(action: "FilterAction") -> Any:
     :rtype: Any
     """
     value = action.bound_value()
+    if isinstance(value, Expression):
+        return ("expr", expression_key(node=value))
     if action.operator == "isnull":
         return ("isnull", bool(value))
     if action.operator == "in":

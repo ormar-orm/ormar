@@ -478,7 +478,9 @@ def get_relationship_alias_model_and_str(
     models is the path of the many to many relation followed by the through model
     name - also when the relation itself was omitted in the related parts.
 
-    Note that through model names are removed from passed related_parts.
+    Note that through model names are removed from passed related_parts, or
+    replaced with the many to many relation they belong to if it was omitted, so
+    that the relation string joins the through model.
 
     :param related_parts: list of related names extracted from string
     :type related_parts: Union[list, list[str]]
@@ -519,11 +521,13 @@ def resolve_implicit_through_relation(
     previous_models: list[type["Model"]],
 ) -> Optional[str]:
     """
-    Removes the through model name from related parts and returns the name of the
-    many to many relation the through model belongs to, if that relation was not
-    part of the path (i.e. ``postcategory__sort_order`` used from ``Post``).
+    Removes the through model name from related parts, or replaces it with the
+    name of the many to many relation the through model belongs to and returns
+    that name, if the relation was not part of the path
+    (i.e. ``postcategory__sort_order`` used from ``Post``).
 
-    :param related_parts: split relation string, through name is removed in place
+    :param related_parts: split relation string, through name is removed or
+        replaced in place
     :type related_parts: list[str]
     :param relation: name of the through field
     :type relation: str
@@ -534,13 +538,14 @@ def resolve_implicit_through_relation(
     :return: name of the omitted many to many relation or None if it was in the path
     :rtype: Optional[str]
     """
-    related_parts.remove(relation)
-    through_field = related_field.owner.ormar_config.model_fields[
-        related_field.related_name or ""
-    ]
+    through_index = related_parts.index(relation)
+    relation_name = related_field.related_name or ""
+    through_field = related_field.owner.ormar_config.model_fields[relation_name]
     if len(previous_models) > 1 and previous_models[-2] == through_field.to:
+        del related_parts[through_index]
         return None
-    return related_field.related_name
+    related_parts[through_index] = relation_name
+    return relation_name
 
 
 async def get_or_create_with_retry(

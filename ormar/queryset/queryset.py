@@ -28,7 +28,14 @@ from ormar.exceptions import (
 from ormar.models.row_registry import RowRegistry
 from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
 from ormar.queryset.actions.order_action import OrderAction, expand_pk_orders
+from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.clause import FilterGroup, QueryClause
+from ormar.queryset.expressions import (
+    Expression,
+    expression_clause,
+    expression_key,
+    expression_params,
+)
 from ormar.queryset.prefetch import Prefetch
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
@@ -546,35 +553,39 @@ class QuerySet(Generic[T]):
             filter_clauses=self.filter_clauses, exclude_clauses=self.exclude_clauses
         )
         names = tuple(sorted(values))
-        params = {
-            **template_params(actions=actions, limit=None, offset=None),
-            **value_params(names=names, values=values),
-        }
+        params = template_params(actions=actions, limit=None, offset=None)
+        for index, name in enumerate(names):
+            params.update(expression_params(value=values[name], slot=f"ormar_v{index}"))
         key = (
             kind,
             clauses_cache_key(clauses=self.filter_clauses),
             clauses_cache_key(clauses=self.exclude_clauses),
-            names,
+            tuple(
+                (name, expression_key(node=values[name]))
+                if isinstance(values[name], Expression)
+                else name
+                for name in names
+            ),
         )
         cache = template_cache_for(model_cls=self.model)
         statement = cache.get(key)
         if statement is None:
             statement = self.build_write_statement(
-                kind=kind, names=names, binder=SlotBinder(actions=actions)
+                kind=kind, values=values, binder=SlotBinder(actions=actions)
             )
             release_values(statement=statement)
             cache.put(key=key, statement=statement)
         return StatementTemplate(statement=statement, params=params)
 
-    def build_write_statement(self, kind: str, names: tuple, binder: SlotBinder) -> Any:
+    def build_write_statement(self, kind: str, values: dict, binder: SlotBinder) -> Any:
         """
         Build the filtered update or delete with named slots for the updated
         values and the filter values.
 
         :param kind: ``"update"`` or ``"delete"``
         :type kind: str
-        :param names: updated column names, sorted
-        :type names: tuple
+        :param values: updated values by column name (empty for delete)
+        :type values: dict
         :param binder: names filter values for templates
         :type binder: SlotBinder
         :return: statement to execute
@@ -583,7 +594,16 @@ class QuerySet(Generic[T]):
         table = self.table
         expr: Any
         if kind == "update":
-            expr = table.update().values(value_binds(table=table, names=names))
+            names = tuple(sorted(values))
+            binds = value_binds(table=table, names=names)
+            for index, name in enumerate(names):
+                if isinstance(values[name], Expression):
+                    binds[table.c[name]] = expression_clause(
+                        node=values[name],
+                        columns=expression_columns(node=values[name], model=self.model),
+                        slot=f"ormar_v{index}",
+                    )
+            expr = table.update().values(binds)
         else:
             expr = table.delete()
         expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
@@ -1200,7 +1220,8 @@ class QuerySet(Generic[T]):
             result = await executor.fetch_one(
                 query=template.statement, params=template.params
             )
-        return dict(result) if len(result) > 1 else result[columns[0]]  # type: ignore
+        values_by_column = dict(zip(columns, result.values()))  # type: ignore
+        return values_by_column if len(columns) > 1 else values_by_column[columns[0]]
 
     async def max(self, columns: Union[str, list[str]]) -> Any:  # noqa: A003
         """
@@ -1260,11 +1281,11 @@ class QuerySet(Generic[T]):
         """
         for clause in self.filter_clauses + self.exclude_clauses:
             actions = clause._iter() if isinstance(clause, FilterGroup) else [clause]
-            for action in actions:
-                if action.related_parts:
+            for path in (path for action in actions for path in action.path_actions()):
+                if path.related_parts:
                     raise QueryDefinitionError(
                         f"{operation}() does not support filters on related models "
-                        f"('{action.query_str}'). Select the pks first and "
+                        f"('{path.query_str}'). Select the pks first and "
                         f"filter with pk__in instead."
                     )
 
@@ -1277,8 +1298,11 @@ class QuerySet(Generic[T]):
 
         :param each: flag if whole table should be affected if no filter is passed
         :type each: bool
-        :param kwargs: fields names and proper value types
+        :param kwargs: fields names and proper value types, or column expressions
+            of own fields (``taken=Slot.taken + 1``)
         :type kwargs: Any
+        :raises QueryDefinitionError: if an expression sets a relation or reads a
+            relation or another column set by this update
         :return: number of updated rows
         :rtype: int
         """
@@ -1293,11 +1317,42 @@ class QuerySet(Generic[T]):
         self_fields = self.model.extract_db_own_fields().union(
             self.model.extract_related_names()
         )
-        updates = {k: v for k, v in kwargs.items() if k in self_fields}
+        updates = {
+            field_name: value
+            for field_name, value in kwargs.items()
+            if field_name in self_fields
+        }
         updates = self.model.populate_onupdate_value(updates)
-        updates = self.model.validate_update_values(updates)
+        expressions = {
+            field_name: value._node()
+            for field_name, value in updates.items()
+            if isinstance(value, Expression)
+        }
+        for name, node in expressions.items():
+            columns = expression_columns(node=node, model=self.model)
+            if any(column.related_parts for column in columns.values()):
+                raise QueryDefinitionError(
+                    f"update() does not support expressions reading related "
+                    f"models yet ({list(columns)}), only own fields."
+                )
+            read = [column.field_name for column in columns.values()]
+            if name in self.model.extract_related_names() or any(
+                field != name and field in updates for field in read
+            ):
+                raise QueryDefinitionError(
+                    f"update() cannot set '{name}' from an expression reading "
+                    f"{read}: expressions set no relations and read no columns "
+                    f"set by the same update."
+                )
+        updates = self.model.validate_update_values(
+            {
+                field_name: value
+                for field_name, value in updates.items()
+                if field_name not in expressions
+            }
+        )
         updates = self.model.reconvert_str_to_bytes(updates)
-        updates = self.model.translate_columns_to_aliases(updates)
+        updates = self.model.translate_columns_to_aliases({**updates, **expressions})
         unconsumed = [name for name in updates if name not in self.table.c]
         if unconsumed:
             raise sqlalchemy.exc.CompileError(

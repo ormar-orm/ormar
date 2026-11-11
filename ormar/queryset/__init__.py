@@ -4,6 +4,7 @@ Contains QuerySet and different Query classes to allow for constructing of sql q
 
 from ormar.queryset.actions import FilterAction, OrderAction, SelectAction
 from ormar.queryset.clause import NullsOrdering, and_, or_
+from ormar.queryset.expressions import F
 from ormar.queryset.field_accessor import FieldAccessor
 from ormar.queryset.prefetch import Prefetch
 from ormar.queryset.queries import FilterQuery, LimitQuery, OffsetQuery, OrderQuery
@@ -21,6 +22,7 @@ __all__ = [
     "NullsOrdering",
     "and_",
     "or_",
+    "F",
     "FieldAccessor",
     "Prefetch",
 ]
