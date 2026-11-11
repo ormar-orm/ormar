@@ -57,7 +57,7 @@ def build_conflict_insert(
     target: Tuple[str, ...],
     update_names: Tuple[str, ...],
     on_update: Tuple[str, ...],
-    returning: bool,
+    returning: Tuple[str, ...],
 ) -> Executable:
     """
     Build the insert of the database's dialect that skips or updates a row
@@ -82,8 +82,8 @@ def build_conflict_insert(
     :type update_names: Tuple[str, ...]
     :param on_update: columns updated with their ``on_update`` value
     :type on_update: Tuple[str, ...]
-    :param returning: return the primary key of a written row
-    :type returning: bool
+    :param returning: columns of the written row to return, if any
+    :type returning: Tuple[str, ...]
     :return: insert statement
     :rtype: Executable
     """
@@ -202,7 +202,7 @@ def insert_statement(
     conflict_target: Optional[Sequence[str]] = None,
     update_fields: Optional[Sequence[str]] = None,
     on_update: Tuple[str, ...] = (),
-    returning: bool = False,
+    returning: Tuple[str, ...] = (),
 ) -> Executable:
     """
     Return the insert of a model for the given sorted column names, from the
@@ -227,8 +227,8 @@ def insert_statement(
     :type update_fields: Optional[Sequence[str]]
     :param on_update: columns updated with their ``on_update`` value
     :type on_update: Tuple[str, ...]
-    :param returning: return the primary key of a written row
-    :type returning: bool
+    :param returning: columns of the written row to return, if any
+    :type returning: Tuple[str, ...]
     :return: insert statement with ``ormar_v{i}`` binds
     :rtype: Executable
     """

@@ -112,7 +112,7 @@ class DialectRules:
         target: Tuple[str, ...],
         update_names: Tuple[str, ...],
         on_update: Tuple[str, ...],
-        returning: bool,
+        returning: Tuple[str, ...],
     ) -> Executable:
         """
         Build an insert that skips or updates a row conflicting with an
@@ -133,8 +133,8 @@ class DialectRules:
         :type update_names: Tuple[str, ...]
         :param on_update: columns updated with their ``on_update`` value
         :type on_update: Tuple[str, ...]
-        :param returning: return the primary key of a written row
-        :type returning: bool
+        :param returning: columns of the written row to return, if any
+        :type returning: Tuple[str, ...]
         :return: insert statement
         :rtype: Executable
         """
@@ -151,7 +151,9 @@ class DialectRules:
             )
         else:
             statement = statement.on_conflict_do_nothing()
-        return statement.returning(*table.primary_key) if returning else statement
+        if not returning:
+            return statement
+        return statement.returning(*(table.c[name] for name in returning))
 
     def is_duplicate_key(self, *, error: IntegrityError) -> bool:
         """
@@ -270,7 +272,7 @@ class MysqlRules(DialectRules):
         target: Tuple[str, ...],
         update_names: Tuple[str, ...],
         on_update: Tuple[str, ...],
-        returning: bool,
+        returning: Tuple[str, ...],
     ) -> Executable:
         """
         Build an insert that skips or updates a row conflicting with an

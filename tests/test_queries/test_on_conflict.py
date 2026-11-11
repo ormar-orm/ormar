@@ -237,45 +237,45 @@ def test_conflict_statements_per_dialect():
     )
     pg = str(
         PostgresRules(backend_name="postgresql")
-        .conflict_insert(returning=True, **common, **ignore)
+        .conflict_insert(returning=("id",), **common, **ignore)
         .compile(dialect=postgresql.dialect())
     )
     assert "ON CONFLICT DO NOTHING RETURNING oc_tags.id" in pg
     pg_update = str(
         PostgresRules(backend_name="postgresql")
-        .conflict_insert(returning=False, **common, **update)
+        .conflict_insert(returning=(), **common, **update)
         .compile(dialect=postgresql.dialect())
     )
     assert "ON CONFLICT (name) DO UPDATE SET score = excluded.score" in pg_update
     lite = str(
         SqliteRules(backend_name="sqlite")
-        .conflict_insert(returning=False, **common, **update)
+        .conflict_insert(returning=(), **common, **update)
         .compile(dialect=sqlite.dialect())
     )
     assert "ON CONFLICT (name) DO UPDATE SET score = excluded.score" in lite
     assert lite.endswith("score = excluded.score, is_dirty = ?")
     lite_ignore = str(
         SqliteRules(backend_name="sqlite")
-        .conflict_insert(returning=True, **common, **ignore)
+        .conflict_insert(returning=("id",), **common, **ignore)
         .compile(dialect=sqlite.dialect())
     )
     assert "ON CONFLICT DO NOTHING RETURNING id" in lite_ignore
     my_ignore = str(
         MysqlRules(backend_name="mysql")
-        .conflict_insert(returning=False, **common, **ignore)
+        .conflict_insert(returning=(), **common, **ignore)
         .compile(dialect=mysql.dialect())
     )
     assert "ON DUPLICATE KEY UPDATE id = oc_tags.id" in my_ignore
     my_update = str(
         MysqlRules(backend_name="mysql")
-        .conflict_insert(returning=False, **common, **update)
+        .conflict_insert(returning=(), **common, **update)
         .compile(dialect=mysql.dialect())
     )
     assert "ON DUPLICATE KEY UPDATE score = VALUES(score)" in my_update
     assert "is_dirty = %s" in my_update
     maria_ignore = str(
         rules_for(backend_name="mariadb")
-        .conflict_insert(returning=False, **common, **ignore)
+        .conflict_insert(returning=(), **common, **ignore)
         .compile(dialect=mysql.dialect(is_mariadb=True))
     )
     assert "ON DUPLICATE KEY UPDATE id = oc_tags.id" in maria_ignore
@@ -290,7 +290,7 @@ def test_conflict_insert_rejected_on_unknown_backend():
             target=("id",),
             update_names=(),
             on_update=(),
-            returning=True,
+            returning=("id",),
         )
 
 
@@ -299,10 +299,10 @@ async def test_conflict_statement_cache():
     names = ("name", "score")
     async with base_ormar_config.database:
         ignore = insert_statement(
-            model_cls=Tag, names=names, on_conflict="ignore", returning=True
+            model_cls=Tag, names=names, on_conflict="ignore", returning=("id",)
         )
         assert ignore is insert_statement(
-            model_cls=Tag, names=names, on_conflict="ignore", returning=True
+            model_cls=Tag, names=names, on_conflict="ignore", returning=("id",)
         )
         assert ignore is not insert_statement(model_cls=Tag, names=names)
         assert ignore is not insert_statement(
