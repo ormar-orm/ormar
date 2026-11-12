@@ -56,12 +56,16 @@ def test_sqlalchemy_internals_used_by_native_execution_exist(dialect_cls):
 
 
 def test_asyncpg_adapter_internals_exist():
-    assert "_started" in AsyncAdapt_asyncpg_connection.__slots__
+    slots = {
+        name
+        for klass in AsyncAdapt_asyncpg_connection.__mro__
+        for name in getattr(klass, "__slots__", ())
+    }
+    assert {"_transaction", "_execute_mutex"} <= slots
     for name in ("_start_transaction", "_handle_exception"):
         assert callable(getattr(AsyncAdapt_asyncpg_connection, name))
-    assert "_execute_mutex" in AsyncAdapt_asyncpg_connection.__slots__
 
 
 def test_sqlalchemy_version_in_pinned_range():
     version = tuple(int(part) for part in sa.__version__.split(".")[:3])
-    assert (2, 0, 40) <= version < (2, 1)
+    assert (2, 0, 50) <= version < (2, 2)

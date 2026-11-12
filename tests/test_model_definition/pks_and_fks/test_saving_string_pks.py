@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 import ormar
 from ormar import Float, String
 from ormar.databases.connection import DatabaseConnection
-from tests.settings import ASYNC_DATABASE_URL, DATABASE_URL
+from tests.settings import ASYNC_DATABASE_URL, SYNC_DATABASE_URL
 
 database = DatabaseConnection(ASYNC_DATABASE_URL)
 metadata = sqlalchemy.MetaData()
@@ -45,7 +45,7 @@ class PositionOrmDef(ormar.Model):
 
 @pytest.fixture(autouse=True, scope="module")
 def create_test_database():
-    engine = create_engine(DATABASE_URL)
+    engine = create_engine(SYNC_DATABASE_URL)
     metadata.create_all(engine)
     yield
     metadata.drop_all(engine)

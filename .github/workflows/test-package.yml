@@ -9,11 +9,18 @@ on:
 
 jobs:
   tests:
-    name: "Python ${{ matrix.python-version }}"
+    name: "Python ${{ matrix.python-version }}${{ matrix.sqlalchemy && format(' / SQLAlchemy {0}', matrix.sqlalchemy) || '' }}"
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python-version: ["3.11", "3.12", "3.13", "3.14", "3.15"]
+        # an empty value keeps the locked SQLAlchemy; with a value in the
+        # dimension the include below adds a job instead of extending 3.11
+        sqlalchemy: [""]
+        include:
+          # the lowest supported SQLAlchemy, the other jobs use the locked one
+          - python-version: "3.11"
+            sqlalchemy: "2.0.50"
       fail-fast: false
     services:
       mysql:
@@ -60,6 +67,10 @@ jobs:
 
     - name: Install dependencies
       run: poetry install --extras "all"
+
+    - name: Install the lowest supported SQLAlchemy
+      if: matrix.sqlalchemy
+      run: pip install "sqlalchemy[asyncio]==${{ matrix.sqlalchemy }}"
 
     - name: Grant MySQL global privileges
       # The schema-per-model tests create extra databases for cross-schema

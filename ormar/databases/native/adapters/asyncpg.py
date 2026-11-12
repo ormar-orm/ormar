@@ -144,7 +144,7 @@ class AsyncpgAdapter(DriverAdapter):
         Send ``BEGIN`` now for a transaction SQLAlchemy began.
 
         SQLAlchemy's asyncpg wrapper only marks the transaction as begun and
-        sends ``BEGIN`` with its own first statement (``_started`` flag).
+        sends ``BEGIN`` with its own first statement (no ``_transaction`` yet).
         Native statements skip the wrapper, so without this they would run
         and commit on their own, outside the transaction.
 
@@ -152,7 +152,7 @@ class AsyncpgAdapter(DriverAdapter):
         :type sa_connection: AsyncConnection
         """
         adapted = (await sa_connection.get_raw_connection()).dbapi_connection
-        if not adapted._started:  # type: ignore[union-attr]
+        if adapted._transaction is None:  # type: ignore[union-attr]
             await adapted._start_transaction()  # type: ignore[union-attr]
 
     def translate_error(
