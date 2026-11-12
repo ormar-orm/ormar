@@ -50,6 +50,10 @@
 
     `bulk_create(on_conflict="update")` of a model with `on_update` fields ran one statement per row on MySQL. The `on_update` values are now set once in user variables, so the rows go in one multi-row insert.
 
+### 📦 Dependencies
+
+* **SQLAlchemy 2.1 supported**, the range is now `>=2.0.50,<2.2`. Native execution reads the asyncpg transaction state the way both versions do, and an empty `execute_many()` no longer passes the empty parameter list SQLAlchemy 2.1 deprecates. The lower bound goes up from 2.0.40, because ormar 0.29 already needed 2.0.50 (asyncmy error translation and asyncpg disconnects failed on older releases); CI now also runs the suite on 2.0.50.
+
 ## 0.29.0
 
 ### 🆕 Features

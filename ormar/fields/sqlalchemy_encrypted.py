@@ -116,6 +116,11 @@ class EncryptedString(types.TypeDecorator):
     impl = types.TypeEngine
 
     cache_ok = True
+    # SQLAlchemy 2.1 checks operators against the type's operator classes
+    # (absent in 2.0); filters compare and match it like a string
+    operator_classes = getattr(  # type: ignore[assignment]
+        types.String, "operator_classes", None
+    )
 
     def __init__(
         self,

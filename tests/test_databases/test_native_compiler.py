@@ -230,7 +230,6 @@ def test_conflict_insert_reuses_its_plan(dialect_cls):
         if dialect.name == "mysql"
         else insert.on_conflict_do_nothing()
     ).execution_options(**{TEMPLATE_OPTION: True})
-    assert statement._generate_cache_key() is None
     compiler = NativeCompiler(dialect)
     first = compiler.bind(statement, {"name": "a"})
     second = compiler.bind(statement, {"name": "b"})

@@ -22,6 +22,8 @@ def convert_to_async_url(url: str) -> str:  # pragma: nocover
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///test.db")
 ASYNC_DATABASE_URL = convert_to_async_url(DATABASE_URL)
+# SQLAlchemy 2.1 defaults postgresql:// to psycopg 3, the tests install psycopg2
+SYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 print("USED DB:", ASYNC_DATABASE_URL)
 
 

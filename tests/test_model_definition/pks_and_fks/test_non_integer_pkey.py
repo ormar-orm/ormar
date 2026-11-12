@@ -5,7 +5,7 @@ import sqlalchemy
 
 import ormar
 from ormar.databases.connection import DatabaseConnection
-from tests.settings import ASYNC_DATABASE_URL, DATABASE_URL
+from tests.settings import ASYNC_DATABASE_URL, SYNC_DATABASE_URL
 
 database = DatabaseConnection(ASYNC_DATABASE_URL)
 metadata = sqlalchemy.MetaData()
@@ -28,7 +28,7 @@ class Model(ormar.Model):
 
 @pytest.fixture(autouse=True, scope="function")
 def create_test_database():
-    engine = sqlalchemy.create_engine(DATABASE_URL)
+    engine = sqlalchemy.create_engine(SYNC_DATABASE_URL)
     metadata.create_all(engine)
     yield
     metadata.drop_all(engine)

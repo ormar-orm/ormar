@@ -194,7 +194,10 @@ class QueryExecutor:
                 )
                 return
         exec_query = text(text=query) if isinstance(query, str) else query
-        await self._connection.execute(statement=exec_query, parameters=values)
+        # an empty list is deprecated in SQLAlchemy 2.1, None runs it once too
+        await self._connection.execute(
+            statement=exec_query, parameters=list(values) or None
+        )
 
     async def iterate(
         self, query: Executable, params: Optional[Mapping[str, Any]] = None

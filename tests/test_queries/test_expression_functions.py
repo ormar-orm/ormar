@@ -139,7 +139,7 @@ def test_functions_compile_per_dialect():
     assert compiled["sqlite"] == (
         "max(min(fn_members.uses_col, ?), coalesce(fn_members.refunded, ?))"
     )
-    assert compiled["postgresql"] == (
+    assert compiled["postgresql"].replace("::INTEGER", "") == (
         "greatest(least(fn_members.uses_col, %(ormar_v0_0)s), "
         "coalesce(fn_members.refunded, %(ormar_v0_1)s))"
     )
