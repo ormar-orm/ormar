@@ -4,7 +4,7 @@ import pytest
 import pytest_asyncio
 
 import ormar
-from ormar import F
+from ormar import Coalesce, F, Greatest, Least
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.templates import template_cache_for
 from tests.lifespan import init_tests
@@ -157,6 +157,26 @@ async def test_update_reads_related_fields(catalog):
         "first": 5,
         "second": 6,
     }
+
+
+@pytest.mark.asyncio
+async def test_update_functions_read_related_fields(catalog):
+    updated = await Track.objects.update(
+        each=True, position=Greatest(F("album__rank"), 6) + Coalesce(F("position"), 0)
+    )
+    assert updated == 3
+    assert await positions() == {"a": 6, "b": 6, "c": 7, "d": None}
+
+    assert (
+        await Track.objects.filter(title="c").update(
+            position=Least(F("album__parent__rank"), F("album__rank"))
+        )
+        == 1
+    )
+    assert (await positions())["c"] == 5
+
+    with pytest.raises(QueryDefinitionError):
+        await Album.objects.update(each=True, rank=Greatest(F("tracks__position"), 0))
 
 
 @pytest.mark.asyncio

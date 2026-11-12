@@ -100,6 +100,44 @@ await Track.objects.update(each=True, position=F("album__label__bonus") + Track.
 * An expression reading the updated table through a relation (`F("parent__rank")`)
   reads the values from before the update.
 
+#### Functions
+
+`ormar.Greatest`, `ormar.Least` and `ormar.Coalesce` take two or more arguments,
+at least one of them a field or an expression, and combine with other expressions:
+
+```python
+from ormar import Coalesce, F, Greatest, Least
+
+# never move the read marker back
+await Member.objects.filter(id=1).update(read_id=Greatest(F("read_id"), newest))
+# never go below zero
+await Link.objects.filter(id=1).update(uses=Greatest(F("uses") - n, 0))
+await Pass.objects.filter(id=1).update(refunded=Coalesce(F("refunded"), 0) + amount)
+await Product.objects.update(each=True, price=Least(F("price"), F("max_price") * 2))
+```
+
+* `Greatest` / `Least` compile to `GREATEST()` / `LEAST()`, on SQLite to the
+  scalar `max()` / `min()`.
+* With a `NULL` argument PostgreSQL ignores it, while MySQL and SQLite return
+  `NULL`. Wrap nullable fields in `Coalesce` for the same result everywhere.
+* Literal arguments are typed like in arithmetic, from the first field or expression
+  argument and the literal (`Greatest(F("count"), 2.5)` compares with a float).
+
+`ormar.Random()` is a random float from 0 (inclusive) to 1 (exclusive), drawn by
+the database for each row:
+
+```python
+from ormar import F, Random
+
+await Player.objects.update(each=True, score=Random())
+await Player.objects.update(each=True, score=Random() * 10 + F("bonus"))
+```
+
+It compiles to `random()` on PostgreSQL, `rand()` on MySQL and on SQLite to its
+integer `random()` scaled into the same range. Use it with float or decimal
+columns: an integer column rounds the value on PostgreSQL and MySQL, while SQLite
+stores the fraction.
+
 ## update_or_create
 
 `update_or_create(**kwargs) -> Model`
