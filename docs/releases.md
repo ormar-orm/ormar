@@ -4,6 +4,32 @@
 
 ### 🆕 Features
 
+* **`update()` and `delete()` with related models** ([#1967](https://github.com/ormar-orm/ormar/issues/1967))
+
+    `update()` and `delete()` accept filters on related models of any kind (forward, reverse, many to many) and touch the rows the same filters select in `all()`, instead of raising `QueryDefinitionError`. Expressions in `update()` can read fields of models reached through foreign keys; rows with a `NULL` foreign key on the path are not updated. See [update](queries/update.md#reading-related-models).
+
+    ```python
+    await Booking.objects.filter(training__instructor=instructor).delete()
+    await Track.objects.filter(album__name="A").update(position=F("album__rank"))
+    ```
+
+* **`Greatest`, `Least` and `Coalesce` in column expressions** ([#1974](https://github.com/ormar-orm/ormar/issues/1974))
+
+    Functions for filters and `update()`, e.g. atomic "never go back" or "never below zero" updates. On SQLite `Greatest` / `Least` compile to the scalar `max()` / `min()`; with a `NULL` argument PostgreSQL ignores it, MySQL and SQLite return `NULL`. See [update](queries/update.md#functions).
+
+    ```python
+    await Member.objects.filter(id=1).update(read_id=Greatest(F("read_id"), newest))
+    await Pass.objects.filter(id=1).update(refunded=Coalesce(F("refunded"), 0) + amount)
+    ```
+
+* **`Random()` in column expressions**
+
+    A random float in `[0, 1)` per row for filters and `update()`, also accepted by `order_by()` like `"?"` and `ormar.random()`.
+
+    ```python
+    await Player.objects.update(each=True, score=Random())
+    ```
+
 * **Atomic upsert with `create(on_conflict="update")`** ([#1975](https://github.com/ormar-orm/ormar/issues/1975))
 
     Inserts the row or updates the one it conflicts with on `conflict_target`, in one statement, and returns the stored row. Unlike `update_or_create()` concurrent calls neither fail nor overwrite each other. `pre_save` / `post_save` are sent in both cases. See [conflict handling](queries/create.md#update-conflicting-rows).
@@ -14,6 +40,15 @@
         on_conflict="update", conflict_target=["endpoint_hash"], update_fields=["keys"],
     )
     ```
+
+### ⚡ Performance
+
+* **Upserts reuse their compiled statement** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))
+
+    SQLAlchemy gives no cache key to inserts with `ON CONFLICT` / `ON DUPLICATE KEY`, so `create(on_conflict=...)` and `bulk_create(on_conflict=...)` compiled their statement on every call and asyncpg prepared it again for a single row. Statements without a cache key now keep their plan per statement object (bounded like the other plans): a one-row upsert on PostgreSQL takes one round trip instead of up to three.
+* **MySQL bulk upserts with `on_update` fields run as one batch** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))
+
+    `bulk_create(on_conflict="update")` of a model with `on_update` fields ran one statement per row on MySQL. The `on_update` values are now set once in user variables, so the rows go in one multi-row insert.
 
 ## 0.29.0
 

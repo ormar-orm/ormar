@@ -42,6 +42,19 @@ JSON field accepts a value to dump or a JSON string.
 
     To update whole database table `each=True` needs to be provided as a safety switch
 
+Filters may follow relations of any kind, the update changes the rows the same filters
+select in `all()` (limit and offset do not apply to updates):
+
+```python
+await Booking.objects.filter(
+    status="waitlisted", training__starts_at__lte=now
+).update(status="expired")
+await Track.objects.filter(album__genres__name="jazz").update(position=0)
+```
+
+Such filters select the matched primary keys in a subquery
+(`WHERE id IN (SELECT ...)`).
+
 ### Column expressions
 
 A value can be computed by the database from the row's own columns, with a field
@@ -60,13 +73,70 @@ await Product.objects.update(each=True, price=F("price") * 2 + F("shipping"))
 
 * The literal goes on the right side (`F("stock") + 1`), `None` and booleans are
   rejected. A `NULL` column makes the result `NULL`.
-* An expression reads own non-relation columns of the updated model and cannot set a
-  relation. Reading fields of related models is not supported yet
-  ([#1967](https://github.com/ormar-orm/ormar/issues/1967)).
+* An expression reads non-relation columns of the updated model, or of models
+  reached through its foreign keys, and cannot set a relation (see below).
 * It cannot read a column set by the same `update()` (MySQL would read the new value,
   other databases the old one), including fields with `on_update`. Reading the
   column it sets is fine.
 * The database computes the value, so pydantic validators of the field do not run.
+
+#### Reading related models
+
+An expression can read fields of models reached through foreign keys, also
+several relations deep:
+
+```python
+# UPDATE tracks SET position = albums.rank * 10 FROM albums AS ... WHERE ...
+await Track.objects.filter(title="a").update(position=F("album__rank") * 10)
+await Track.objects.update(each=True, position=F("album__label__bonus") + Track.album.rank)
+```
+
+* The related tables are joined in the `UPDATE` (`UPDATE ... FROM` on PostgreSQL
+  and SQLite 3.33+, a multi-table `UPDATE` on MySQL and MariaDB).
+* Rows with no related row on the path (a `NULL` foreign key) are not updated and
+  not counted in the returned number.
+* Reverse and many to many relations are rejected with `QueryDefinitionError`, as
+  they can match many rows; filter on them instead.
+* An expression reading the updated table through a relation (`F("parent__rank")`)
+  reads the values from before the update.
+
+#### Functions
+
+`ormar.Greatest`, `ormar.Least` and `ormar.Coalesce` take two or more arguments,
+at least one of them a field or an expression, and combine with other expressions:
+
+```python
+from ormar import Coalesce, F, Greatest, Least
+
+# never move the read marker back
+await Member.objects.filter(id=1).update(read_id=Greatest(F("read_id"), newest))
+# never go below zero
+await Link.objects.filter(id=1).update(uses=Greatest(F("uses") - n, 0))
+await Pass.objects.filter(id=1).update(refunded=Coalesce(F("refunded"), 0) + amount)
+await Product.objects.update(each=True, price=Least(F("price"), F("max_price") * 2))
+```
+
+* `Greatest` / `Least` compile to `GREATEST()` / `LEAST()`, on SQLite to the
+  scalar `max()` / `min()`.
+* With a `NULL` argument PostgreSQL ignores it, while MySQL and SQLite return
+  `NULL`. Wrap nullable fields in `Coalesce` for the same result everywhere.
+* Literal arguments are typed like in arithmetic, from the first field or expression
+  argument and the literal (`Greatest(F("count"), 2.5)` compares with a float).
+
+`ormar.Random()` is a random float from 0 (inclusive) to 1 (exclusive), drawn by
+the database for each row:
+
+```python
+from ormar import F, Random
+
+await Player.objects.update(each=True, score=Random())
+await Player.objects.update(each=True, score=Random() * 10 + F("bonus"))
+```
+
+It compiles to `random()` on PostgreSQL, `rand()` on MySQL and on SQLite to its
+integer `random()` scaled into the same range. Use it with float or decimal
+columns: an integer column rounds the value on PostgreSQL and MySQL, while SQLite
+stores the fraction.
 
 ## update_or_create
 

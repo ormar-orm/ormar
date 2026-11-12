@@ -233,7 +233,7 @@ saved, the skipped ones too.
 | `create(on_conflict="ignore")` | `INSERT ... ON CONFLICT DO NOTHING RETURNING` | plain `INSERT`, a duplicate key error is caught |
 | `create(on_conflict="update")` | `INSERT ... ON CONFLICT (target) DO UPDATE ... RETURNING` | `ON DUPLICATE KEY UPDATE`, then a select by the target values |
 | `bulk_create(on_conflict="ignore")` | `ON CONFLICT DO NOTHING` | `ON DUPLICATE KEY UPDATE` of the primary key to itself |
-| `bulk_create(on_conflict="update")` | `ON CONFLICT (target) DO UPDATE` | `ON DUPLICATE KEY UPDATE`, one row per statement when an `on_update` field is set |
+| `bulk_create(on_conflict="update")` | `ON CONFLICT (target) DO UPDATE` | `ON DUPLICATE KEY UPDATE`; `on_update` values are set once in user variables (`SET @ormar_on_update_<n>`) and read by all rows |
 
 !!!warning
     MySQL has no conflict target: `ON DUPLICATE KEY UPDATE` reacts to a conflict on
@@ -244,6 +244,13 @@ saved, the skipped ones too.
     values and raises `NoMatch` when none matches: the conflict was on another key (that
     row is updated already), or the database stored a target value differently (floats,
     datetimes with fractional seconds). MariaDB is not tested.
+
+!!!warning
+    On MySQL a multi-row `bulk_create(on_conflict="update")` of a model with `on_update`
+    fields stores the `on_update` values in session user variables
+    (`@ormar_on_update_<n>`) right before the insert. Do not run such calls concurrently
+    on one connection (e.g. with `asyncio.gather()` inside one `transaction()`): one
+    call can overwrite the values of the other. Separate connections are not affected.
 
 !!!note
     SQLite supports `ON CONFLICT` with `RETURNING` from version 3.35.

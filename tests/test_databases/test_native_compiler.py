@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
 from sqlalchemy.dialects.sqlite.aiosqlite import SQLiteDialect_aiosqlite
 
 from ormar.databases.native.compiler import (
+    TEMPLATE_OPTION,
     NativeCompiler,
     resolve_result_processors,
     row_to_dict,
@@ -184,6 +185,57 @@ def test_uncacheable_statement_compiles_every_time():
     second = compiler.bind(uncached.select().where(uncached.c.label == "b"))
     assert first.plan is not second.plan
     assert (first.args, second.args) == (["<a>"], ["<b>"])
+
+
+@pytest.mark.filterwarnings("ignore::sqlalchemy.exc.SAWarning")
+def test_uncacheable_statement_reuses_its_plan_per_object():
+    compiler = NativeCompiler(SQLiteDialect_aiosqlite())
+    plain = uncached.select().where(uncached.c.label == "a")
+    assert compiler.bind(plain).plan is not compiler.bind(plain).plan
+    statement = plain.execution_options(**{TEMPLATE_OPTION: True})
+    first = compiler.bind(statement)
+    again = compiler.bind(statement)
+    assert again.plan is first.plan
+    assert again.args == ["<a>"]
+    assert compiler.bind(uncached.select().where(uncached.c.label == "a")).plan is not (
+        first.plan
+    )
+
+
+@pytest.mark.filterwarnings("ignore::sqlalchemy.exc.SAWarning")
+def test_plans_per_statement_object_are_bounded():
+    compiler = NativeCompiler(SQLiteDialect_aiosqlite(), max_plans=2)
+    statements = [
+        uncached.select()
+        .where(uncached.c.label == f"x{number}")
+        .execution_options(**{TEMPLATE_OPTION: True})
+        for number in range(3)
+    ]
+    plans = [compiler.bind(statement).plan for statement in statements]
+    assert len(compiler._plans_by_statement) == 2
+    assert compiler.bind(statements[2]).plan is plans[2]
+    assert compiler.bind(statements[0]).plan is not plans[0]
+
+
+@pytest.mark.parametrize("dialect_cls", DIALECTS)
+def test_conflict_insert_reuses_its_plan(dialect_cls):
+    dialect = dialect_cls()
+    insert = (
+        sa.dialects.mysql.insert(items)
+        if dialect.name == "mysql"
+        else getattr(sa.dialects, dialect.name).insert(items)
+    ).values(name=sa.bindparam("name"))
+    statement = (
+        insert.on_duplicate_key_update(name=insert.inserted.name)
+        if dialect.name == "mysql"
+        else insert.on_conflict_do_nothing()
+    ).execution_options(**{TEMPLATE_OPTION: True})
+    assert statement._generate_cache_key() is None
+    compiler = NativeCompiler(dialect)
+    first = compiler.bind(statement, {"name": "a"})
+    second = compiler.bind(statement, {"name": "b"})
+    assert second.plan is first.plan
+    assert (first.args[0], second.args[0]) == ("a", "b")
 
 
 def test_row_to_dict_applies_result_processors():

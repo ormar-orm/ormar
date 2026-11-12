@@ -124,6 +124,71 @@ class Query:
         :return: ready to run query with all joins and clauses.
         :rtype: sqlalchemy.sql.selectable.Select
         """
+        self._join_related_models()
+
+        if self._pagination_query_required():
+            limit_qry, on_clause = self._build_pagination_condition()
+            self.select_from = sqlalchemy.sql.join(
+                cast("FromClauseRole", self.select_from), limit_qry, on_clause
+            )
+
+        expr = sqlalchemy.sql.select(*self.columns)
+        expr = expr.select_from(cast("FromClauseRole", self.select_from))
+
+        expr = self._apply_expression_modifiers(expr)
+
+        # print("\n", expr.compile(compile_kwargs={"literal_binds": True}))
+        self._reset_query_parameters()
+
+        return expr
+
+    def build_primary_key_select(self) -> sqlalchemy.sql.Select:
+        """
+        Select only the primary key of the rows the queryset matches, with the
+        joins and filters of ``build_select_expression`` but no ordering, limit
+        or offset. Updates and deletes filtering on related models restrict
+        their rows to it::
+
+            SELECT tracks.id FROM tracks
+            LEFT OUTER JOIN albums AS t1b26c7_albums ON t1b26c7_albums.id = tracks.album
+            WHERE t1b26c7_albums.name = :ormar_p0
+
+        :return: select of the primary key columns
+        :rtype: sqlalchemy.sql.selectable.Select
+        """
+        self._join_related_models()
+        pk_columns = [
+            self.table.c[alias]
+            for alias in self.model_cls.ormar_config.pk.column_aliases()
+        ]
+        expr = sqlalchemy.sql.select(*pk_columns)
+        expr = expr.select_from(cast("FromClauseRole", self.select_from))
+        expr = self._apply_filters(expr)
+        self._reset_query_parameters()
+        return expr
+
+    def _apply_filters(self, expr: sqlalchemy.sql.Select) -> sqlalchemy.sql.Select:
+        """
+        Apply the filter and the exclude clauses to a select.
+
+        :param expr: select expression
+        :type expr: sqlalchemy.sql.selectable.Select
+        :return: filtered select
+        :rtype: sqlalchemy.sql.selectable.Select
+        """
+        expr = FilterQuery(
+            filter_clauses=self.filter_clauses, binder=self.binder
+        ).apply(expr=expr)
+        return FilterQuery(
+            filter_clauses=self.exclude_clauses, exclude=True, binder=self.binder
+        ).apply(expr=expr)
+
+    def _join_related_models(self) -> None:
+        """
+        Set the own columns and default ordering of the main model, then join
+        every ``select_related`` relation, extending ``select_from``, the
+        selected columns and the orders.
+        """
         self_related_fields = self.model_cls.own_table_columns(
             model=self.model_cls, excludable=self.excludable, use_alias=True
         )
@@ -156,22 +221,6 @@ class Query:
                 self.columns,
                 self.sorted_orders,
             ) = sql_join.build_join()  # type: ignore
-
-        if self._pagination_query_required():
-            limit_qry, on_clause = self._build_pagination_condition()
-            self.select_from = sqlalchemy.sql.join(
-                cast("FromClauseRole", self.select_from), limit_qry, on_clause
-            )
-
-        expr = sqlalchemy.sql.select(*self.columns)
-        expr = expr.select_from(cast("FromClauseRole", self.select_from))
-
-        expr = self._apply_expression_modifiers(expr)
-
-        # print("\n", expr.compile(compile_kwargs={"literal_binds": True}))
-        self._reset_query_parameters()
-
-        return expr
 
     def _build_pagination_condition(
         self,
@@ -207,12 +256,7 @@ class Query:
 
         limit_qry: Select[Any] = sqlalchemy.sql.select(*qry_texts)
         limit_qry = limit_qry.select_from(self.select_from)  # type: ignore
-        limit_qry = FilterQuery(
-            filter_clauses=self.filter_clauses, binder=self.binder
-        ).apply(expr=limit_qry)
-        limit_qry = FilterQuery(
-            filter_clauses=self.exclude_clauses, exclude=True, binder=self.binder
-        ).apply(expr=limit_qry)
+        limit_qry = self._apply_filters(limit_qry)
         limit_qry = limit_qry.group_by(*qry_texts)
         for order_by in maxes.values():
             limit_qry = limit_qry.order_by(order_by)
@@ -248,12 +292,7 @@ class Query:
         :return: expression with all present clauses applied
         :rtype: sqlalchemy.sql.selectable.Select
         """
-        expr = FilterQuery(
-            filter_clauses=self.filter_clauses, binder=self.binder
-        ).apply(expr=expr)
-        expr = FilterQuery(
-            filter_clauses=self.exclude_clauses, exclude=True, binder=self.binder
-        ).apply(expr=expr)
+        expr = self._apply_filters(expr)
         if not self._pagination_query_required():
             expr = LimitQuery(limit_count=self.limit_count, binder=self.binder).apply(
                 expr=expr

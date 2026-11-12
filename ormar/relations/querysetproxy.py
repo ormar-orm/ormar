@@ -18,7 +18,13 @@ import ormar  # noqa: I100, I202
 from ormar.exceptions import ModelPersistenceError, NoMatch, QueryDefinitionError
 
 if TYPE_CHECKING:  # pragma no cover
-    from ormar import ManyToManyField, OrderAction, RandomOrder, RelationType
+    from ormar import (
+        ManyToManyField,
+        OrderAction,
+        Random,
+        RandomOrder,
+        RelationType,
+    )
     from ormar.models import Model, T
     from ormar.queryset import QuerySet
     from ormar.queryset.prefetch import Prefetch
@@ -1008,7 +1014,7 @@ class QuerysetProxy(Generic[T]):
         )
 
     def order_by(
-        self, columns: Union[list, str, "OrderAction", "RandomOrder"]
+        self, columns: Union[list, str, "OrderAction", "RandomOrder", "Random"]
     ) -> "QuerysetProxy[T]":
         """
         With `order_by()` you can order the results from database based on your
@@ -1036,7 +1042,7 @@ class QuerysetProxy(Generic[T]):
 
         To sort in descending order provide a hyphen in front of the field name
 
-        To sort randomly provide ``"?"`` or ``ormar.random()``
+        To sort randomly provide ``"?"``, ``ormar.random()`` or ``ormar.Random()``
 
         Actual call delegated to QuerySet.
 
