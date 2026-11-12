@@ -67,19 +67,26 @@ class DriverAdapter(abc.ABC):
         self.dialect = dialect
 
     @abc.abstractmethod
-    async def fetch_all(self, raw: Any, bound: BoundStatement) -> List[Dict[str, Any]]:
+    async def fetch_all(
+        self, raw: Any, bound: BoundStatement, as_tuples: bool = False
+    ) -> List[Any]:
         """
-        Run a statement and return all its rows keyed by result label::
+        Run a statement and return all its rows keyed by result label, or as
+        tuples of values in select order with ``as_tuples``::
 
             fetch_all(raw, bind(select(users.c.id, users.c.name)))
             # -> [{"id": 1, "name": "a"}, {"id": 2, "name": "b"}]
+            fetch_all(raw, bind(select(users.c.id, users.c.name)), as_tuples=True)
+            # -> [(1, "a"), (2, "b")]
 
         :param raw: pooled raw connection
         :type raw: Any
         :param bound: statement to execute
         :type bound: BoundStatement
+        :param as_tuples: return tuples of values in select order instead
+        :type as_tuples: bool
         :return: rows
-        :rtype: List[Dict[str, Any]]
+        :rtype: List[Any]
         """
 
     @abc.abstractmethod

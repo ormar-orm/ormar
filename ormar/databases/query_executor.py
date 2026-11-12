@@ -4,6 +4,7 @@ native backend is available, otherwise through the SQLAlchemy async API.
 """
 
 import contextlib
+import functools
 from typing import (
     Any,
     AsyncIterator,
@@ -39,6 +40,23 @@ Payload = TypeVar("Payload", BoundStatement, BoundBatch)
 Result = TypeVar("Result")
 
 
+def has_duplicate_labels(result: Any) -> bool:
+    """
+    Tell whether a SQLAlchemy result repeats a result label, e.g.
+    ``select(users.c.id, literal(1).label("id"))``. Such rows are kept as
+    SQLAlchemy ``RowMapping`` instead of being turned into dicts, so reading
+    the ambiguous label still raises ``InvalidRequestError`` instead of
+    silently returning one of the values.
+
+    :param result: result of a statement run through SQLAlchemy
+    :type result: Any
+    :return: True when a label occurs more than once
+    :rtype: bool
+    """
+    labels = result.keys()
+    return len(set(labels)) != len(labels)
+
+
 class QueryExecutor:
     """
     Executes database queries. With a native backend, statements run directly on
@@ -61,44 +79,80 @@ class QueryExecutor:
         self._raw: Any = None
 
     async def fetch_all(
-        self, query: Executable, params: Optional[Mapping[str, Any]] = None
+        self,
+        query: Executable,
+        params: Optional[Mapping[str, Any]] = None,
+        as_tuples: bool = False,
     ) -> List[Any]:
         """
         Execute a query and fetch all rows.
 
+        Rows are dicts keyed by result label (SQLAlchemy ``RowMapping`` when the
+        statement repeats a label, so the ambiguous label raises); with
+        ``as_tuples`` they are tuples of values in select order instead::
+
+            await executor.fetch_all(select(users.c.id, users.c.name))
+            # -> [{"id": 1, "name": "a"}]
+            await executor.fetch_all(select(users.c.id, users.c.name), as_tuples=True)
+            # -> [(1, "a")]
+
         :param query: SQLAlchemy query expression
+        :type query: Executable
         :param params: values for named bind parameters of the query, by name;
             a cached query template passes its slot values here
-        :return: List of rows, accessible by result label
+        :type params: Optional[Mapping[str, Any]]
+        :param as_tuples: return tuples of values in select order
+        :type as_tuples: bool
+        :return: rows as dicts keyed by result label, or tuples
+        :rtype: List[Any]
         """
         bound = self._bind(query=query, params=params)
         if bound is not None:
-            return await self._fetch_native(bound=bound)
+            return await self._fetch_native(bound=bound, as_tuples=as_tuples)
         result: CursorResult[Any] = await self._connection.execute(
             statement=query, parameters=params
         )
-        return list(result.mappings().all())
+        if as_tuples:
+            return [tuple(row) for row in result.all()]
+        mappings = result.mappings().all()
+        if has_duplicate_labels(result=result):
+            return list(mappings)
+        return [dict(mapping) for mapping in mappings]
 
     async def fetch_one(
-        self, query: Executable, params: Optional[Mapping[str, Any]] = None
-    ) -> Optional[Mapping[Any, Any]]:
+        self,
+        query: Executable,
+        params: Optional[Mapping[str, Any]] = None,
+        as_tuples: bool = False,
+    ) -> Optional[Any]:
         """
         Execute a query and fetch one row.
 
         :param query: SQLAlchemy query expression
+        :type query: Executable
         :param params: values for named bind parameters of the query, by name;
             a cached query template passes its slot values here
-        :return: Single row or None
+        :type params: Optional[Mapping[str, Any]]
+        :param as_tuples: return a tuple of values in select order instead of
+            a dict keyed by result label
+        :type as_tuples: bool
+        :return: single row (dict or tuple) or None when there is no row
+        :rtype: Optional[Any]
         """
         bound = self._bind(query=query, params=params)
         if bound is not None:
-            rows = await self._fetch_native(bound=bound)
+            rows = await self._fetch_native(bound=bound, as_tuples=as_tuples)
             return rows[0] if rows else None
         result: CursorResult[Any] = await self._connection.execute(
             statement=query, parameters=params
         )
-        row = result.mappings().first()
-        return row
+        if as_tuples:
+            row = result.first()
+            return tuple(row) if row is not None else None
+        mapping = result.mappings().first()
+        if mapping is None or has_duplicate_labels(result=result):
+            return mapping
+        return dict(mapping)
 
     async def fetch_val(
         self,
@@ -115,14 +169,8 @@ class QueryExecutor:
             a cached query template passes its slot values here
         :return: Scalar value or None
         """
-        bound = self._bind(query=query, params=params)
-        if bound is not None:
-            rows = await self._fetch_native(bound=bound)
-            return list(rows[0].values())[column] if rows else None
-        result: CursorResult[Any] = await self._connection.execute(
-            statement=query, parameters=params
-        )
-        return result.scalar()
+        row = await self.fetch_one(query=query, params=params, as_tuples=True)
+        return row[column] if row is not None else None
 
     async def execute(
         self, query: Executable, params: Optional[Mapping[str, Any]] = None
@@ -231,20 +279,28 @@ class QueryExecutor:
         async with self._connection.stream(
             statement=query, parameters=params
         ) as result:
+            keep_mappings = has_duplicate_labels(result=result)
             async for mapping in result.mappings():
-                yield mapping
+                yield mapping if keep_mappings else dict(mapping)
 
-    async def _fetch_native(self, bound: BoundStatement) -> List[Any]:
+    async def _fetch_native(
+        self, bound: BoundStatement, as_tuples: bool = False
+    ) -> List[Any]:
         """
         Fetch all rows of a bound statement on the driver.
 
         :param bound: bound statement
-        :return: rows keyed by result label
+        :type bound: BoundStatement
+        :param as_tuples: return tuples of values in select order
+        :type as_tuples: bool
+        :return: rows keyed by result label, or tuples
+        :rtype: List[Any]
         """
         assert self._native is not None
-        return await self._run(
-            method=self._native.adapter.fetch_all, payload=bound, args=bound.args
-        )
+        method = self._native.adapter.fetch_all
+        if as_tuples:
+            method = functools.partial(method, as_tuples=True)
+        return await self._run(method=method, payload=bound, args=bound.args)
 
     def _bind(
         self, query: Executable, params: Optional[Mapping[str, Any]] = None

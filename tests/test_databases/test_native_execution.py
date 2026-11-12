@@ -244,6 +244,62 @@ async def test_every_executor_method_on_both_paths():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("use_native", [True, False])
+async def test_rows_as_tuples_on_both_paths(use_native):
+    database = base_ormar_config.database
+    table = Everything.ormar_config.table
+    async with database:
+        async with database.transaction(force_rollback=True):
+            saved = await make_everything("tuples").save()
+            query = sa.select(
+                table.c.stamp, table.c.name.label("label"), table.c.id
+            ).where(table.c.id == saved.pk)
+            context = (
+                contextlib.nullcontext() if use_native else sqlalchemy_path(database)
+            )
+            with context:
+                async with database.get_query_executor() as executor:
+                    mapped = await executor.fetch_all(query)
+                    as_tuples = await executor.fetch_all(query, as_tuples=True)
+                    one = await executor.fetch_one(query, as_tuples=True)
+                    missing = await executor.fetch_one(
+                        query.where(table.c.id < 0), as_tuples=True
+                    )
+    assert list(mapped[0]) == ["stamp", "label", "id"]
+    assert as_tuples == [tuple(mapped[0].values())] == [one]
+    assert as_tuples[0][1:] == ("tuples", saved.pk)
+    assert isinstance(as_tuples[0][0], datetime.datetime)
+    assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_text_statement_rows_on_fallback_plan():
+    database = base_ormar_config.database
+    query = sa.text("SELECT text, id FROM native_notes WHERE id = :note_id")
+    async with database:
+        async with database.transaction(force_rollback=True):
+            note = await Note(text="plain").save()
+            params = {"note_id": note.pk}
+            if HAS_NATIVE:
+                compiler = database.native_backend.compiler
+                assert compiler.bind(stmt=query, params=params).plan.fallback
+            async with database.get_query_executor() as executor:
+                mapped = await executor.fetch_all(query, params)
+                one = await executor.fetch_one(query, params)
+                as_tuples = await executor.fetch_all(query, params, as_tuples=True)
+                one_tuple = await executor.fetch_one(query, params, as_tuples=True)
+                second = await executor.fetch_val(query, column=1, params=params)
+                missing = await executor.fetch_one(
+                    query, {"note_id": -1}, as_tuples=True
+                )
+    assert type(mapped[0]) is dict and type(one) is dict
+    assert mapped == [one] == [{"text": "plain", "id": note.pk}]
+    assert as_tuples == [one_tuple] == [("plain", note.pk)]
+    assert second == note.pk
+    assert missing is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.skipif(not HAS_NATIVE, reason="no native backend for this driver")
 async def test_fallback_plan_runs_through_sqlalchemy():  # pragma: no cover
     database = base_ormar_config.database

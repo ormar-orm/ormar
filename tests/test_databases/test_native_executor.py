@@ -48,6 +48,14 @@ async def test_every_executor_method_runs_natively(database):
             assert await executor.fetch_all(query) == [{"id": pk, "name": "b"}]
             assert await executor.fetch_one(query) == {"id": pk, "name": "b"}
             assert await executor.fetch_one(rows.select().where(rows.c.id < 0)) is None
+            assert await executor.fetch_all(query, as_tuples=True) == [(pk, "b")]
+            assert await executor.fetch_one(query, as_tuples=True) == (pk, "b")
+            assert (
+                await executor.fetch_one(
+                    rows.select().where(rows.c.id < 0), as_tuples=True
+                )
+                is None
+            )
             assert await executor.fetch_val(sa.select(rows.c.name)) == "b"
             assert (
                 await executor.fetch_val(sa.select(rows.c.name).where(rows.c.id < 0))
@@ -171,8 +179,15 @@ async def test_duplicate_labels_behave_like_sqlalchemy(database):
     async with database.get_query_executor() as executor:
         await executor.execute(rows.insert().values(id=12, name="dup"))
         found = await executor.fetch_all(stmt.where(rows.c.id == 12))
-    with pytest.raises(sa.exc.InvalidRequestError):
-        found[0]["id"]
+        one = await executor.fetch_one(stmt.where(rows.c.id == 12))
+        streamed = [row async for row in executor.iterate(stmt.where(rows.c.id == 12))]
+        as_tuples = await executor.fetch_all(
+            stmt.where(rows.c.id == 12), as_tuples=True
+        )
+    for row in (found[0], one, streamed[0]):
+        with pytest.raises(sa.exc.InvalidRequestError):
+            row["id"]
+    assert as_tuples == [(12, 1)]
 
 
 @pytest.mark.asyncio
@@ -223,3 +238,23 @@ async def test_executor_params_on_both_paths(database, native):
         assert [dict(r) async for r in executor.iterate(stmt, params)] == [
             {"id": 31, "name": "p"}
         ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [True, False])
+async def test_rows_are_dicts_or_tuples_on_both_paths(database, native):
+    if not native:
+        database.native_backend = None
+    stmt = sa.select(rows.c.name.label("label"), rows.c.id).where(rows.c.id == 41)
+    async with database.get_query_executor(transactional=True) as executor:
+        await executor.execute(rows.insert().values(id=41, name="t"))
+        mapped = await executor.fetch_all(stmt)
+        one = await executor.fetch_one(stmt)
+        streamed = [row async for row in executor.iterate(stmt)]
+        assert await executor.fetch_all(stmt, as_tuples=True) == [("t", 41)]
+        assert await executor.fetch_one(stmt, as_tuples=True) == ("t", 41)
+        assert await executor.fetch_val(stmt, column=1) == 41
+        assert await executor.fetch_one(stmt.where(rows.c.id < 0)) is None
+    for row in (mapped[0], one, streamed[0]):
+        assert isinstance(row, dict)
+        assert list(row.items()) == [("label", "t"), ("id", 41)]
