@@ -1451,10 +1451,12 @@ class QuerySet(Generic[T]):
 
             SELECT tracks.id FROM tracks WHERE <filters> FOR UPDATE OF tracks
             UPDATE tracks SET ... WHERE tracks.id IN (<locked keys>)
-            SELECT tracks.* FROM tracks WHERE tracks.id IN (<locked keys>)
+            SELECT tracks.* FROM tracks WHERE tracks.id IN (<locked keys>) FOR UPDATE
 
         The lock keeps other transactions from changing the rows in between,
-        so the rows read back are the rows as this update left them.
+        and the locking read back sees the latest committed versions (not the
+        snapshot of a REPEATABLE READ transaction), so the rows read back are
+        the rows as this update left them.
 
         :param updates: updated values by column name
         :type updates: dict
@@ -1497,7 +1499,7 @@ class QuerySet(Generic[T]):
         if not each and not (self.filter_clauses or self.exclude_clauses):
             raise QueryDefinitionError(
                 "You cannot update without filtering the queryset first. "
-                "If you want to update all rows use update(each=True, **kwargs)"
+                "If you want to update all rows pass each=True."
             )
 
         self_fields = self.model.extract_db_own_fields().union(

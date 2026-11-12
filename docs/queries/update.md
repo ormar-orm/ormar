@@ -171,7 +171,9 @@ print(counter.value)
 * No signals are sent, like in `update()`.
 * `QuerysetProxy.update_returning()` (e.g. `album.tracks.update_returning(...)`)
   updates the related models in one statement, unlike its `update()`, which calls
-  `update()` of each model; fields of a through model are not updated.
+  `update()` of each model; fields of a through model are not updated, and
+  `limit()` / `offset()` do not apply (like in `QuerySet.update()`), while the
+  proxy's `update()` respects them.
 
 !!!note "Backends"
     PostgreSQL and SQLite (3.35+, the SQLite version Python is built with) run one
@@ -180,9 +182,11 @@ print(counter.value)
     MySQL and MariaDB have no `UPDATE ... RETURNING`, so inside the open
     transaction, or a new one, three statements run:
     `SELECT <primary key> ... FOR UPDATE` with the same filters, `UPDATE ... WHERE
-    <primary key> IN (...)` and the select of the updated rows by primary key. The
-    rows stay locked until the transaction ends, so the result is the same as with
-    `RETURNING`, also when other transactions update the same rows.
+    <primary key> IN (...)` and a locking select (`FOR UPDATE`) of the updated rows
+    by primary key. The rows stay locked until the transaction ends and the locking
+    read sees their latest committed values (not the snapshot of the open
+    transaction), so the result is the same as with `RETURNING`, also when other
+    transactions changed the same rows.
 
 ## update_or_create
 

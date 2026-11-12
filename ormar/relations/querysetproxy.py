@@ -650,7 +650,7 @@ class QuerysetProxy(Generic[T]):
         ):
             raise QueryDefinitionError(
                 "You cannot update without filtering the queryset first. "
-                "If you want to update all rows use update(each=True, **kwargs)"
+                "If you want to update all rows pass each=True."
             )
 
     async def update(self, each: bool = False, **kwargs: Any) -> int:

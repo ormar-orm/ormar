@@ -414,10 +414,16 @@ def pk_select_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
 
 def build_rows_select(table: sqlalchemy.Table, primary_key: "PrimaryKey") -> Executable:
     """
-    Build a select of all columns of the rows of a list of primary keys::
+    Build a locking select of all columns of the rows of a list of primary
+    keys::
 
         SELECT authors.id, authors.name, ... FROM authors
-        WHERE authors.id IN (:ormar_pks)
+        WHERE authors.id IN (:ormar_pks) FOR UPDATE
+
+    A locking read sees the latest committed row versions; a plain read in a
+    MySQL REPEATABLE READ transaction would see its snapshot, which misses
+    changes committed by others to rows this update left unchanged. The rows
+    are already locked by the update, so the lock costs nothing.
 
     :param table: queried table
     :type table: sqlalchemy.Table
@@ -426,7 +432,7 @@ def build_rows_select(table: sqlalchemy.Table, primary_key: "PrimaryKey") -> Exe
     :return: select statement
     :rtype: Executable
     """
-    return table.select().where(primary_key.in_clause(slot=PKS_SLOT))
+    return table.select().where(primary_key.in_clause(slot=PKS_SLOT)).with_for_update()
 
 
 def rows_select_template(model_cls: Type[Any], keys: list) -> StatementTemplate:

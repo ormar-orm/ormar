@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 from typing import Any, Optional
 
 import pytest
@@ -331,5 +332,42 @@ async def test_updated_rows_stay_locked(statements):  # pragma: no cover
 
             await asyncio.gather(hold_updated_rows(locked, release), probe())
             assert (await Track.objects.get(title="a")).position == 1
+        finally:
+            await delete_catalog()
+
+
+async def rename_track(title: str, new_title: str) -> None:  # pragma: no cover
+    await Track.objects.filter(title=title).update(title=new_title)
+
+
+@pytest.mark.skipif(
+    DATABASE_URL.startswith("sqlite"), reason="SQLite locks the whole database"
+)
+@pytest.mark.asyncio
+async def test_rows_changed_by_others_come_back_as_stored(
+    statements,
+):  # pragma: no cover
+    """
+    A row changed and committed by another connection after the transaction
+    read it comes back as stored, also when this update leaves it unchanged
+    (a plain read of the MySQL path would return the transaction's snapshot).
+    """
+    async with database:
+        try:
+            await create_catalog()
+            track_id = (await Track.objects.get(title="a")).id
+            async with database.transaction():
+                await Track.objects.all()
+                # another connection: the task gets a context without the
+                # transaction of this one
+                await contextvars.Context().run(
+                    asyncio.ensure_future, rename_track(title="a", new_title="z")
+                )
+                returned = await Track.objects.filter(id=track_id).update_returning(
+                    position=None
+                )
+                assert [(track.title, track.position) for track in returned] == [
+                    ("z", None)
+                ]
         finally:
             await delete_catalog()
