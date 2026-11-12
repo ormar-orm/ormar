@@ -41,6 +41,14 @@
     )
     ```
 
+### 🐛 Fixes
+
+* `fetch_val(query, column=...)` of the query executor returned the first column for any `column` when the statement ran through SQLAlchemy (drivers without native execution, `native_execution=False`); it returns the requested column now.
+
+### 📝 Docs
+
+* **SQLAlchemy core statements**: how to run core statements on ormar's connection and in its transactions with `database.get_query_executor()`, what its methods return and how to turn the rows back into models. See [SQLAlchemy core statements](queries/sqlalchemy-core.md).
+
 ### ⚡ Performance
 
 * **Upserts reuse their compiled statement** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))

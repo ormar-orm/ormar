@@ -36,6 +36,7 @@ nav:
     - queries/pagination-and-rows-number.md
     - queries/aggregations.md
     - Return raw data: queries/raw-data.md
+    - SQLAlchemy core statements: queries/sqlalchemy-core.md
   - Signals: signals.md
   - Transactions: transactions.md
   - Use with Fastapi:
