@@ -363,7 +363,7 @@ async def test_update_values_errors():
         async with base_ormar_config.database.transaction(force_rollback=True):
             track = await Track.objects.create(name="t")
             invalid = [
-                ({"nope": 1}, None, r"does not have: \['nope'\]"),
+                ({"nope": 1}, None, r"does not store in its table: \['nope'\]"),
                 ({"label": "x"}, ["label"], r"both update_fields and update_values"),
                 ({"completed": F("track__name")}, None, "reads a related model"),
                 ({"completed": Inserted("track__id")}, None, "reads a related model"),
@@ -409,3 +409,34 @@ async def test_update_values_errors():
             # a literal operand goes on the right, as in update()
             with pytest.raises(TypeError):
                 1 + F("completed")  # type: ignore[operator]
+
+
+@pytest.mark.asyncio
+async def test_update_values_reject_reverse_relations_before_signals():
+    calls: list[str] = []
+
+    @ormar.pre_save(Track)
+    async def before(sender, instance, **kwargs):
+        calls.append(instance.name)  # pragma: no cover
+
+    not_stored = r"does not store in its table: \['progress'\]"
+    try:
+        async with base_ormar_config.database:
+            async with base_ormar_config.database.transaction(force_rollback=True):
+                with pytest.raises(QueryDefinitionError, match=not_stored):
+                    await Track.objects.create(
+                        id=1,
+                        name="a",
+                        on_conflict="update",
+                        update_values={"progress": []},
+                    )
+                with pytest.raises(QueryDefinitionError, match=not_stored):
+                    await Track.objects.bulk_create(
+                        [Track(id=1, name="a"), Track(id=2, name="b")],
+                        on_conflict="update",
+                        update_values={"progress": 1},
+                    )
+                assert calls == []
+                assert await Track.objects.count() == 0
+    finally:
+        Track.ormar_config.signals.pre_save.disconnect(before)

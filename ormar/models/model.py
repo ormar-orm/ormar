@@ -307,7 +307,8 @@ class Model(ModelRow):
         :type update_fields: Optional[list[str]]
         :param update_values: value or expression by field name
         :type update_values: Optional[dict[str, Any]]
-        :raises QueryDefinitionError: for an unknown field, a field also in
+        :raises QueryDefinitionError: for a field not stored in the model's
+            table (unknown, reverse or many to many relation), a field also in
             ``update_fields``, an expression setting a relation, reading a
             related model or another field the upsert sets
         :return: ``on_update`` values and ``update_values``, by column name
@@ -315,7 +316,8 @@ class Model(ModelRow):
         """
         update_fields = update_fields or []
         update_values = update_values or {}
-        related_names = cls.extract_related_names()
+        # foreign keys stored in the model's own table, no reverse or m2m names
+        related_names = cls._extract_db_related_names()
         unknown = [
             name
             for name in update_values
@@ -323,7 +325,8 @@ class Model(ModelRow):
         ]
         if unknown:
             raise QueryDefinitionError(
-                f"update_values names fields the model does not have: {unknown}"
+                f"update_values names fields the model does not store in its "
+                f"table: {unknown}"
             )
         repeated = [name for name in update_values if name in update_fields]
         if repeated:
