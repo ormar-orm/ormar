@@ -20,7 +20,6 @@ import sqlalchemy
 
 import ormar  # noqa I100
 from ormar import MultipleMatches, NoMatch
-from ormar.databases.dialects import on_update_assignment
 from ormar.exceptions import (
     ModelListEmptyError,
     ModelPersistenceError,
@@ -50,6 +49,7 @@ from ormar.queryset.templates import (
     StatementTemplate,
     aggregate_statement,
     build_bulk_update,
+    build_update_assignment,
     cached_statement,
     canonical_actions,
     clauses_cache_key,
@@ -61,6 +61,8 @@ from ormar.queryset.templates import (
     release_values,
     template_cache_for,
     template_params,
+    update_values_key,
+    update_values_params,
     value_binds,
     value_params,
 )
@@ -1924,6 +1926,7 @@ class QuerySet(Generic[T]):
         on_conflict: Literal["update"],
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> "T": ...
 
@@ -1936,6 +1939,7 @@ class QuerySet(Generic[T]):
         on_conflict: Optional[Literal["ignore", "update"]] = None,
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Optional["T"]:
         """
@@ -1950,8 +1954,9 @@ class QuerySet(Generic[T]):
         With ``on_conflict="update"`` a row conflicting on ``conflict_target``
         (the primary key by default) is updated instead, in the same statement:
         ``update_fields`` (by default all passed fields but the target and the
-        key) and the fields with ``on_update``. The stored row is returned.
-        pre_save and post_save are sent in both cases.
+        key, none when ``update_values`` are given), ``update_values`` and the
+        fields with ``on_update``. The stored row is returned. pre_save and
+        post_save are sent in both cases.
 
         :param on_conflict: ``ignore`` to skip a conflicting row, ``update`` to
             update it
@@ -1959,24 +1964,35 @@ class QuerySet(Generic[T]):
         :param conflict_target: names of the fields of the unique key the row
             conflicts on, only with ``update``
         :type conflict_target: Optional[list[str]]
-        :param update_fields: names of the fields updated, only with ``update``
+        :param update_fields: names of the fields updated from the inserted
+            row, only with ``update``
         :type update_fields: Optional[list[str]]
+        :param update_values: values or expressions set on conflict by field
+            name, only with ``update``: ``F("x")`` reads the existing row,
+            ``Inserted("x")`` the inserted one
+        :type update_values: Optional[dict[str, Any]]
         :param kwargs: fields names and proper value types
         :type kwargs: Any
-        :raises QueryDefinitionError: for ``conflict_target`` or
-            ``update_fields`` without ``on_conflict="update"``, or a target field
-            without a value
+        :raises QueryDefinitionError: for ``conflict_target``,
+            ``update_fields`` or ``update_values`` without
+            ``on_conflict="update"``, a target field without a value or invalid
+            ``update_values``
         :return: created or stored model, ``None`` when the row was skipped
         :rtype: Optional[Model]
         """
-        if (conflict_target or update_fields) and on_conflict != "update":
+        if (conflict_target or update_fields or update_values) and (
+            on_conflict != "update"
+        ):
             raise QueryDefinitionError(
-                "conflict_target and update_fields need on_conflict='update'"
+                "conflict_target, update_fields and update_values need "
+                "on_conflict='update'"
             )
         instance = self.model(**kwargs)
         if on_conflict == "update":
             return await instance._upsert(
-                conflict_target=conflict_target, update_fields=update_fields
+                conflict_target=conflict_target,
+                update_fields=update_fields,
+                update_values=update_values,
             )
         if on_conflict:
             return await instance._save(on_conflict=on_conflict)
@@ -1988,6 +2004,7 @@ class QuerySet(Generic[T]):
         on_conflict: Optional[Literal["ignore", "update"]] = None,
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
     ) -> None:
         """
         Performs a bulk create in one database session to speed up the process.
@@ -2003,8 +2020,9 @@ class QuerySet(Generic[T]):
         With ``on_conflict="ignore"`` rows conflicting with existing ones on any
         unique key are skipped. With ``on_conflict="update"`` rows conflicting on
         ``conflict_target`` (the primary key by default) update ``update_fields``
-        (by default all inserted fields but the target and the key) and fields
-        with ``on_update``. Skipped objects are marked as saved too.
+        (by default all inserted fields but the target and the key, none when
+        ``update_values`` are given), ``update_values`` and fields with
+        ``on_update``. Skipped objects are marked as saved too.
 
         Bulk operations do not send signals.
 
@@ -2016,25 +2034,39 @@ class QuerySet(Generic[T]):
         :param conflict_target: names of the fields of the unique key the rows
             conflict on, only with ``update``
         :type conflict_target: Optional[list[str]]
-        :param update_fields: names of the fields updated, only with ``update``
+        :param update_fields: names of the fields updated from the inserted
+            rows, only with ``update``
         :type update_fields: Optional[list[str]]
+        :param update_values: values or expressions set on conflict by field
+            name, the same for every row, only with ``update`` (see ``create``)
+        :type update_values: Optional[dict[str, Any]]
         """
         self.model.verify_writable()
 
         if not objects:
             raise ModelListEmptyError("Bulk create objects are empty!")
-        if (conflict_target or update_fields) and on_conflict != "update":
+        if (conflict_target or update_fields or update_values) and (
+            on_conflict != "update"
+        ):
             raise QueryDefinitionError(
-                "conflict_target and update_fields need on_conflict='update'"
+                "conflict_target, update_fields and update_values need "
+                "on_conflict='update'"
             )
-        fields = self.model_config.model_fields
-        on_update = {
-            self.model.get_column_alias(field_name=name): fields[name].get_on_update()
-            for name in self.model._onupdate_fields
-            if on_conflict == "update" and name not in (update_fields or ())
-        }
-        on_update_params = {
-            f"ormar_on_update_{column}": value for column, value in on_update.items()
+        on_update, conflict_values = (
+            self.model._conflict_updates(
+                update_fields=update_fields, update_values=update_values
+            )
+            if on_conflict == "update"
+            else ({}, {})
+        )
+        # bound after the VALUES clause, the same for every row
+        conflict_params = update_values_params(update_values=conflict_values)
+        update_params = {
+            **{
+                f"ormar_on_update_{column}": value
+                for column, value in on_update.items()
+            },
+            **conflict_params,
         }
 
         ready_objects = []
@@ -2060,28 +2092,36 @@ class QuerySet(Generic[T]):
         )
         on_update_columns = tuple(sorted(on_update))
         # MySQL drivers turn executemany into one multi-row VALUES and leave
-        # the on_update binds after it unfilled, so a batch reads the values
-        # from user variables set once before it
-        on_update_variables = (
-            bool(on_update)
+        # the binds after it unfilled, so a batch reads the on_update values
+        # and update_values literals from user variables set once before it
+        update_variables = (
+            bool(update_params)
             and not database.rules.execute_many_with_trailing_binds
             and any(len(rows) > 1 for rows in rows_by_keys.values())
         )
         async with database.get_query_executor(
             transactional=several_statements
         ) as executor:
-            if on_update_variables:  # pragma: no cover
+            if update_variables:  # pragma: no cover
                 await executor.execute(
                     query=cached_statement(
                         model_cls=self.model,
-                        key=("on_update_assignment", on_update_columns),
-                        builder=on_update_assignment,
-                        table=self.table,
+                        key=(
+                            "update_assignment",
+                            on_update_columns,
+                            update_values_key(update_values=conflict_values),
+                        ),
+                        builder=build_update_assignment,
+                        model=self.model,
                         on_update=on_update_columns,
+                        update_values=conflict_values,
                     ),
                     params={
-                        f"ormar_on_update_{index}": on_update[column]
-                        for index, column in enumerate(on_update_columns)
+                        **{
+                            f"ormar_on_update_{index}": on_update[column]
+                            for index, column in enumerate(on_update_columns)
+                        },
+                        **conflict_params,
                     },
                 )
             for rows in rows_by_keys.values():
@@ -2096,11 +2136,12 @@ class QuerySet(Generic[T]):
                     conflict_target=conflict_target,
                     update_fields=update_fields,
                     on_update=on_update_columns,
-                    on_update_variables=on_update_variables,
+                    update_values=conflict_values,
+                    update_variables=update_variables,
                 )
-                bound_on_update = {} if on_update_variables else on_update_params
+                bound_updates = {} if update_variables else update_params
                 params = [
-                    {**value_params(names=names, values=row), **bound_on_update}
+                    {**value_params(names=names, values=row), **bound_updates}
                     for row in rows
                 ]
                 if len(rows) == 1:
