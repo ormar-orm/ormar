@@ -70,6 +70,7 @@ from ormar.queryset.templates.slots import (
     LIMIT_SLOT,
     OFFSET_SLOT,
     PK_SLOT,
+    PKS_SLOT,
     SlotBinder,
     canonical_actions,
     iter_actions,
@@ -87,6 +88,7 @@ from ormar.queryset.templates.writes import (
     insert_statement,
     insert_template,
     pk_select_template,
+    rows_select_template,
     update_template,
 )
 
@@ -94,6 +96,7 @@ __all__ = [
     "LIMIT_SLOT",
     "OFFSET_SLOT",
     "PK_SLOT",
+    "PKS_SLOT",
     "SlotBinder",
     "StatementTemplate",
     "TemplateCache",
@@ -117,6 +120,7 @@ __all__ = [
     "order_cache_key",
     "pk_select_template",
     "release_values",
+    "rows_select_template",
     "template_cache_for",
     "template_params",
     "update_template",

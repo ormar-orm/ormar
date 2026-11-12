@@ -634,6 +634,25 @@ class QuerysetProxy(Generic[T]):
             await self.create_through_instance(created, **through_kwargs)
         return created
 
+    def check_update_filtered(self, each: bool) -> None:
+        """
+        :param each: flag if all related models should be affected if no filter
+            is passed
+        :type each: bool
+        :raises QueryDefinitionError: if the queryset has no filter besides the
+            one on the parent model and ``each`` is not set
+        """
+        # queryset proxy always have one filter for pk of parent model
+        if (
+            not each
+            and (len(self.queryset.filter_clauses) + len(self.queryset.exclude_clauses))
+            == 1
+        ):
+            raise QueryDefinitionError(
+                "You cannot update without filtering the queryset first. "
+                "If you want to update all rows use update(each=True, **kwargs)"
+            )
+
     async def update(self, each: bool = False, **kwargs: Any) -> int:
         """
         Updates the model table after applying the filters from kwargs.
@@ -648,16 +667,7 @@ class QuerysetProxy(Generic[T]):
         :return: number of updated rows
         :rtype: int
         """
-        # queryset proxy always have one filter for pk of parent model
-        if (
-            not each
-            and (len(self.queryset.filter_clauses) + len(self.queryset.exclude_clauses))
-            == 1
-        ):
-            raise QueryDefinitionError(
-                "You cannot update without filtering the queryset first. "
-                "If you want to update all rows use update(each=True, **kwargs)"
-            )
+        self.check_update_filtered(each=each)
 
         through_kwargs = kwargs.pop(self.through_model_name, {})
         children = await self.queryset.all()
@@ -669,6 +679,27 @@ class QuerysetProxy(Generic[T]):
                     **through_kwargs,  # type: ignore
                 )
         return len(children)
+
+    async def update_returning(self, each: bool = False, **kwargs: Any) -> list["T"]:
+        """
+        Updates the related models in one statement, like
+        ``QuerySet.update_returning()``, and returns them as stored after the
+        update. Unlike ``update()`` it runs no per-model ``update()``: no
+        signals are sent and fields of the through model are not updated.
+
+        You have to either pass a filter to narrow down a query or explicitly pass
+        each=True flag to affect all related models.
+
+        :param each: flag if all related models should be affected if no filter
+            is passed
+        :type each: bool
+        :param kwargs: fields names and proper value types, or column expressions
+        :type kwargs: Any
+        :return: updated models
+        :rtype: list[Model]
+        """
+        self.check_update_filtered(each=each)
+        return await self.queryset.update_returning(each=True, **kwargs)
 
     async def get_or_create(
         self,

@@ -3,6 +3,7 @@
 Following methods and functions allow updating existing data in the database.
 
 * `update(each: bool = False, **kwargs) -> int`
+* `update_returning(each: bool = False, **kwargs) -> list[Model]`
 * `update_or_create(**kwargs) -> Model`
 * `bulk_update(objects: list[Model], columns: list[str] = None) -> None`
 
@@ -14,6 +15,7 @@ Following methods and functions allow updating existing data in the database.
 
 
 * `QuerysetProxy`
+    * `QuerysetProxy.update_returning(each: bool = False, **kwargs)` method
     * `QuerysetProxy.update_or_create(**kwargs)` method
 
 ## update
@@ -137,6 +139,50 @@ It compiles to `random()` on PostgreSQL, `rand()` on MySQL and on SQLite to its
 integer `random()` scaled into the same range. Use it with float or decimal
 columns: an integer column rounds the value on PostgreSQL and MySQL, while SQLite
 stores the fraction.
+
+## update_returning
+
+`update_returning(each: bool = False, **kwargs) -> list[Model]`
+
+Updates the rows like `update()` (same filters, `each` flag, value validation and
+column expressions) and returns them as stored after the update, instead of their
+number:
+
+```python
+expired = await Booking.objects.filter(
+    status="waitlisted", training__starts_at__lte=now
+).update_returning(status="expired")
+for booking in expired:
+    await notify(booking.member.pk, booking.training.pk)
+
+# the value as the database computed it
+[counter] = await Counter.objects.filter(name="tickets").update_returning(
+    value=F("value") + 1
+)
+print(counter.value)
+```
+
+* The models hold the columns of the model's own table: relations are not loaded,
+  a foreign key is a related model with only its primary key set, like in `all()`
+  without `select_related()`. `fields()`, `select_related()` and `order_by()` of
+  the queryset do not apply, the rows come back in no particular order.
+* With no matching row nothing is updated and an empty list is returned.
+* Rows not updated because an expression found no related row are not returned.
+* No signals are sent, like in `update()`.
+* `QuerysetProxy.update_returning()` (e.g. `album.tracks.update_returning(...)`)
+  updates the related models in one statement, unlike its `update()`, which calls
+  `update()` of each model; fields of a through model are not updated.
+
+!!!note "Backends"
+    PostgreSQL and SQLite (3.35+, the SQLite version Python is built with) run one
+    `UPDATE ... RETURNING`.
+
+    MySQL and MariaDB have no `UPDATE ... RETURNING`, so inside the open
+    transaction, or a new one, three statements run:
+    `SELECT <primary key> ... FOR UPDATE` with the same filters, `UPDATE ... WHERE
+    <primary key> IN (...)` and the select of the updated rows by primary key. The
+    rows stay locked until the transaction ends, so the result is the same as with
+    `RETURNING`, also when other transactions update the same rows.
 
 ## update_or_create
 

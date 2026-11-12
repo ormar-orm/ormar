@@ -46,6 +46,7 @@ from ormar.queryset.prefetch import Prefetch
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
 from ormar.queryset.templates import (
+    PKS_SLOT,
     SlotBinder,
     StatementTemplate,
     aggregate_statement,
@@ -59,6 +60,7 @@ from ormar.queryset.templates import (
     insert_statement,
     order_cache_key,
     release_values,
+    rows_select_template,
     template_cache_for,
     template_params,
     value_binds,
@@ -534,7 +536,9 @@ class QuerySet(Generic[T]):
     def build_write_template(self, kind: str, values: dict) -> StatementTemplate:
         """
         Return the filtered update (``kind="update"``) or delete of this
-        queryset from the model's template cache, with the values to bind::
+        queryset, or a statement of ``update_returning()`` (see
+        ``build_write_statement``), from the model's template cache, with the
+        values to bind::
 
             Author.objects.filter(score__lt=5).build_write_template(
                 kind="update", values={"name": "x"}
@@ -550,7 +554,8 @@ class QuerySet(Generic[T]):
         ``SlotBinder`` like in reads, updated values like in single-row writes
         (``ormar_v{i}``).
 
-        :param kind: ``"update"`` or ``"delete"``
+        :param kind: ``"update"``, ``"delete"``, ``"update_returning"``,
+            ``"lock"`` or ``"update_locked"``
         :type kind: str
         :param values: updated values by column name (empty for delete)
         :type values: dict
@@ -597,7 +602,18 @@ class QuerySet(Generic[T]):
         models join those tables in the statement (``UPDATE ... FROM`` or a
         multi-table ``UPDATE`` on MySQL, as SQLAlchemy renders it).
 
-        :param kind: ``"update"`` or ``"delete"``
+        ``update_returning()`` uses three more kinds:
+
+        * ``"update_returning"`` - the update with ``RETURNING`` all columns of
+          the table
+        * ``"lock"`` - without ``RETURNING`` (MySQL), ``SELECT <pk> ... FOR
+          UPDATE`` of the rows the update would touch: same tables, joins and
+          filters
+        * ``"update_locked"`` - the update of the locked rows, by primary key
+          (``PKS_SLOT``) instead of the filters
+
+        :param kind: ``"update"``, ``"delete"``, ``"update_returning"``,
+            ``"lock"`` or ``"update_locked"``
         :type kind: str
         :param values: updated values by column name (empty for delete)
         :type values: dict
@@ -607,36 +623,45 @@ class QuerySet(Generic[T]):
         :rtype: Any
         """
         table = self.table
-        expr: Any
-        if kind == "update":
-            names = tuple(sorted(values))
-            binds = value_binds(table=table, names=names)
-            join_conditions: dict[str, list] = {}
-            for index, name in enumerate(names):
-                if isinstance(values[name], Expression):
-                    columns = expression_columns(node=values[name], model=self.model)
-                    binds[table.c[name]] = expression_clause(
-                        node=values[name], columns=columns, slot=f"ormar_v{index}"
-                    )
-                    for column in columns.values():
-                        join_conditions.update(
-                            forward_join_conditions(
-                                model=self.model, path=column.related_parts
-                            )
+        primary_key = self.model_config.pk
+        names = tuple(sorted(values))
+        binds = value_binds(table=table, names=names)
+        join_conditions: dict[str, list] = {}
+        for index, name in enumerate(names):
+            if isinstance(values[name], Expression):
+                columns = expression_columns(node=values[name], model=self.model)
+                binds[table.c[name]] = expression_clause(
+                    node=values[name], columns=columns, slot=f"ormar_v{index}"
+                )
+                for column in columns.values():
+                    join_conditions.update(
+                        forward_join_conditions(
+                            model=self.model, path=column.related_parts
                         )
-            expr = table.update().values(binds)
-            for conditions in join_conditions.values():
-                expr = expr.where(*conditions)
-        else:
+                    )
+        expr: Any
+        if kind == "delete":
             expr = table.delete()
+        elif kind == "lock":
+            expr = sqlalchemy.select(*primary_key.columns()).with_for_update(of=table)
+        else:
+            expr = table.update().values(binds)
+        for conditions in join_conditions.values():
+            expr = expr.where(*conditions)
+        if kind == "update_locked":
+            return expr.where(primary_key.in_clause(slot=PKS_SLOT))
         if self._filters_read_related():
-            return expr.where(self.matched_rows_clause(binder=binder))
-        expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
-            expr=expr
-        )
-        return FilterQuery(
-            filter_clauses=self.exclude_clauses, exclude=True, binder=binder
-        ).apply(expr=expr)
+            expr = expr.where(self.matched_rows_clause(binder=binder))
+        else:
+            expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
+                expr=expr
+            )
+            expr = FilterQuery(
+                filter_clauses=self.exclude_clauses, exclude=True, binder=binder
+            ).apply(expr=expr)
+        if kind == "update_returning":
+            return expr.returning(*table.c)
+        return expr
 
     def matched_rows_clause(self, binder: Optional[SlotBinder]) -> Any:
         """
@@ -674,13 +699,7 @@ class QuerySet(Generic[T]):
             .build_primary_key_select()
             .subquery("ormar_matched")
         )
-        pk_columns = [
-            self.table.c[alias] for alias in self.model_config.pk.column_aliases()
-        ]
-        target = (
-            pk_columns[0] if len(pk_columns) == 1 else sqlalchemy.tuple_(*pk_columns)
-        )
-        return target.in_(sqlalchemy.select(*matched.c))
+        return self.model_config.pk.row_value().in_(sqlalchemy.select(*matched.c))
 
     def limit_cache_key(self, limit: Optional[int]) -> tuple:
         """
@@ -1381,6 +1400,99 @@ class QuerySet(Generic[T]):
         :return: number of updated rows
         :rtype: int
         """
+        updates = self.update_values(each=each, values=kwargs)
+        template = self.build_write_template(kind="update", values=updates)
+        async with self.model_config.database.get_query_executor() as executor:
+            return await executor.execute(template.statement, template.params)
+
+    async def update_returning(self, each: bool = False, **kwargs: Any) -> list["T"]:
+        """
+        Updates the rows like ``update()`` and returns them as stored after the
+        update::
+
+            expired = await Booking.objects.filter(status="waitlist").update_returning(
+                status="expired"
+            )
+
+        The models hold the columns of the model's own table only: relations
+        are not loaded, foreign keys are models with only the primary key set,
+        like ``all()`` without ``select_related``. ``fields()``,
+        ``select_related()`` and the ordering of the queryset do not apply,
+        the rows come back in no particular order. No signals are sent.
+
+        PostgreSQL and SQLite (3.35+) run one ``UPDATE ... RETURNING``. MySQL
+        has no ``RETURNING``: in the open transaction, or a new one, the rows
+        are selected ``FOR UPDATE``, updated and read back by primary key.
+
+        :param each: flag if whole table should be affected if no filter is passed
+        :type each: bool
+        :param kwargs: fields names and proper value types, or column expressions
+        :type kwargs: Any
+        :raises QueryDefinitionError: like ``update()``
+        :return: updated models
+        :rtype: list[Model]
+        """
+        updates = self.update_values(each=each, values=kwargs)
+        database = self.model_config.database
+        if database.rules.update_returning:
+            template = self.build_write_template(
+                kind="update_returning", values=updates
+            )
+            async with database.get_query_executor() as executor:
+                rows = await executor.fetch_all(template.statement, template.params)
+        else:
+            rows = await self.update_locked_rows(updates=updates)
+        return await QuerySet(model_cls=self.model)._process_query_result_rows(rows)
+
+    async def update_locked_rows(self, updates: dict) -> list:
+        """
+        Update the rows of ``update_returning()`` without ``RETURNING``, in the
+        open transaction or a new one, and return them as stored::
+
+            SELECT tracks.id FROM tracks WHERE <filters> FOR UPDATE OF tracks
+            UPDATE tracks SET ... WHERE tracks.id IN (<locked keys>)
+            SELECT tracks.* FROM tracks WHERE tracks.id IN (<locked keys>)
+
+        The lock keeps other transactions from changing the rows in between,
+        so the rows read back are the rows as this update left them.
+
+        :param updates: updated values by column name
+        :type updates: dict
+        :return: rows of the updated models
+        :rtype: list
+        """
+        lock = self.build_write_template(kind="lock", values=updates)
+        update = self.build_write_template(kind="update_locked", values=updates)
+        aliases = self.model_config.pk.column_aliases()
+        async with self.model_config.database.get_query_executor(
+            transactional=True
+        ) as executor:
+            locked = await executor.fetch_all(lock.statement, lock.params)
+            if not locked:
+                return []
+            keys = [tuple(row[alias] for alias in aliases) for row in locked]
+            if len(aliases) == 1:
+                keys = [key[0] for key in keys]
+            await executor.execute(update.statement, {**update.params, PKS_SLOT: keys})
+            rows = rows_select_template(model_cls=self.model, keys=keys)
+            return await executor.fetch_all(rows.statement, rows.params)
+
+    def update_values(self, each: bool, values: dict) -> dict:
+        """
+        Check an ``update()`` and turn its keyword arguments into the values
+        to write, by column name: own fields only, ``on_update`` values added,
+        plain values validated and converted, expressions as expression nodes.
+
+        :param each: flag if whole table should be affected if no filter is passed
+        :type each: bool
+        :param values: keyword arguments of the update
+        :type values: dict
+        :raises QueryDefinitionError: if the queryset has no filters and
+            ``each`` is not set, or an expression is not allowed (see
+            ``update()``)
+        :return: values to write by column name
+        :rtype: dict
+        """
         self.model.verify_writable()
         if not each and not (self.filter_clauses or self.exclude_clauses):
             raise QueryDefinitionError(
@@ -1393,7 +1505,7 @@ class QuerySet(Generic[T]):
         )
         updates = {
             field_name: value
-            for field_name, value in kwargs.items()
+            for field_name, value in values.items()
             if field_name in self_fields
         }
         updates = self.model.populate_onupdate_value(updates)
@@ -1434,10 +1546,7 @@ class QuerySet(Generic[T]):
             raise sqlalchemy.exc.CompileError(
                 f"Unconsumed column names: {', '.join(unconsumed)}"
             )
-
-        template = self.build_write_template(kind="update", values=updates)
-        async with self.model_config.database.get_query_executor() as executor:
-            return await executor.execute(template.statement, template.params)
+        return updates
 
     async def delete(self, *args: Any, each: bool = False, **kwargs: Any) -> int:
         """

@@ -12,6 +12,7 @@ Rules only build statements and answer questions about the dialect. Running
 statements and reading results stays with the driver adapters.
 """
 
+import sqlite3
 from typing import Any, ClassVar, Dict, Tuple, Type, Union
 
 import sqlalchemy
@@ -129,6 +130,9 @@ class DialectRules:
     autocommit_engine: ClassVar[bool] = False
     #: a skipping conflict insert returns the written primary key
     conflict_returning: ClassVar[bool] = True
+    #: ``update_returning()`` runs one ``UPDATE ... RETURNING``; without it
+    #: the rows are locked, updated and read back by primary key
+    update_returning: ClassVar[bool] = True
     #: ``execute_many`` fills binds placed after the VALUES clause
     execute_many_with_trailing_binds: ClassVar[bool] = True
     #: foreign keys may reference a table in another schema
@@ -278,6 +282,8 @@ class SqliteRules(DialectRules):
     cross_schema_foreign_keys = False
     foreign_keys_pragma = True
     explicit_begin = True
+    # RETURNING came with SQLite 3.35, aiosqlite runs the stdlib sqlite3
+    update_returning = sqlite3.sqlite_version_info >= (3, 35)
 
     def make_insert(self, *, table: sqlalchemy.Table) -> sqlite.Insert:
         """
@@ -320,12 +326,14 @@ class PostgresRules(DialectRules):
 
 class MysqlRules(DialectRules):
     """
-    MySQL and MariaDB: ``ON DUPLICATE KEY UPDATE`` inserts without RETURNING,
+    MySQL and MariaDB: ``ON DUPLICATE KEY UPDATE`` inserts and updates without
+    RETURNING,
     no ``NULLS FIRST`` / ``NULLS LAST``, ``rand()`` and an AUTOCOMMIT engine.
     """
 
     autocommit_engine = True
     conflict_returning = False
+    update_returning = False
     execute_many_with_trailing_binds = False
     random_order = "rand()"
 

@@ -41,6 +41,16 @@
     )
     ```
 
+* **`update_returning()`: update rows and get them back**
+
+    `QuerySet.update_returning(each=False, **kwargs)` (and on `QuerysetProxy`) updates like `update()`, with the same filters and expressions, and returns the updated models as stored, with their own columns. PostgreSQL and SQLite (3.35+) run one `UPDATE ... RETURNING`; MySQL locks the rows with `SELECT ... FOR UPDATE`, updates them by primary key and reads them back in one transaction. `update()` is unchanged. See [update_returning](queries/update.md#update_returning).
+
+    ```python
+    expired = await Booking.objects.filter(status="waitlisted").update_returning(
+        status="expired"
+    )
+    ```
+
 ### ⚡ Performance
 
 * **Upserts reuse their compiled statement** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))

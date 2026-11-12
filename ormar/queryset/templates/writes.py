@@ -23,7 +23,7 @@ import sqlalchemy
 from sqlalchemy.sql import Executable
 
 from ormar.queryset.templates.cache import StatementTemplate, cached_statement
-from ormar.queryset.templates.slots import value_binds, value_params
+from ormar.queryset.templates.slots import PKS_SLOT, value_binds, value_params
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.databases.dialects import DialectRules
@@ -410,3 +410,47 @@ def pk_select_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
     )
     params = primary_key.bind_params(value=pk)
     return StatementTemplate(statement=statement, params=params)
+
+
+def build_rows_select(table: sqlalchemy.Table, primary_key: "PrimaryKey") -> Executable:
+    """
+    Build a select of all columns of the rows of a list of primary keys::
+
+        SELECT authors.id, authors.name, ... FROM authors
+        WHERE authors.id IN (:ormar_pks)
+
+    :param table: queried table
+    :type table: sqlalchemy.Table
+    :param primary_key: primary key of the queried model
+    :type primary_key: PrimaryKey
+    :return: select statement
+    :rtype: Executable
+    """
+    return table.select().where(primary_key.in_clause(slot=PKS_SLOT))
+
+
+def rows_select_template(model_cls: Type[Any], keys: list) -> StatementTemplate:
+    """
+    Return the select of the rows of a model with the given primary keys, used
+    by ``update_returning()`` to read the updated rows back where the database
+    has no ``UPDATE ... RETURNING``::
+
+        rows_select_template(model_cls=Author, keys=[1, 2])
+        # -> SELECT ... FROM authors WHERE authors.id IN (:ormar_pks)
+        #    {"ormar_pks": [1, 2]}
+
+    :param model_cls: model
+    :type model_cls: Type[Any]
+    :param keys: primary key values, tuples of column values for a composite key
+    :type keys: list
+    :return: statement and values to bind
+    :rtype: StatementTemplate
+    """
+    statement = cached_statement(
+        model_cls=model_cls,
+        key=("select_pks",),
+        builder=build_rows_select,
+        table=model_cls.ormar_config.table,
+        primary_key=model_cls.ormar_config.pk,
+    )
+    return StatementTemplate(statement=statement, params={PKS_SLOT: keys})
