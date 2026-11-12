@@ -2,6 +2,17 @@
 
 ## 0.30.0
 
+### 🆕 Features
+
+* **`update()` and `delete()` with related models** ([#1967](https://github.com/ormar-orm/ormar/issues/1967))
+
+    `update()` and `delete()` accept filters on related models of any kind (forward, reverse, many to many) and touch the rows the same filters select in `all()`, instead of raising `QueryDefinitionError`. Expressions in `update()` can read fields of models reached through foreign keys; rows with a `NULL` foreign key on the path are not updated. See [update](queries/update.md#reading-related-models).
+
+    ```python
+    await Booking.objects.filter(training__instructor=instructor).delete()
+    await Track.objects.filter(album__name="A").update(position=F("album__rank"))
+    ```
+
 ### ⚡ Performance
 
 * **Upserts reuse their compiled statement** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))

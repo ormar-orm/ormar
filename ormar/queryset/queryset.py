@@ -70,6 +70,7 @@ from ormar.queryset.utils import (
     normalize_slice,
 )
 from ormar.queryset.values_columns import extract_values, values_column_map
+from ormar.relations.aliases import alias_for, prefixed_table
 
 # rows built between yields to the event loop when materializing flat rows
 FLAT_ROWS_CHUNK = 500
@@ -95,7 +96,7 @@ def dump_for_save(obj: "Model") -> dict:
 
 
 if TYPE_CHECKING:  # pragma no cover
-    from ormar import Model
+    from ormar import ForeignKeyField, Model
     from ormar.models import T
     from ormar.models.excludable import ExcludableItems, Slot
     from ormar.models.ormar_config import OrmarConfig
@@ -541,10 +542,12 @@ class QuerySet(Generic[T]):
             #    {"ormar_p0": 5, "ormar_v0": "x"}
 
         The cache key is the kind, the filter and exclude clauses (see
-        ``templates.clauses_cache_key``) and the updated column names. Updates and
-        deletes take no joins, ordering or limit, so nothing else changes their
-        SQL. Filter values are named by ``SlotBinder`` like in reads, updated
-        values like in single-row writes (``ormar_v{i}``).
+        ``templates.clauses_cache_key``), the joined relations (filters on
+        related models select the matched primary keys through them) and the
+        updated column names. Updates and deletes take no ordering or limit, so
+        nothing else changes their SQL. Filter values are named by
+        ``SlotBinder`` like in reads, updated values like in single-row writes
+        (``ormar_v{i}``).
 
         :param kind: ``"update"`` or ``"delete"``
         :type kind: str
@@ -564,6 +567,7 @@ class QuerySet(Generic[T]):
             kind,
             clauses_cache_key(clauses=self.filter_clauses),
             clauses_cache_key(clauses=self.exclude_clauses),
+            tuple(self._select_related),
             tuple(
                 (name, expression_key(node=values[name]))
                 if isinstance(values[name], Expression)
@@ -586,6 +590,12 @@ class QuerySet(Generic[T]):
         Build the filtered update or delete with named slots for the updated
         values and the filter values.
 
+        Filters on related models restrict the rows to the primary keys the
+        same queryset selects (see ``matched_rows_clause``), so the statement
+        touches the rows the filters select in ``all()``. Expressions reading related
+        models join those tables in the statement (``UPDATE ... FROM`` or a
+        multi-table ``UPDATE`` on MySQL, as SQLAlchemy renders it).
+
         :param kind: ``"update"`` or ``"delete"``
         :type kind: str
         :param values: updated values by column name (empty for delete)
@@ -600,22 +610,76 @@ class QuerySet(Generic[T]):
         if kind == "update":
             names = tuple(sorted(values))
             binds = value_binds(table=table, names=names)
+            join_conditions: dict[str, list] = {}
             for index, name in enumerate(names):
                 if isinstance(values[name], Expression):
+                    columns = expression_columns(node=values[name], model=self.model)
                     binds[table.c[name]] = expression_clause(
-                        node=values[name],
-                        columns=expression_columns(node=values[name], model=self.model),
-                        slot=f"ormar_v{index}",
+                        node=values[name], columns=columns, slot=f"ormar_v{index}"
                     )
+                    for column in columns.values():
+                        join_conditions.update(
+                            forward_join_conditions(
+                                model=self.model, path=column.related_parts
+                            )
+                        )
             expr = table.update().values(binds)
+            for conditions in join_conditions.values():
+                expr = expr.where(*conditions)
         else:
             expr = table.delete()
+        if self._filters_read_related():
+            return expr.where(self.matched_rows_clause(binder=binder))
         expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
             expr=expr
         )
         return FilterQuery(
             filter_clauses=self.exclude_clauses, exclude=True, binder=binder
         ).apply(expr=expr)
+
+    def matched_rows_clause(self, binder: Optional[SlotBinder]) -> Any:
+        """
+        Return the condition keeping the rows this queryset selects, by primary
+        key, for an update or delete filtering on related models::
+
+            tracks.id IN (SELECT ormar_matched.id FROM (
+                SELECT tracks.id FROM tracks LEFT OUTER JOIN albums AS ... ON ...
+                WHERE <filters>
+            ) AS ormar_matched)
+
+        The select is wrapped in a derived table, as MySQL does not let a
+        statement select from the table it updates or deletes from (error
+        1093). A composite primary key is compared as a tuple.
+
+        :param binder: names filter values for templates, None binds them as
+            plain values
+        :type binder: Optional[SlotBinder]
+        :return: condition on the primary key columns
+        :rtype: Any
+        """
+        matched = (
+            Query(
+                model_cls=self.model,
+                filter_clauses=self.filter_clauses,
+                exclude_clauses=self.exclude_clauses,
+                select_related=self._select_related,
+                limit_count=None,
+                offset=None,
+                excludable=self._excludable,
+                order_bys=None,
+                limit_raw_sql=False,
+                binder=binder,
+            )
+            .build_primary_key_select()
+            .subquery("ormar_matched")
+        )
+        pk_columns = [
+            self.table.c[alias] for alias in self.model_config.pk.column_aliases()
+        ]
+        target = (
+            pk_columns[0] if len(pk_columns) == 1 else sqlalchemy.tuple_(*pk_columns)
+        )
+        return target.in_(sqlalchemy.select(*matched.c))
 
     def limit_cache_key(self, limit: Optional[int]) -> tuple:
         """
@@ -1279,23 +1343,18 @@ class QuerySet(Generic[T]):
             columns = [columns]
         return await self._query_aggr_function(func_name="avg", columns=columns)
 
-    def _verify_no_related_filters(self, operation: str) -> None:
+    def _filters_read_related(self) -> bool:
         """
-        Raises if any filter or exclude clause targets a related model, as
-        UPDATE and DELETE statements do not join the related tables.
-
-        :param operation: name of the operation, used in the error message
-        :type operation: str
+        :return: whether a filter or exclude clause reads a related model, by
+            its key or by an expression
+        :rtype: bool
         """
         for clause in self.filter_clauses + self.exclude_clauses:
             actions = clause._iter() if isinstance(clause, FilterGroup) else [clause]
-            for path in (path for action in actions for path in action.path_actions()):
-                if path.related_parts:
-                    raise QueryDefinitionError(
-                        f"{operation}() does not support filters on related models "
-                        f"('{path.query_str}'). Select the pks first and "
-                        f"filter with pk__in instead."
-                    )
+            for action in actions:
+                if any(path.related_parts for path in action.path_actions()):
+                    return True
+        return False
 
     async def update(self, each: bool = False, **kwargs: Any) -> int:
         """
@@ -1304,13 +1363,20 @@ class QuerySet(Generic[T]):
         You have to either pass a filter to narrow down a query or explicitly pass
         each=True flag to affect whole table.
 
+        Filters on related models (``filter(album__name="A")``) are supported,
+        the update touches the rows the same filters select in ``all()`` (limit
+        and offset do not apply). Expressions may read fields of models reached
+        through foreign keys (``position=F("album__rank")``); rows without a
+        related row on such a path are not updated and not counted.
+
         :param each: flag if whole table should be affected if no filter is passed
         :type each: bool
         :param kwargs: fields names and proper value types, or column expressions
-            of own fields (``taken=Slot.taken + 1``)
+            (``taken=Slot.taken + 1``, ``position=F("album__rank")``)
         :type kwargs: Any
-        :raises QueryDefinitionError: if an expression sets a relation or reads a
-            relation or another column set by this update
+        :raises QueryDefinitionError: if an expression sets a relation, reads a
+            reverse or many to many relation or reads another column set by
+            this update
         :return: number of updated rows
         :rtype: int
         """
@@ -1321,7 +1387,6 @@ class QuerySet(Generic[T]):
                 "If you want to update all rows use update(each=True, **kwargs)"
             )
 
-        self._verify_no_related_filters("update")
         self_fields = self.model.extract_db_own_fields().union(
             self.model.extract_related_names()
         )
@@ -1338,12 +1403,14 @@ class QuerySet(Generic[T]):
         }
         for name, node in expressions.items():
             columns = expression_columns(node=node, model=self.model)
-            if any(column.related_parts for column in columns.values()):
-                raise QueryDefinitionError(
-                    f"update() does not support expressions reading related "
-                    f"models yet ({list(columns)}), only own fields."
-                )
-            read = [column.field_name for column in columns.values()]
+            for column in columns.values():
+                # only validates the path here, the joins are built with the statement
+                forward_join_conditions(model=self.model, path=column.related_parts)
+            read = [
+                column.field_name
+                for column in columns.values()
+                if not column.related_parts
+            ]
             if name in self.model.extract_related_names() or any(
                 field != name and field in updates for field in read
             ):
@@ -1378,12 +1445,16 @@ class QuerySet(Generic[T]):
         You have to either pass a filter to narrow down a query or explicitly pass
         each=True flag to affect whole table.
 
+        Filters on related models (``filter(training__instructor=instructor)``)
+        are supported, the delete removes the rows the same filters select in
+        ``all()`` (limit and offset do not apply).
+
         :param each: flag if whole table should be affected if no filter is passed
         :type each: bool
         :param kwargs: fields names and proper value types
         :type kwargs: Any
         :return: number of deleted rows
-        :rtype:int
+        :rtype: int
         """
         self.model.verify_writable()
         if kwargs or args:
@@ -1393,7 +1464,6 @@ class QuerySet(Generic[T]):
                 "You cannot delete without filtering the queryset first. "
                 "If you want to delete all rows use delete(each=True)"
             )
-        self._verify_no_related_filters("delete")
         template = self.build_write_template(kind="delete", values={})
         async with self.model_config.database.get_query_executor() as executor:
             return await executor.execute(template.statement, template.params)
@@ -2160,3 +2230,43 @@ class QuerySet(Generic[T]):
             order_bys=order_bys,
             reverse_result=bounds.reverse,
         )
+
+
+def forward_join_conditions(model: type["Model"], path: list[str]) -> dict[str, list]:
+    """
+    Return the join conditions of the tables an update expression reads from,
+    by table alias, following a path of foreign keys from ``model``::
+
+        forward_join_conditions(model=Track, path=["album"])
+        # -> {"t1b26c7": [t1b26c7_albums.id == tracks.album]}
+
+    Every table is aliased like in selects, so the conditions join the aliased
+    columns the expression reads.
+
+    :param model: updated model
+    :type model: type[Model]
+    :param path: relation names leading to the read model
+    :type path: list[str]
+    :raises QueryDefinitionError: if the path follows a reverse, many to many or
+        through relation, which can match many rows
+    :return: join conditions by table alias
+    :rtype: dict[str, list]
+    """
+    conditions: dict[str, list] = {}
+    source_table: Any = model.ormar_config.table
+    for index, relation in enumerate(path):
+        field = cast("ForeignKeyField", model.ormar_config.model_fields[relation])
+        if field.is_multi or field.virtual or field.is_through:
+            raise QueryDefinitionError(
+                f"update() expressions read related models only through foreign "
+                f"keys, '{'__'.join(path)}' follows the reverse or many to many "
+                f"relation '{relation}', which can match many rows."
+            )
+        alias = alias_for("__".join(path[: index + 1]))
+        target_table = prefixed_table(alias=alias, table=field.to.ormar_config.table)
+        conditions[alias] = [
+            target_table.c[pair.target_column] == source_table.c[pair.source_column]
+            for pair in field.link.pairs
+        ]
+        model, source_table = field.to, target_table
+    return conditions

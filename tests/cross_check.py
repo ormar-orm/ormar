@@ -32,7 +32,7 @@ from ormar.queryset import FilterQuery
 from ormar.queryset import queryset as queryset_module
 from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.expressions import Expression, expression_clause
-from ormar.queryset.queryset import QuerySet
+from ormar.queryset.queryset import QuerySet, forward_join_conditions
 from ormar.queryset.templates import (
     StatementTemplate,
     delete_template,
@@ -295,10 +295,25 @@ def checked_write_template(
             if kind == "update"
             else table.delete()
         )
-        expr = FilterQuery(filter_clauses=self.filter_clauses).apply(expr=expr)
-        expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
-            expr=expr
-        )
+        join_conditions: Dict[str, list] = {}
+        for name in sorted(values):
+            if isinstance(values[name], Expression):
+                columns = expression_columns(node=values[name], model=self.model)
+                for column in columns.values():
+                    join_conditions.update(
+                        forward_join_conditions(
+                            model=self.model, path=column.related_parts
+                        )
+                    )
+        for conditions in join_conditions.values():
+            expr = expr.where(*conditions)
+        if self._filters_read_related():
+            expr = expr.where(self.matched_rows_clause(binder=None))
+        else:
+            expr = FilterQuery(filter_clauses=self.filter_clauses).apply(expr=expr)
+            expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
+                expr=expr
+            )
         assert_same_write(model_cls=self.model, template=template, fresh=expr)
     return template
 
