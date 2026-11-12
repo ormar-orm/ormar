@@ -242,7 +242,7 @@ async def test_executor_params_on_both_paths(database, native):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native", [True, False])
-async def test_rows_are_dicts_or_tuples_on_both_paths(database, native):
+async def test_rows_are_mappings_or_tuples_on_both_paths(database, native):
     if not native:
         database.native_backend = None
     stmt = sa.select(rows.c.name.label("label"), rows.c.id).where(rows.c.id == 41)
@@ -256,5 +256,6 @@ async def test_rows_are_dicts_or_tuples_on_both_paths(database, native):
         assert await executor.fetch_val(stmt, column=1) == 41
         assert await executor.fetch_one(stmt.where(rows.c.id < 0)) is None
     for row in (mapped[0], one, streamed[0]):
-        assert isinstance(row, dict)
         assert list(row.items()) == [("label", "t"), ("id", 41)]
+        assert row["label"] == "t"
+        assert row[rows.c.id] == row["id"] == 41

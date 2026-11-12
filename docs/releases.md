@@ -51,8 +51,6 @@
         # -> [(1, "a"), (2, "b")]
     ```
 
-    Rows of statements that run through SQLAlchemy instead of the native driver path (e.g. plain `text()`) are now plain dicts like all other rows, not SQLAlchemy `RowMapping`. Reading them by label works as before; a statement that repeats a result label still returns `RowMapping`, so reading the ambiguous label raises.
-
 ### ⚡ Performance
 
 * **Upserts reuse their compiled statement** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))

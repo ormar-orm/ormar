@@ -266,6 +266,8 @@ async def test_rows_as_tuples_on_both_paths(use_native):
                         query.where(table.c.id < 0), as_tuples=True
                     )
     assert list(mapped[0]) == ["stamp", "label", "id"]
+    assert mapped[0]["label"] == "tuples"
+    assert mapped[0][table.c.id] == mapped[0]["id"] == saved.pk
     assert as_tuples == [tuple(mapped[0].values())] == [one]
     assert as_tuples[0][1:] == ("tuples", saved.pk)
     assert isinstance(as_tuples[0][0], datetime.datetime)
@@ -292,8 +294,7 @@ async def test_text_statement_rows_on_fallback_plan():
                 missing = await executor.fetch_one(
                     query, {"note_id": -1}, as_tuples=True
                 )
-    assert type(mapped[0]) is dict and type(one) is dict
-    assert mapped == [one] == [{"text": "plain", "id": note.pk}]
+    assert [dict(mapped[0])] == [dict(one)] == [{"text": "plain", "id": note.pk}]
     assert as_tuples == [one_tuple] == [("plain", note.pk)]
     assert second == note.pk
     assert missing is None

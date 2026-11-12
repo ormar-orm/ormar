@@ -713,19 +713,22 @@ def resolve_result_processors(
     :param coltypes: driver-reported column types (or None per column)
     :type coltypes: Sequence[Any]
     """
-    plan.result_processors = [
+    result_processors = [
         type_._cached_result_processor(dialect=dialect, coltype=coltype)
         for type_, coltype in zip(plan.result_types, coltypes)
     ]
-    plan.processed_positions = tuple(
+    processed_positions = tuple(
         (position, processor)
-        for position, processor in enumerate(plan.result_processors)
+        for position, processor in enumerate(result_processors)
         if processor is not None
     )
+    plan.processed_positions = processed_positions
     plan.processed_columns = tuple(
         (plan.result_keys[position], processor)
-        for position, processor in plan.processed_positions
+        for position, processor in processed_positions
     )
+    # set last: a plan with result_processors is treated as fully resolved
+    plan.result_processors = result_processors
 
 
 def row_to_dict(plan: StatementPlan, values: Sequence[Any]) -> Dict[str, Any]:

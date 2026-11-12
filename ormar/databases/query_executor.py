@@ -40,23 +40,6 @@ Payload = TypeVar("Payload", BoundStatement, BoundBatch)
 Result = TypeVar("Result")
 
 
-def has_duplicate_labels(result: Any) -> bool:
-    """
-    Tell whether a SQLAlchemy result repeats a result label, e.g.
-    ``select(users.c.id, literal(1).label("id"))``. Such rows are kept as
-    SQLAlchemy ``RowMapping`` instead of being turned into dicts, so reading
-    the ambiguous label still raises ``InvalidRequestError`` instead of
-    silently returning one of the values.
-
-    :param result: result of a statement run through SQLAlchemy
-    :type result: Any
-    :return: True when a label occurs more than once
-    :rtype: bool
-    """
-    labels = result.keys()
-    return len(set(labels)) != len(labels)
-
-
 class QueryExecutor:
     """
     Executes database queries. With a native backend, statements run directly on
@@ -87,9 +70,9 @@ class QueryExecutor:
         """
         Execute a query and fetch all rows.
 
-        Rows are dicts keyed by result label (SQLAlchemy ``RowMapping`` when the
-        statement repeats a label, so the ambiguous label raises); with
-        ``as_tuples`` they are tuples of values in select order instead::
+        Rows are mappings keyed by result label (and by the selected column
+        objects); with ``as_tuples`` they are tuples of values in select order
+        instead::
 
             await executor.fetch_all(select(users.c.id, users.c.name))
             # -> [{"id": 1, "name": "a"}]
@@ -103,7 +86,7 @@ class QueryExecutor:
         :type params: Optional[Mapping[str, Any]]
         :param as_tuples: return tuples of values in select order
         :type as_tuples: bool
-        :return: rows as dicts keyed by result label, or tuples
+        :return: rows as mappings keyed by result label, or tuples
         :rtype: List[Any]
         """
         bound = self._bind(query=query, params=params)
@@ -114,10 +97,7 @@ class QueryExecutor:
         )
         if as_tuples:
             return [tuple(row) for row in result.all()]
-        mappings = result.mappings().all()
-        if has_duplicate_labels(result=result):
-            return list(mappings)
-        return [dict(mapping) for mapping in mappings]
+        return list(result.mappings().all())
 
     async def fetch_one(
         self,
@@ -134,9 +114,9 @@ class QueryExecutor:
             a cached query template passes its slot values here
         :type params: Optional[Mapping[str, Any]]
         :param as_tuples: return a tuple of values in select order instead of
-            a dict keyed by result label
+            a mapping keyed by result label
         :type as_tuples: bool
-        :return: single row (dict or tuple) or None when there is no row
+        :return: single row (mapping or tuple) or None when there is no row
         :rtype: Optional[Any]
         """
         bound = self._bind(query=query, params=params)
@@ -149,10 +129,7 @@ class QueryExecutor:
         if as_tuples:
             row = result.first()
             return tuple(row) if row is not None else None
-        mapping = result.mappings().first()
-        if mapping is None or has_duplicate_labels(result=result):
-            return mapping
-        return dict(mapping)
+        return result.mappings().first()
 
     async def fetch_val(
         self,
@@ -279,9 +256,8 @@ class QueryExecutor:
         async with self._connection.stream(
             statement=query, parameters=params
         ) as result:
-            keep_mappings = has_duplicate_labels(result=result)
             async for mapping in result.mappings():
-                yield mapping if keep_mappings else dict(mapping)
+                yield mapping
 
     async def _fetch_native(
         self, bound: BoundStatement, as_tuples: bool = False
