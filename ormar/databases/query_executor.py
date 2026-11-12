@@ -110,10 +110,10 @@ class QueryExecutor:
         Execute a query and fetch a single scalar value.
 
         :param query: SQLAlchemy query expression
-        :param column: Column index to fetch (default 0)
+        :param column: position of the column in the select to fetch (default 0)
         :param params: values for named bind parameters of the query, by name;
             a cached query template passes its slot values here
-        :return: Scalar value or None
+        :return: value of the column in the first row, None when there are no rows
         """
         bound = self._bind(query=query, params=params)
         if bound is not None:
@@ -122,7 +122,8 @@ class QueryExecutor:
         result: CursorResult[Any] = await self._connection.execute(
             statement=query, parameters=params
         )
-        return result.scalar()
+        row = result.first()
+        return row[column] if row is not None else None
 
     async def execute(
         self, query: Executable, params: Optional[Mapping[str, Any]] = None
