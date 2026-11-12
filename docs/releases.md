@@ -4,6 +4,15 @@
 
 ### 🆕 Features
 
+* **`update()` and `delete()` with related models** ([#1967](https://github.com/ormar-orm/ormar/issues/1967))
+
+    `update()` and `delete()` accept filters on related models of any kind (forward, reverse, many to many) and touch the rows the same filters select in `all()`, instead of raising `QueryDefinitionError`. Expressions in `update()` can read fields of models reached through foreign keys; rows with a `NULL` foreign key on the path are not updated. See [update](queries/update.md#reading-related-models).
+
+    ```python
+    await Booking.objects.filter(training__instructor=instructor).delete()
+    await Track.objects.filter(album__name="A").update(position=F("album__rank"))
+    ```
+
 * **`Greatest`, `Least` and `Coalesce` in column expressions** ([#1974](https://github.com/ormar-orm/ormar/issues/1974))
 
     Functions for filters and `update()`, e.g. atomic "never go back" or "never below zero" updates. On SQLite `Greatest` / `Least` compile to the scalar `max()` / `min()`; with a `NULL` argument PostgreSQL ignores it, MySQL and SQLite return `NULL`. See [update](queries/update.md#functions).
@@ -20,6 +29,15 @@
     ```python
     await Player.objects.update(each=True, score=Random())
     ```
+
+### ⚡ Performance
+
+* **Upserts reuse their compiled statement** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))
+
+    SQLAlchemy gives no cache key to inserts with `ON CONFLICT` / `ON DUPLICATE KEY`, so `create(on_conflict=...)` and `bulk_create(on_conflict=...)` compiled their statement on every call and asyncpg prepared it again for a single row. Statements without a cache key now keep their plan per statement object (bounded like the other plans): a one-row upsert on PostgreSQL takes one round trip instead of up to three.
+* **MySQL bulk upserts with `on_update` fields run as one batch** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))
+
+    `bulk_create(on_conflict="update")` of a model with `on_update` fields ran one statement per row on MySQL. The `on_update` values are now set once in user variables, so the rows go in one multi-row insert.
 
 ## 0.29.0
 

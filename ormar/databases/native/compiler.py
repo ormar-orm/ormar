@@ -213,6 +213,11 @@ class DefaultContext:
         return self.current_parameters
 
 
+#: execution option marking a statement reused on every call (ormar's cached
+#: write templates), whose plan is kept even without a SQLAlchemy cache key
+TEMPLATE_OPTION = "ormar_template"
+
+
 class NativeCompiler:
     """
     Turns statements into ``BoundStatement`` / ``BoundBatch`` objects for one
@@ -224,6 +229,12 @@ class NativeCompiler:
 
         compiler.bind(select(users).where(users.c.id == 5))  # compiles
         compiler.bind(select(users).where(users.c.id == 7))  # reuses the plan
+
+    Statements SQLAlchemy cannot cache (no cache key, e.g. every INSERT with
+    ``ON CONFLICT`` / ``ON DUPLICATE KEY``) are compiled every time, except
+    ormar's write templates (marked with the ``TEMPLATE_OPTION`` execution
+    option): they are the same object on every call, so they keep their plan
+    per statement object in a second LRU cache of the same size.
     """
 
     def __init__(self, dialect: Dialect, max_plans: int = 2048) -> None:
@@ -236,6 +247,10 @@ class NativeCompiler:
         self.dialect = dialect
         self.max_plans = max_plans
         self._plans: "OrderedDict[Any, StatementPlan]" = OrderedDict()
+        # by id() of the statement, kept in the entry so the id stays its own
+        self._plans_by_statement: "OrderedDict[int, Tuple[Any, StatementPlan]]" = (
+            OrderedDict()
+        )
 
     def bind(
         self, stmt: Executable, params: Optional[Mapping[str, Any]] = None
@@ -329,9 +344,10 @@ class NativeCompiler:
 
     def _plan(self, stmt: Executable, key: Any) -> StatementPlan:
         """
-        Return the cached plan for the statement shape, compiling it on a miss.
-        Statements SQLAlchemy cannot cache (no cache key) are compiled every time;
-        past ``max_plans`` the least recently used plan is dropped.
+        Return the cached plan for the statement shape, compiling it on a miss;
+        past ``max_plans`` the least recently used plan is dropped. Statements
+        SQLAlchemy cannot cache (no cache key) reuse the plan of the same
+        statement object: one object always compiles to the same SQL and values.
 
         :param stmt: statement to plan
         :type stmt: Executable
@@ -341,6 +357,8 @@ class NativeCompiler:
         :rtype: StatementPlan
         """
         if key is None:
+            if stmt.get_execution_options().get(TEMPLATE_OPTION):
+                return self._plan_of_statement(stmt=stmt)
             return self._compile(stmt=stmt, key=key)
         plan = self._plans.get(key.key)
         if plan is not None:
@@ -350,6 +368,27 @@ class NativeCompiler:
         self._plans[key.key] = plan
         if len(self._plans) > self.max_plans:
             self._plans.popitem(last=False)
+        return plan
+
+    def _plan_of_statement(self, stmt: Executable) -> StatementPlan:
+        """
+        Return the plan of a template SQLAlchemy cannot cache, reused for the
+        same statement object: one object always compiles to the same SQL and
+        values. Past ``max_plans`` the least recently used plan is dropped.
+
+        :param stmt: statement without a cache key
+        :type stmt: Executable
+        :return: plan of the statement
+        :rtype: StatementPlan
+        """
+        entry = self._plans_by_statement.get(id(stmt))
+        if entry is not None and entry[0] is stmt:
+            self._plans_by_statement.move_to_end(id(stmt))
+            return entry[1]
+        plan = self._compile(stmt=stmt, key=None)
+        self._plans_by_statement[id(stmt)] = (stmt, plan)
+        if len(self._plans_by_statement) > self.max_plans:
+            self._plans_by_statement.popitem(last=False)
         return plan
 
     def _compile(self, stmt: Executable, key: Any) -> StatementPlan:

@@ -31,11 +31,13 @@ def conflict_updates(
     inserted: Any,
     update_names: Tuple[str, ...],
     on_update: Tuple[str, ...],
+    on_update_variables: bool = False,
 ) -> Dict[str, Any]:
     """
     Return the columns a conflicting row is updated with: ``update_names`` from
     the inserted row, ``on_update`` columns from ``ormar_on_update_<column>``
-    parameters.
+    parameters, or with ``on_update_variables`` from the MySQL user variables
+    ``on_update_assignment`` sets.
 
     :param table: written table
     :type table: sqlalchemy.Table
@@ -45,15 +47,74 @@ def conflict_updates(
     :type update_names: Tuple[str, ...]
     :param on_update: columns updated with their ``on_update`` value
     :type on_update: Tuple[str, ...]
+    :param on_update_variables: read the ``on_update`` values from user variables
+    :type on_update_variables: bool
     :return: value per updated column
     :rtype: Dict[str, Any]
     """
     updates: Dict[str, Any] = {name: inserted[name] for name in update_names}
-    for name in on_update:
-        updates[name] = sqlalchemy.bindparam(
-            key=f"ormar_on_update_{name}", type_=table.c[name].type
+    for index, name in enumerate(on_update):
+        updates[name] = (
+            sqlalchemy.literal_column(
+                on_update_variable(index=index), type_=table.c[name].type
+            )
+            if on_update_variables
+            else sqlalchemy.bindparam(
+                key=f"ormar_on_update_{name}", type_=table.c[name].type
+            )
         )
     return updates
+
+
+def on_update_variable(index: int) -> str:
+    """
+    Return the MySQL user variable holding the ``on_update`` value of the column
+    at ``index`` of the sorted ``on_update`` columns; named by position, as
+    variable names are limited to 64 characters::
+
+        on_update_variable(index=0)  # -> @ormar_on_update_0
+
+    :param index: position of the column in ``on_update``
+    :type index: int
+    :return: variable name
+    :rtype: str
+    """
+    return f"@ormar_on_update_{index}"
+
+
+def on_update_assignment(
+    table: sqlalchemy.Table, on_update: Tuple[str, ...]
+) -> Executable:
+    """
+    Build the MySQL statement that stores the ``on_update`` values in user
+    variables, bound as ``ormar_on_update_<index>`` in the order of
+    ``on_update``::
+
+        SET @ormar_on_update_0 = %s
+
+    MySQL drivers turn ``executemany`` of an insert into one multi-row VALUES
+    and leave binds after it unfilled, so a multi-row upsert reads the values
+    from these variables instead (see ``conflict_updates``).
+
+    :param table: written table
+    :type table: sqlalchemy.Table
+    :param on_update: columns updated with their ``on_update`` value
+    :type on_update: Tuple[str, ...]
+    :return: assignment statement
+    :rtype: Executable
+    """
+    assignments = ", ".join(
+        f"{on_update_variable(index=index)} = :ormar_on_update_{index}"
+        for index in range(len(on_update))
+    )
+    return sqlalchemy.text(f"SET {assignments}").bindparams(
+        *(
+            sqlalchemy.bindparam(
+                key=f"ormar_on_update_{index}", type_=table.c[name].type
+            )
+            for index, name in enumerate(on_update)
+        )
+    )
 
 
 class DialectRules:
@@ -113,6 +174,7 @@ class DialectRules:
         update_names: Tuple[str, ...],
         on_update: Tuple[str, ...],
         returning: bool,
+        on_update_variables: bool = False,
     ) -> Executable:
         """
         Build an insert that skips or updates a row conflicting with an
@@ -135,6 +197,9 @@ class DialectRules:
         :type on_update: Tuple[str, ...]
         :param returning: return the primary key of a written row
         :type returning: bool
+        :param on_update_variables: read the ``on_update`` values from MySQL user
+            variables (see ``on_update_assignment``)
+        :type on_update_variables: bool
         :return: insert statement
         :rtype: Executable
         """
@@ -147,6 +212,7 @@ class DialectRules:
                     inserted=statement.excluded,
                     update_names=update_names,
                     on_update=on_update,
+                    on_update_variables=on_update_variables,
                 ),
             )
         else:
@@ -271,6 +337,7 @@ class MysqlRules(DialectRules):
         update_names: Tuple[str, ...],
         on_update: Tuple[str, ...],
         returning: bool,
+        on_update_variables: bool = False,
     ) -> Executable:
         """
         Build an insert that skips or updates a row conflicting with an
@@ -296,6 +363,7 @@ class MysqlRules(DialectRules):
                     inserted=statement.inserted,
                     update_names=update_names,
                     on_update=on_update,
+                    on_update_variables=on_update_variables,
                 )
             )
         return statement.on_duplicate_key_update({target[0]: table.c[target[0]]})

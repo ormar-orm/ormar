@@ -22,6 +22,8 @@ from typing import (
 
 from sqlalchemy.sql import Executable
 
+from ormar.databases.native.compiler import TEMPLATE_OPTION
+
 # cache keys kept per model before the least recently used is dropped
 TEMPLATE_CACHE_SIZE = 512
 
@@ -130,6 +132,8 @@ def cached_statement(
 ) -> Executable:
     """
     Return the statement cached for a write cache key, building it on a miss.
+    The statement is marked as a template (``TEMPLATE_OPTION``), so the native
+    compiler keeps its plan even when SQLAlchemy cannot cache it.
 
     A write's cache key is small (the kind of statement and the written column
     names), so callers pass the key directly. The statement is only built on
@@ -157,6 +161,8 @@ def cached_statement(
     cache = template_cache_for(model_cls=model_cls)
     statement = cache.get(key)
     if statement is None:
-        statement = builder(**builder_kwargs)
+        statement = builder(**builder_kwargs).execution_options(
+            **{TEMPLATE_OPTION: True}
+        )
         cache.put(key=key, statement=statement)
     return statement
