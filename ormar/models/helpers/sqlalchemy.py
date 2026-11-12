@@ -602,9 +602,10 @@ def set_constraint_names(config: "OrmarConfig") -> None:
             isinstance(constraint, sqlalchemy.Index)
             and constraint.name == "TEMPORARY_NAME"
         ):
-            constraint.name = (
+            constraint.name = sqlalchemy.quoted_name(
                 f"ix_{config.tablename}_"
-                f"{'_'.join(index_name_fragment(e) for e in constraint.expressions)}"
+                f"{'_'.join(index_name_fragment(e) for e in constraint.expressions)}",
+                quote=None,
             )
         elif isinstance(constraint, sqlalchemy.CheckConstraint) and not constraint.name:
             sql_condition: str = str(constraint.sqltext).replace(" ", "_")
