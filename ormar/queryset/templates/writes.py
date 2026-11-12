@@ -58,6 +58,7 @@ def build_conflict_insert(
     update_names: Tuple[str, ...],
     on_update: Tuple[str, ...],
     returning: bool,
+    on_update_variables: bool = False,
 ) -> Executable:
     """
     Build the insert of the database's dialect that skips or updates a row
@@ -84,6 +85,9 @@ def build_conflict_insert(
     :type on_update: Tuple[str, ...]
     :param returning: return the primary key of a written row
     :type returning: bool
+    :param on_update_variables: read the ``on_update`` values from MySQL user
+        variables
+    :type on_update_variables: bool
     :return: insert statement
     :rtype: Executable
     """
@@ -95,6 +99,7 @@ def build_conflict_insert(
         update_names=update_names,
         on_update=on_update,
         returning=returning,
+        on_update_variables=on_update_variables,
     )
 
 
@@ -203,6 +208,7 @@ def insert_statement(
     update_fields: Optional[Sequence[str]] = None,
     on_update: Tuple[str, ...] = (),
     returning: bool = False,
+    on_update_variables: bool = False,
 ) -> Executable:
     """
     Return the insert of a model for the given sorted column names, from the
@@ -229,6 +235,9 @@ def insert_statement(
     :type on_update: Tuple[str, ...]
     :param returning: return the primary key of a written row
     :type returning: bool
+    :param on_update_variables: read the ``on_update`` values from MySQL user
+        variables set by ``on_update_assignment`` instead of binds
+    :type on_update_variables: bool
     :return: insert statement with ``ormar_v{i}`` binds
     :rtype: Executable
     """
@@ -264,6 +273,7 @@ def insert_statement(
         update_names=update_names,
         on_update=on_update,
         returning=returning,
+        on_update_variables=on_update_variables,
     )
     return cached_statement(
         model_cls=model_cls,

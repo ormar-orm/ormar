@@ -1,5 +1,16 @@
 # Release notes
 
+## 0.30.0
+
+### ⚡ Performance
+
+* **Upserts reuse their compiled statement** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))
+
+    SQLAlchemy gives no cache key to inserts with `ON CONFLICT` / `ON DUPLICATE KEY`, so `create(on_conflict=...)` and `bulk_create(on_conflict=...)` compiled their statement on every call and asyncpg prepared it again for a single row. Statements without a cache key now keep their plan per statement object (bounded like the other plans): a one-row upsert on PostgreSQL takes one round trip instead of up to three.
+* **MySQL bulk upserts with `on_update` fields run as one batch** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))
+
+    `bulk_create(on_conflict="update")` of a model with `on_update` fields ran one statement per row on MySQL. The `on_update` values are now set once in user variables, so the rows go in one multi-row insert.
+
 ## 0.29.0
 
 ### 🆕 Features
