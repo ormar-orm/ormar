@@ -2,7 +2,7 @@
 
 Following methods allow you to insert data into the database.
 
-* `create(on_conflict: Optional[Literal["ignore"]] = None, **kwargs) -> Optional[Model]`
+* `create(on_conflict=None, conflict_target=None, update_fields=None, **kwargs) -> Optional[Model]`
 * `get_or_create(_defaults: Optional[dict[str, Any]] = None, **kwargs) -> tuple[Model, bool]`
 * `update_or_create(**kwargs) -> Model`
 * `bulk_create(objects: list[Model], on_conflict=None, conflict_target=None, update_fields=None) -> None`
@@ -122,6 +122,12 @@ Updates the model, or in case there is no match in database creates a new one.
     Note that if you want to create a new object you either have to pass pk column
     value or pk column has to be set as autoincrement
 
+!!!tip
+    `update_or_create()` looks the row up and then updates or inserts it in a separate
+    statement, so concurrent calls can raise `IntegrityError` or overwrite each other.
+    For an atomic insert or update by a unique key use
+    [`create(on_conflict="update")`](#update-conflicting-rows).
+
 ## bulk_create
 
 `bulk_create(objects: list["Model"]) -> None`
@@ -184,6 +190,15 @@ await Tag.objects.bulk_create(
 ### Update conflicting rows
 
 ```python
+device = await Device.objects.create(
+    endpoint_hash=endpoint_hash,
+    keys=keys,
+    on_conflict="update",
+    conflict_target=["endpoint_hash"],
+    update_fields=["keys"],
+)
+# the stored row: a new device, or the existing one with new keys
+
 await Tag.objects.bulk_create(
     [Tag(name="python", score=5), Tag(name="rust", score=1)],
     on_conflict="update",
@@ -202,6 +217,12 @@ await Tag.objects.bulk_create(
 `conflict_target` and `update_fields` are only allowed with `on_conflict="update"`.
 When several objects of one call conflict on the same key, the last one wins.
 
+`create(on_conflict="update")` inserts or updates the row in one statement and returns
+the stored row, so fields left out of `update_fields` hold the values of the existing
+row. Every field of the target needs a value (an autoincrement primary key that is not
+passed cannot conflict). It sends `pre_save` and `post_save`, whether the row was
+inserted or updated.
+
 `bulk_create()` sends no signals, sets no primary keys and marks all passed objects as
 saved, the skipped ones too.
 
@@ -210,6 +231,7 @@ saved, the skipped ones too.
 | | PostgreSQL, SQLite | MySQL |
 |---|---|---|
 | `create(on_conflict="ignore")` | `INSERT ... ON CONFLICT DO NOTHING RETURNING` | plain `INSERT`, a duplicate key error is caught |
+| `create(on_conflict="update")` | `INSERT ... ON CONFLICT (target) DO UPDATE ... RETURNING` | `ON DUPLICATE KEY UPDATE`, then a select by the target values |
 | `bulk_create(on_conflict="ignore")` | `ON CONFLICT DO NOTHING` | `ON DUPLICATE KEY UPDATE` of the primary key to itself |
 | `bulk_create(on_conflict="update")` | `ON CONFLICT (target) DO UPDATE` | `ON DUPLICATE KEY UPDATE`; `on_update` values are set once in user variables (`SET @ormar_on_update_<n>`) and read by all rows |
 
@@ -218,7 +240,10 @@ saved, the skipped ones too.
     **any** unique key of the table, so with several unique keys a row can update an
     existing row that conflicts on a different key than `conflict_target`. The target is
     used only on PostgreSQL and SQLite, which reject it when it does not match a unique
-    key or constraint. MariaDB is not tested.
+    key or constraint. `create(on_conflict="update")` reads the row back by the target
+    values and raises `NoMatch` when none matches: the conflict was on another key (that
+    row is updated already), or the database stored a target value differently (floats,
+    datetimes with fractional seconds). MariaDB is not tested.
 
 !!!warning
     On MySQL a multi-row `bulk_create(on_conflict="update")` of a model with `on_update`
@@ -231,11 +256,17 @@ saved, the skipped ones too.
     SQLite supports `ON CONFLICT` with `RETURNING` from version 3.35.
 
 !!!note
-    `on_conflict` is a reserved keyword argument of `create()`. To create a model with
-    a field named `on_conflict` use `Model(on_conflict=...).save()`.
+    `on_conflict`, `conflict_target` and `update_fields` are reserved keyword arguments
+    of `create()`. To create a model with a field of such a name use
+    `Model(on_conflict=...).save()`.
 
-`QuerysetProxy.create()` accepts `on_conflict="ignore"` too, except for many to many
-relations.
+`QuerysetProxy.create()` accepts `on_conflict` too, except for many to many
+relations. Through a reverse foreign key the relation is always updated, so a
+conflicting row of another owner moves to the one it was created through.
+
+`create(on_conflict="update")` with nothing to update (only the target fields passed)
+works as an atomic get or create by a unique key: the conflicting row is returned
+unchanged.
 
 ## Model methods
 

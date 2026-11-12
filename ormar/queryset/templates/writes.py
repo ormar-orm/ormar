@@ -57,7 +57,7 @@ def build_conflict_insert(
     target: Tuple[str, ...],
     update_names: Tuple[str, ...],
     on_update: Tuple[str, ...],
-    returning: bool,
+    returning: Tuple[str, ...],
     on_update_variables: bool = False,
 ) -> Executable:
     """
@@ -83,8 +83,8 @@ def build_conflict_insert(
     :type update_names: Tuple[str, ...]
     :param on_update: columns updated with their ``on_update`` value
     :type on_update: Tuple[str, ...]
-    :param returning: return the primary key of a written row
-    :type returning: bool
+    :param returning: columns of the written row to return, if any
+    :type returning: Tuple[str, ...]
     :param on_update_variables: read the ``on_update`` values from MySQL user
         variables
     :type on_update_variables: bool
@@ -207,7 +207,7 @@ def insert_statement(
     conflict_target: Optional[Sequence[str]] = None,
     update_fields: Optional[Sequence[str]] = None,
     on_update: Tuple[str, ...] = (),
-    returning: bool = False,
+    returning: Tuple[str, ...] = (),
     on_update_variables: bool = False,
 ) -> Executable:
     """
@@ -233,8 +233,8 @@ def insert_statement(
     :type update_fields: Optional[Sequence[str]]
     :param on_update: columns updated with their ``on_update`` value
     :type on_update: Tuple[str, ...]
-    :param returning: return the primary key of a written row
-    :type returning: bool
+    :param returning: columns of the written row to return, if any
+    :type returning: Tuple[str, ...]
     :param on_update_variables: read the ``on_update`` values from MySQL user
         variables set by ``on_update_assignment`` instead of binds
     :type on_update_variables: bool
@@ -266,6 +266,10 @@ def insert_statement(
             for column in model_cls.get_column_aliases(field_name=field_name)
         )
     ) or tuple(column for column in names if column not in {*target, *pk, *on_update})
+    if on_conflict == "update" and not update_names and not on_update:
+        # nothing left to update: set a target column to itself, so the
+        # conflicting row is still returned (DO NOTHING would return no row)
+        update_names = target[:1]
     rules = config.database.rules
     conflict = dict(
         on_conflict=on_conflict,

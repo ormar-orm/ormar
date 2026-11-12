@@ -30,6 +30,17 @@
     await Player.objects.update(each=True, score=Random())
     ```
 
+* **Atomic upsert with `create(on_conflict="update")`** ([#1975](https://github.com/ormar-orm/ormar/issues/1975))
+
+    Inserts the row or updates the one it conflicts with on `conflict_target`, in one statement, and returns the stored row. Unlike `update_or_create()` concurrent calls neither fail nor overwrite each other. `pre_save` / `post_save` are sent in both cases. See [conflict handling](queries/create.md#update-conflicting-rows).
+
+    ```python
+    device = await Device.objects.create(
+        endpoint_hash=h, keys=k,
+        on_conflict="update", conflict_target=["endpoint_hash"], update_fields=["keys"],
+    )
+    ```
+
 ### ⚡ Performance
 
 * **Upserts reuse their compiled statement** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))

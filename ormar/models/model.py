@@ -2,11 +2,12 @@ import builtins
 import warnings
 from typing import TYPE_CHECKING, Any, Literal, Optional, TypeVar, Union, cast
 
+import sqlalchemy
 from sqlalchemy import Executable
 from sqlalchemy.exc import IntegrityError
 
 import ormar.queryset  # noqa I100
-from ormar.exceptions import ModelPersistenceError, NoMatch
+from ormar.exceptions import ModelPersistenceError, NoMatch, QueryDefinitionError
 from ormar.models import NewBaseModel  # noqa I100
 from ormar.models.model_row import ModelRow
 from ormar.queryset.templates import (
@@ -195,29 +196,8 @@ class Model(ModelRow):
         """
         self.verify_writable()
         await self._emit_signal("pre_save", instance=self)
-        self_fields = self._extract_model_db_fields()
-
+        self_fields = self._prepare_insert_row()
         key = self.ormar_config.pk
-        if not self.pk and key.autoincrement:
-            for field in key.fields:
-                self_fields.pop(field, None)
-        self_fields = self.populate_default_values(self_fields)
-        # Values taken from ``__dict__`` are already set, re-assigning them only
-        # costs a validation and two hash recomputations per field.
-        current_values = self.__dict__
-        related_names = self.extract_related_names()
-        self.update_from_dict(
-            {
-                k: v
-                for k, v in self_fields.items()
-                if k not in related_names
-                and k in self.ormar_config.model_fields
-                and (k not in current_values or current_values[k] is not v)
-            }
-        )
-
-        self_fields = self.translate_columns_to_aliases(self_fields)
-        self._verify_key_parts_set(row=self_fields)
         # MySQL has no conflict clause telling an insert from a skipped row, so
         # it runs a plain insert and a duplicate key error means skipped
         rules = self.ormar_config.database.rules
@@ -226,7 +206,7 @@ class Model(ModelRow):
             model_cls=type(self),
             values=self_fields,
             on_conflict=on_conflict if returning else None,
-            returning=returning,
+            returning=key.column_aliases() if returning else (),
         )
         try:
             pk = await self._execute_query(
@@ -271,6 +251,143 @@ class Model(ModelRow):
         ):
             await self.load()
 
+        self._reset_change_tracking()
+        await self._emit_signal("post_save", instance=self)
+        return self
+
+    def _prepare_insert_row(self) -> builtins.dict[str, Any]:
+        """
+        Fill the default values of the instance and return its row to insert,
+        by column name. A generated primary key that is not set is left out.
+
+        :raises ModelPersistenceError: if only a part of the primary key is set
+        :return: inserted values by column name
+        :rtype: dict[str, Any]
+        """
+        self_fields = self._extract_model_db_fields()
+        key = self.ormar_config.pk
+        if not self.pk and key.autoincrement:
+            for field in key.fields:
+                self_fields.pop(field, None)
+        self_fields = self.populate_default_values(self_fields)
+        # Values taken from ``__dict__`` are already set, re-assigning them only
+        # costs a validation and two hash recomputations per field.
+        current_values = self.__dict__
+        related_names = self.extract_related_names()
+        self.update_from_dict(
+            {
+                name: value
+                for name, value in self_fields.items()
+                if name not in related_names
+                and name in self.ormar_config.model_fields
+                and (name not in current_values or current_values[name] is not value)
+            }
+        )
+        self_fields = self.translate_columns_to_aliases(self_fields)
+        self._verify_key_parts_set(row=self_fields)
+        return self_fields
+
+    async def _upsert(
+        self: T,
+        conflict_target: Optional[list[str]] = None,
+        update_fields: Optional[list[str]] = None,
+    ) -> T:
+        """
+        Insert the instance, or update the row it conflicts with on
+        ``conflict_target`` (the primary key by default), in one statement, and
+        fill the instance with the stored row. ``update_fields`` (by default
+        all inserted fields but the target and the key) and the fields with
+        ``on_update`` are updated.
+
+        PostgreSQL and SQLite return the stored row from the insert. MySQL has
+        no RETURNING and conflicts on any unique key: the row is read back by
+        the ``conflict_target`` values.
+
+        Sends pre_save and post_save signals, whether the row was inserted or
+        updated.
+
+        :param conflict_target: names of the fields of the conflicting unique key
+        :type conflict_target: Optional[list[str]]
+        :param update_fields: names of the fields updated on conflict
+        :type update_fields: Optional[list[str]]
+        :raises QueryDefinitionError: if a field of the target has no value
+        :raises NoMatch: if on MySQL no row matches the target values after the
+            write (a conflict on another unique key, or values the database
+            stores rounded)
+        :return: the stored row
+        :rtype: Model
+        """
+        self.verify_writable()
+        await self._emit_signal("pre_save", instance=self)
+        self_fields = self._prepare_insert_row()
+        config = self.ormar_config
+        target_fields = conflict_target or list(config.pk.fields)
+        unknown = [name for name in target_fields if name not in config.model_fields]
+        if unknown:
+            raise QueryDefinitionError(
+                f"conflict_target names fields the model does not have: {unknown}"
+            )
+        target = {
+            column: self_fields.get(column)
+            for field_name in target_fields
+            for column in self.get_column_aliases(field_name=field_name)
+        }
+        missing = [column for column, value in target.items() if value is None]
+        if missing:
+            raise QueryDefinitionError(
+                f"on_conflict='update' needs a value for every field of the "
+                f"conflict target, missing: {missing}"
+            )
+        fields = config.model_fields
+        on_update = {
+            self.get_column_alias(field_name=name): fields[name].get_on_update()
+            for name in self._onupdate_fields
+            if name not in (update_fields or ())
+        }
+        rules = config.database.rules
+        template = insert_template(
+            model_cls=type(self),
+            values=self_fields,
+            on_conflict="update",
+            conflict_target=conflict_target,
+            update_fields=update_fields,
+            on_update=tuple(sorted(on_update)),
+            returning=(
+                tuple(column.name for column in config.table.columns)
+                if rules.conflict_returning
+                else ()
+            ),
+        )
+        params = {
+            **template.params,
+            **{
+                f"ormar_on_update_{column}": value
+                for column, value in on_update.items()
+            },
+        }
+        # each branch runs on its own databases only
+        if rules.conflict_returning:  # pragma: no cover
+            row = await self._execute_query(
+                expr=template.statement, is_select=True, params=params
+            )
+        else:  # pragma: no cover
+            await self._execute_query(expr=template.statement, params=params)
+            table = config.table
+            row = await self._execute_query(
+                expr=sqlalchemy.select(table).where(
+                    *(table.c[column] == value for column, value in target.items())
+                ),
+                is_select=True,
+            )
+            if row is None:
+                raise NoMatch(
+                    f"The row was written, but no row matches the conflict target "
+                    f"{target} when read back: the conflict was on another unique "
+                    f"key, or the database stored different values (rounded "
+                    f"floats or datetimes)"
+                )
+        self.update_from_dict(self.translate_row_to_fields(row=dict(row)))
+        self.set_save_status(True)
         self._reset_change_tracking()
         await self._emit_signal("post_save", instance=self)
         return self

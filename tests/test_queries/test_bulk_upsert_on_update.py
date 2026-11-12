@@ -118,7 +118,7 @@ def test_mysql_upsert_reads_on_update_values_from_variables():
         target=("code",),
         update_names=("price",),
         on_update=("revision", "touched_at"),
-        returning=False,
+        returning=(),
         on_update_variables=True,
     )
     sql = str(statement.compile(dialect=mysql.dialect()))
