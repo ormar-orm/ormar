@@ -10,11 +10,14 @@ import ormar.queryset  # noqa I100
 from ormar.exceptions import ModelPersistenceError, NoMatch, QueryDefinitionError
 from ormar.models import NewBaseModel  # noqa I100
 from ormar.models.model_row import ModelRow
+from ormar.queryset.actions.select_action import expression_columns
+from ormar.queryset.expressions import Expression, F, expression_leaves
 from ormar.queryset.templates import (
     delete_template,
     insert_template,
     pk_select_template,
     update_template,
+    update_values_params,
 )
 from ormar.queryset.utils import subtract_dict, translate_list_to_dict
 
@@ -287,17 +290,96 @@ class Model(ModelRow):
         self._verify_key_parts_set(row=self_fields)
         return self_fields
 
+    @classmethod
+    def _conflict_updates(
+        cls,
+        update_fields: Optional[list[str]],
+        update_values: Optional[builtins.dict[str, Any]],
+    ) -> tuple[builtins.dict[str, Any], builtins.dict[str, Any]]:
+        """
+        Validate the ``update_values`` of an upsert like ``QuerySet.update()``
+        validates its values and return the ``on_update`` values of the fields
+        set by neither ``update_fields`` nor ``update_values``, and the
+        ``update_values`` as column values or expression nodes, both by column
+        name.
+
+        :param update_fields: names of the fields updated from the inserted row
+        :type update_fields: Optional[list[str]]
+        :param update_values: value or expression by field name
+        :type update_values: Optional[dict[str, Any]]
+        :raises QueryDefinitionError: for an unknown field, a field also in
+            ``update_fields``, an expression setting a relation, reading a
+            related model or another field the upsert sets
+        :return: ``on_update`` values and ``update_values``, by column name
+        :rtype: tuple[dict[str, Any], dict[str, Any]]
+        """
+        update_fields = update_fields or []
+        update_values = update_values or {}
+        related_names = cls.extract_related_names()
+        unknown = [
+            name
+            for name in update_values
+            if name not in cls.extract_db_own_fields() and name not in related_names
+        ]
+        if unknown:
+            raise QueryDefinitionError(
+                f"update_values names fields the model does not have: {unknown}"
+            )
+        repeated = [name for name in update_values if name in update_fields]
+        if repeated:
+            raise QueryDefinitionError(
+                f"Fields cannot be in both update_fields and update_values: {repeated}"
+            )
+        model_fields = cls.ormar_config.model_fields
+        on_update = {
+            cls.get_column_alias(field_name=name): model_fields[name].get_on_update()
+            for name in sorted(cls._onupdate_fields)
+            if name not in update_fields and name not in update_values
+        }
+        updated = {*update_fields, *update_values, *cls._onupdate_fields}
+        expressions = {
+            name: value._node()
+            for name, value in update_values.items()
+            if isinstance(value, Expression)
+        }
+        for name, node in expressions.items():
+            expression_columns(node=node, model=cls, upsert=True)
+            read = [
+                leaf._path
+                for leaf in expression_leaves(node=node)
+                if isinstance(leaf, F)
+            ]
+            if name in related_names or any(
+                field != name and field in updated for field in read
+            ):
+                raise QueryDefinitionError(
+                    f"update_values cannot set '{name}' from an expression reading "
+                    f"{read}: expressions set no relations and read no fields set "
+                    f"by the same upsert (use Inserted() for the inserted value)."
+                )
+        values = cls.validate_update_values(
+            {
+                name: value
+                for name, value in update_values.items()
+                if name not in expressions
+            }
+        )
+        values = cls.reconvert_str_to_bytes(values)
+        return on_update, cls.translate_columns_to_aliases({**values, **expressions})
+
     async def _upsert(
         self: T,
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
+        update_values: Optional[builtins.dict[str, Any]] = None,
     ) -> T:
         """
         Insert the instance, or update the row it conflicts with on
         ``conflict_target`` (the primary key by default), in one statement, and
         fill the instance with the stored row. ``update_fields`` (by default
-        all inserted fields but the target and the key) and the fields with
-        ``on_update`` are updated.
+        all inserted fields but the target and the key, none with
+        ``update_values``), ``update_values`` and the fields with ``on_update``
+        are updated.
 
         PostgreSQL and SQLite return the stored row from the insert. MySQL has
         no RETURNING and conflicts on any unique key: the row is read back by
@@ -310,7 +392,10 @@ class Model(ModelRow):
         :type conflict_target: Optional[list[str]]
         :param update_fields: names of the fields updated on conflict
         :type update_fields: Optional[list[str]]
-        :raises QueryDefinitionError: if a field of the target has no value
+        :param update_values: values or expressions set on conflict, by field
+        :type update_values: Optional[dict[str, Any]]
+        :raises QueryDefinitionError: if a field of the target has no value or
+            ``update_values`` are invalid (see ``_conflict_updates``)
         :raises NoMatch: if on MySQL no row matches the target values after the
             write (a conflict on another unique key, or values the database
             stores rounded)
@@ -318,6 +403,9 @@ class Model(ModelRow):
         :rtype: Model
         """
         self.verify_writable()
+        on_update, values = self._conflict_updates(
+            update_fields=update_fields, update_values=update_values
+        )
         await self._emit_signal("pre_save", instance=self)
         self_fields = self._prepare_insert_row()
         config = self.ormar_config
@@ -338,12 +426,6 @@ class Model(ModelRow):
                 f"on_conflict='update' needs a value for every field of the "
                 f"conflict target, missing: {missing}"
             )
-        fields = config.model_fields
-        on_update = {
-            self.get_column_alias(field_name=name): fields[name].get_on_update()
-            for name in self._onupdate_fields
-            if name not in (update_fields or ())
-        }
         rules = config.database.rules
         template = insert_template(
             model_cls=type(self),
@@ -352,6 +434,7 @@ class Model(ModelRow):
             conflict_target=conflict_target,
             update_fields=update_fields,
             on_update=tuple(sorted(on_update)),
+            update_values=values,
             returning=(
                 tuple(column.name for column in config.table.columns)
                 if rules.conflict_returning
@@ -364,6 +447,7 @@ class Model(ModelRow):
                 f"ormar_on_update_{column}": value
                 for column, value in on_update.items()
             },
+            **update_values_params(update_values=values),
         }
         # each branch runs on its own databases only
         if rules.conflict_returning:  # pragma: no cover

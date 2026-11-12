@@ -7,8 +7,8 @@ import ormar
 from ormar.databases.dialects import (
     MysqlRules,
     conflict_updates,
-    on_update_assignment,
     on_update_variable,
+    update_assignment,
 )
 from ormar.databases.query_executor import QueryExecutor
 from ormar.queryset.templates import value_binds
@@ -119,14 +119,14 @@ def test_mysql_upsert_reads_on_update_values_from_variables():
         update_names=("price",),
         on_update=("revision", "touched_at"),
         returning=(),
-        on_update_variables=True,
+        update_variables=True,
     )
     sql = str(statement.compile(dialect=mysql.dialect()))
     assert sql.endswith(
         "price = VALUES(price), revision = @ormar_on_update_0, "
         "touched_at = @ormar_on_update_1"
     )
-    assignment = on_update_assignment(table=table, on_update=("revision", "touched_at"))
+    assignment = update_assignment(table=table, on_update=("revision", "touched_at"))
     assert str(assignment.compile(dialect=mysql.dialect())) == (
         "SET @ormar_on_update_0 = %s, @ormar_on_update_1 = %s"
     )

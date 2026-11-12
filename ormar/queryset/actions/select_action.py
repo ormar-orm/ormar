@@ -5,7 +5,7 @@ import sqlalchemy
 
 from ormar.exceptions import QueryDefinitionError  # noqa: I202
 from ormar.queryset.actions.query_action import QueryAction
-from ormar.queryset.expressions import F, expression_leaves
+from ormar.queryset.expressions import F, Inserted, expression_leaves
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import Model
@@ -49,22 +49,38 @@ class SelectAction(QueryAction):
         return result
 
 
-def expression_columns(node: Any, model: type["Model"]) -> dict[str, SelectAction]:
+def expression_columns(
+    node: Any, model: type["Model"], upsert: bool = False
+) -> dict[str, SelectAction]:
     """
     Resolve the fields an expression reads, by path from ``model``, to the
     model and table alias each one is read from, like a filter on that path.
+
+    In the ``update_values`` of an upsert (``upsert=True``) fields are the
+    model's own only, as there are no joins, and ``Inserted`` fields resolve
+    like ``F`` ones; anywhere else ``Inserted`` is rejected.
 
     :param node: expression node
     :type node: Any
     :param model: queried model
     :type model: type[Model]
-    :raises QueryDefinitionError: if a path does not lead to a non-relation field
+    :param upsert: the expression is a value of an upsert's ``update_values``
+    :type upsert: bool
+    :raises QueryDefinitionError: if a path does not lead to a non-relation
+        field, an upsert reads a related model or ``Inserted`` is used outside
+        an upsert
     :return: resolved field actions by field path
     :rtype: dict[str, SelectAction]
     """
     columns: dict[str, SelectAction] = {}
     for leaf in expression_leaves(node=node):
-        if isinstance(leaf, F) and leaf._path not in columns:
+        if isinstance(leaf, Inserted) and not upsert:
+            raise QueryDefinitionError(
+                f"Inserted('{leaf._path}') is only allowed in update_values of "
+                f"create() and bulk_create() with on_conflict='update'"
+            )
+        if isinstance(leaf, (F, Inserted)) and leaf._path not in columns:
+            name = type(leaf).__name__
             try:
                 column = SelectAction(select_str=leaf._path, model_cls=model)
                 field = column.target_model.ormar_config.model_fields.get(
@@ -74,8 +90,13 @@ def expression_columns(node: Any, model: type["Model"]) -> dict[str, SelectActio
                 field = None
             if field is None or field.is_relation:
                 raise QueryDefinitionError(
-                    f"F('{leaf._path}') has to name a non-relation field, after "
-                    f"the relations leading to its model if any."
+                    f"{name}('{leaf._path}') has to name a non-relation field, "
+                    f"after the relations leading to its model if any."
+                )
+            if upsert and column.related_parts:
+                raise QueryDefinitionError(
+                    f"{name}('{leaf._path}') reads a related model: update_values "
+                    f"of an upsert read only fields of the inserted model"
                 )
             columns[leaf._path] = column
     return columns
