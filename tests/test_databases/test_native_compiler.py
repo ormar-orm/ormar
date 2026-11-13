@@ -12,6 +12,7 @@ from ormar.databases.native.compiler import (
     NativeCompiler,
     resolve_result_processors,
     row_to_dict,
+    row_to_tuple,
 )
 
 metadata = sa.MetaData()
@@ -245,6 +246,28 @@ def test_row_to_dict_applies_result_processors():
     resolve_result_processors(bound.plan, dialect, [None, None])
     row = row_to_dict(bound.plan, (1, "2026-10-19 12:30:00.000000"))
     assert row == {"id": 1, "created": datetime(2026, 10, 19, 12, 30)}
+
+
+def test_row_to_tuple_applies_result_processors():
+    dialect = SQLiteDialect_aiosqlite()
+    bound = NativeCompiler(dialect).bind(
+        sa.select(items.c.created, items.c.id).where(items.c.id == 1)
+    )
+    resolve_result_processors(bound.plan, dialect, [None, None])
+    row = row_to_tuple(bound.plan, ("2026-10-19 12:30:00.000000", 1))
+    assert row == (datetime(2026, 10, 19, 12, 30), 1)
+    assert bound.plan.processed_columns == (
+        ("created", bound.plan.processed_positions[0][1]),
+    )
+
+
+def test_row_to_tuple_without_result_processors():
+    dialect = SQLiteDialect_aiosqlite()
+    bound = NativeCompiler(dialect).bind(
+        sa.select(items.c.id, items.c.name).where(items.c.id == 1)
+    )
+    resolve_result_processors(bound.plan, dialect, [None, None])
+    assert row_to_tuple(bound.plan, [1, "a"]) == (1, "a")
 
 
 @pytest.mark.parametrize("dialect_cls", DIALECTS)

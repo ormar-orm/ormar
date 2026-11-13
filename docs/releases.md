@@ -41,6 +41,16 @@
     )
     ```
 
+* **Rows as tuples from the query executor**
+
+    `fetch_all()` and `fetch_one()` of `database.get_query_executor()` take `as_tuples=True` and return tuples of values in select order instead of rows keyed by result label, with the same type conversion. `fetch_val(column=...)` now also picks the requested column for statements that run through SQLAlchemy (e.g. plain `text()`), where it always returned the first one.
+
+    ```python
+    async with database.get_query_executor() as executor:
+        rows = await executor.fetch_all(select(users.c.id, users.c.name), as_tuples=True)
+        # -> [(1, "a"), (2, "b")]
+    ```
+
 ### 🐛 Fixes
 
 * `OrmarConfig(constraints=[...])` and `ormar_config.copy(constraints=[...])` accept `IndexColumns` for type checkers. The annotation was `list[ColumnCollectionConstraint]`, which `IndexColumns` (a subclass of `sqlalchemy.Index`) is not, so mypy rejected it although it worked at runtime. [#1982](https://github.com/ormar-orm/ormar/pull/1982)

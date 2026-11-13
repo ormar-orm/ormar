@@ -13,7 +13,12 @@ from ormar.databases.native.adapters.base import (
     first_value,
     inserted_primary_key,
 )
-from ormar.databases.native.compiler import BoundBatch, BoundStatement, row_to_dict
+from ormar.databases.native.compiler import (
+    BoundBatch,
+    BoundStatement,
+    row_to_dict,
+    row_to_tuple,
+)
 
 
 class AsyncpgAdapter(DriverAdapter):
@@ -43,7 +48,9 @@ class AsyncpgAdapter(DriverAdapter):
             dialect.dbapi._asyncpg_error_translate  # type: ignore[union-attr]
         )
 
-    async def fetch_all(self, raw: Any, bound: BoundStatement) -> List[Dict[str, Any]]:
+    async def fetch_all(
+        self, raw: Any, bound: BoundStatement, as_tuples: bool = False
+    ) -> List[Any]:
         """
         Run a statement with ``fetch`` and turn asyncpg's ``Record`` rows into
         rows keyed by result label.
@@ -52,14 +59,17 @@ class AsyncpgAdapter(DriverAdapter):
         :type raw: Any
         :param bound: statement to execute
         :type bound: BoundStatement
+        :param as_tuples: return tuples of values in select order instead
+        :type as_tuples: bool
         :return: rows
-        :rtype: List[Dict[str, Any]]
+        :rtype: List[Any]
         """
         driver = raw.driver_connection
         async with execute_mutex(raw=raw):
             await self.resolve_column_types(driver=driver, bound=bound)
             rows = await driver.fetch(bound.sql, *bound.args)
-        return [row_to_dict(plan=bound.plan, values=row) for row in rows]
+        convert = row_to_tuple if as_tuples else row_to_dict
+        return [convert(plan=bound.plan, values=row) for row in rows]
 
     async def execute(self, raw: Any, bound: BoundStatement) -> Any:
         """
