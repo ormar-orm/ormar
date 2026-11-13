@@ -720,6 +720,22 @@ class UUID(ModelFieldFactory, uuid.UUID):
         return sqlalchemy_uuid.UUID(uuid_format=uuid_format)
 
 
+_SQLALCHEMY_ENUM_KWARGS = frozenset(
+    {
+        "name",
+        "native_enum",
+        "create_constraint",
+        "values_callable",
+        "validate_strings",
+        "length",
+        "schema",
+        "metadata",
+        "inherit_schema",
+        "quote",
+    }
+)
+
+
 class Enum(ModelFieldFactory):
     """
     Enum field factory that construct Field classes and populated their values.
@@ -749,5 +765,16 @@ class Enum(ModelFieldFactory):
 
     @classmethod
     def get_column_type(cls, **kwargs: Any) -> Any:
+        """
+        Return a SQLAlchemy Enum column type.
+
+        SQLAlchemy Enum options, such as ``values_callable``, are forwarded
+        so callers can store enum values instead of enum names.
+        """
         enum_cls = kwargs.get("enum_class")
-        return sqlalchemy.Enum(enum_cls)
+        enum_kwargs = {
+            key: value
+            for key, value in kwargs.items()
+            if key in _SQLALCHEMY_ENUM_KWARGS
+        }
+        return sqlalchemy.Enum(enum_cls, **enum_kwargs)
