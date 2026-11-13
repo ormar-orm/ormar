@@ -7,11 +7,28 @@ from typing import Any, Literal, TypeVar, Union, overload
 from uuid import UUID as UuidType
 
 T = TypeVar("T", bound=EnumBase)
+L = TypeVar("L", bound=str)
 
 @overload
 def Boolean(*, nullable: Literal[False] = False, **kwargs: Any) -> bool: ...
 @overload
 def Boolean(*, nullable: Literal[True], **kwargs: Any) -> bool | None: ...
+@overload
+def String(
+    *,
+    max_length: int,
+    choices: list[L] | tuple[L, ...],
+    nullable: Literal[False] = False,
+    **kwargs: Any,
+) -> L: ...
+@overload
+def String(
+    *,
+    max_length: int,
+    choices: list[L] | tuple[L, ...],
+    nullable: Literal[True],
+    **kwargs: Any,
+) -> L | None: ...
 @overload
 def String(
     *, max_length: int, nullable: Literal[False] = False, **kwargs: Any
