@@ -720,9 +720,9 @@ class UUID(ModelFieldFactory, uuid.UUID):
         return sqlalchemy_uuid.UUID(uuid_format=uuid_format)
 
 
+# ``name`` is not forwarded: ormar uses it for the column name
 _SQLALCHEMY_ENUM_KWARGS = frozenset(
     {
-        "name",
         "native_enum",
         "create_constraint",
         "values_callable",

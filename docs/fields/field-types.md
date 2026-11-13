@@ -220,6 +220,21 @@ So which one to use depends on the backend you use and on the column/ data type 
 * Sqlalchemy column: `sqlalchemy.Enum`  
 * Type (used for pydantic): `type[Enum]`
 
+By default the column stores member names. Options of `sqlalchemy.Enum` are passed through, so `values_callable` stores the values instead (`name` is not passed, ormar uses it for the column name):
+
+```python
+class Country(int, Enum):
+    UK = 1
+    US = 2
+
+country: Country = ormar.Enum(
+    enum_class=Country,
+    values_callable=lambda enum: [str(member.value) for member in enum],
+)
+```
+
+The column holds `"1"` and `"2"` and loads back `Country.UK` and `Country.US`. Database enum types hold strings, so the values are stored as strings.
+
 
 [relations]: ../relations/index.md
 [queries]: ../queries.md
