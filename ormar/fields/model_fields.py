@@ -205,6 +205,10 @@ class String(ModelFieldFactory, str):
             )
 
 
+# dialects with UNSIGNED integer columns
+UNSIGNED_INTEGER_DIALECTS = ("mysql", "mariadb")
+
+
 def unsigned_on_mysql(column_type: Any, mysql_type: Any, unsigned: bool) -> Any:
     """
     Return the integer column type, made ``UNSIGNED`` on MySQL and MariaDB when
@@ -225,7 +229,9 @@ def unsigned_on_mysql(column_type: Any, mysql_type: Any, unsigned: bool) -> Any:
     """
     if not unsigned:
         return column_type
-    return column_type.with_variant(mysql_type(unsigned=True), "mysql", "mariadb")
+    return column_type.with_variant(
+        mysql_type(unsigned=True), *UNSIGNED_INTEGER_DIALECTS
+    )
 
 
 def creates_unsigned_check(ddl: Any, target: Any, bind: Any, **kwargs: Any) -> bool:
@@ -244,7 +250,7 @@ def creates_unsigned_check(ddl: Any, target: Any, bind: Any, **kwargs: Any) -> b
     :return: True on databases without unsigned integers
     :rtype: bool
     """
-    return kwargs["dialect"].name not in ("mysql", "mariadb")
+    return kwargs["dialect"].name not in UNSIGNED_INTEGER_DIALECTS
 
 
 class IntegerField(BaseField):
