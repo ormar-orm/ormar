@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import pydantic
 import sqlalchemy
+from sqlalchemy.dialects import mysql
 from sqlalchemy.sql.base import SchemaEventTarget
 
 import ormar  # noqa I101
@@ -204,6 +205,29 @@ class String(ModelFieldFactory, str):
             )
 
 
+def unsigned_on_mysql(column_type: Any, mysql_type: Any, unsigned: bool) -> Any:
+    """
+    Return the integer column type, made ``UNSIGNED`` on MySQL and MariaDB when
+    ``unsigned`` is set. Other databases have no unsigned integers and keep the
+    plain type::
+
+        unsigned_on_mysql(sqlalchemy.Integer(), mysql.INTEGER, True)
+        # MySQL: INTEGER UNSIGNED, PostgreSQL / SQLite: INTEGER
+
+    :param column_type: integer column type
+    :type column_type: Any
+    :param mysql_type: MySQL integer type of the same size
+    :type mysql_type: Any
+    :param unsigned: whether the column is unsigned
+    :type unsigned: bool
+    :return: column type
+    :rtype: Any
+    """
+    if not unsigned:
+        return column_type
+    return column_type.with_variant(mysql_type(unsigned=True), "mysql", "mariadb")
+
+
 class Integer(ModelFieldFactory, int):
     """
     Integer field factory that construct Field classes and populated their values.
@@ -218,8 +242,11 @@ class Integer(ModelFieldFactory, int):
         minimum: Optional[int] = None,
         maximum: Optional[int] = None,
         multiple_of: Optional[int] = None,
+        unsigned: bool = False,
         **kwargs: Any,
     ) -> Self:
+        if unsigned and minimum is None:
+            minimum = 0
         autoincrement = kwargs.pop("autoincrement", None)
         autoincrement_explicit = autoincrement is not None
         autoincrement = (
@@ -250,7 +277,9 @@ class Integer(ModelFieldFactory, int):
         :return: initialized column with proper options
         :rtype: sqlalchemy Column
         """
-        return sqlalchemy.Integer()
+        return unsigned_on_mysql(
+            sqlalchemy.Integer(), mysql.INTEGER, kwargs.get("unsigned", False)
+        )
 
 
 class Text(ModelFieldFactory, str):
@@ -521,33 +550,6 @@ class BigInteger(Integer, int):
     _type = int
     _sample = 0
 
-    def __new__(  # type: ignore
-        cls,
-        *,
-        minimum: Optional[int] = None,
-        maximum: Optional[int] = None,
-        multiple_of: Optional[int] = None,
-        **kwargs: Any,
-    ) -> Self:
-        autoincrement = kwargs.pop("autoincrement", None)
-        autoincrement_explicit = autoincrement is not None
-        autoincrement = (
-            autoincrement
-            if autoincrement is not None
-            else kwargs.get("primary_key", False)
-        )
-        kwargs = {
-            **kwargs,
-            **{
-                k: v
-                for k, v in locals().items()
-                if k not in ["cls", "__class__", "kwargs"]
-            },
-        }
-        kwargs["ge"] = kwargs["minimum"]
-        kwargs["le"] = kwargs["maximum"]
-        return super().__new__(cls, **kwargs)
-
     @classmethod
     def get_column_type(cls, **kwargs: Any) -> Any:
         """
@@ -559,7 +561,9 @@ class BigInteger(Integer, int):
         :return: initialized column with proper options
         :rtype: sqlalchemy Column
         """
-        return sqlalchemy.BigInteger()
+        return unsigned_on_mysql(
+            sqlalchemy.BigInteger(), mysql.BIGINT, kwargs.get("unsigned", False)
+        )
 
 
 class SmallInteger(Integer, int):
@@ -570,33 +574,6 @@ class SmallInteger(Integer, int):
     _type = int
     _sample = 0
 
-    def __new__(  # type: ignore
-        cls,
-        *,
-        minimum: Optional[int] = None,
-        maximum: Optional[int] = None,
-        multiple_of: Optional[int] = None,
-        **kwargs: Any,
-    ) -> Self:
-        autoincrement = kwargs.pop("autoincrement", None)
-        autoincrement_explicit = autoincrement is not None
-        autoincrement = (
-            autoincrement
-            if autoincrement is not None
-            else kwargs.get("primary_key", False)
-        )
-        kwargs = {
-            **kwargs,
-            **{
-                k: v
-                for k, v in locals().items()
-                if k not in ["cls", "__class__", "kwargs"]
-            },
-        }
-        kwargs["ge"] = kwargs["minimum"]
-        kwargs["le"] = kwargs["maximum"]
-        return super().__new__(cls, **kwargs)
-
     @classmethod
     def get_column_type(cls, **kwargs: Any) -> Any:
         """
@@ -608,7 +585,9 @@ class SmallInteger(Integer, int):
         :return: initialized column with proper options
         :rtype: sqlalchemy Column
         """
-        return sqlalchemy.SmallInteger()
+        return unsigned_on_mysql(
+            sqlalchemy.SmallInteger(), mysql.SMALLINT, kwargs.get("unsigned", False)
+        )
 
 
 class Decimal(ModelFieldFactory, decimal.Decimal):

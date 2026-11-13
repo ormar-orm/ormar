@@ -45,7 +45,8 @@ Each of the `Fields` has assigned both `sqlalchemy` column class and python type
 
 `Integer(minimum: int = None,
         maximum: int = None,
-        multiple_of: int = None)` has no required parameters.  
+        multiple_of: int = None,
+        unsigned: bool = False)` has no required parameters.  
 
 * Sqlalchemy column: `sqlalchemy.Integer`  
 * Type (used for pydantic): `int` 
@@ -57,7 +58,8 @@ Each of the `Fields` has assigned both `sqlalchemy` column class and python type
 
 `BigInteger(minimum: int = None,
         maximum: int = None,
-        multiple_of: int = None)` has no required parameters.  
+        multiple_of: int = None,
+        unsigned: bool = False)` has no required parameters.  
 
 * Sqlalchemy column: `sqlalchemy.BigInteger`  
 * Type (used for pydantic): `int` 
@@ -69,13 +71,24 @@ Each of the `Fields` has assigned both `sqlalchemy` column class and python type
 
 `SmallInteger(minimum: int = None,
         maximum: int = None,
-        multiple_of: int = None)` has no required parameters.  
+        multiple_of: int = None,
+        unsigned: bool = False)` has no required parameters.  
 
 * Sqlalchemy column: `sqlalchemy.SmallInteger`  
 * Type (used for pydantic): `int` 
 
 !!!tip
     For explanation of other parameters check [pydantic][pydantic] documentation.
+
+#### Unsigned integers
+
+`unsigned=True` on `Integer`, `BigInteger` and `SmallInteger` makes the column `UNSIGNED` on MySQL and MariaDB, and sets `minimum` to `0` if you did not set it. A foreign key to an unsigned primary key gets an unsigned column too. Other databases have no unsigned integers, so there the column keeps its plain type and only the `minimum` applies.
+
+```python
+class Owner(ormar.Model):
+    id: int = ormar.Integer(primary_key=True, unsigned=True)
+    # MySQL: id INTEGER UNSIGNED NOT NULL AUTO_INCREMENT
+```
 
 
 ### Float
