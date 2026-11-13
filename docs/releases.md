@@ -44,6 +44,7 @@
 ### 🐛 Fixes
 
 * `OrmarConfig(constraints=[...])` and `ormar_config.copy(constraints=[...])` accept `IndexColumns` for type checkers. The annotation was `list[ColumnCollectionConstraint]`, which `IndexColumns` (a subclass of `sqlalchemy.Index`) is not, so mypy rejected it although it worked at runtime. [#1982](https://github.com/ormar-orm/ormar/pull/1982)
+* `ormar.Enum` passes `sqlalchemy.Enum` options (`values_callable`, `native_enum`, `create_constraint`, `length`, `validate_strings`, `schema`, `metadata`, `inherit_schema`, `quote`) to the column type. They were accepted and silently dropped, so an `int` enum always stored member names (`"UK"`) instead of values. [#1385](https://github.com/ormar-orm/ormar/issues/1385)
 
 ### ⚡ Performance
 
