@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import pydantic
 import sqlalchemy
+from sqlalchemy.dialects import mysql
 from sqlalchemy.sql.base import SchemaEventTarget
 
 import ormar  # noqa I101
@@ -204,11 +205,81 @@ class String(ModelFieldFactory, str):
             )
 
 
+# dialects with UNSIGNED integer columns
+UNSIGNED_INTEGER_DIALECTS = ("mysql", "mariadb")
+
+
+def unsigned_on_mysql(column_type: Any, mysql_type: Any, unsigned: bool) -> Any:
+    """
+    Return the integer column type, made ``UNSIGNED`` on MySQL and MariaDB when
+    ``unsigned`` is set. Other databases have no unsigned integers and keep the
+    plain type::
+
+        unsigned_on_mysql(sqlalchemy.Integer(), mysql.INTEGER, True)
+        # MySQL: INTEGER UNSIGNED, PostgreSQL / SQLite: INTEGER
+
+    :param column_type: integer column type
+    :type column_type: Any
+    :param mysql_type: MySQL integer type of the same size
+    :type mysql_type: Any
+    :param unsigned: whether the column is unsigned
+    :type unsigned: bool
+    :return: column type
+    :rtype: Any
+    """
+    if not unsigned:
+        return column_type
+    return column_type.with_variant(
+        mysql_type(unsigned=True), *UNSIGNED_INTEGER_DIALECTS
+    )
+
+
+def creates_unsigned_check(ddl: Any, target: Any, bind: Any, **kwargs: Any) -> bool:
+    """
+    Return whether the ``>= 0`` check of an unsigned column is created: on
+    MySQL and MariaDB the column is ``UNSIGNED`` and needs no check.
+
+    :param ddl: DDL element being created
+    :type ddl: Any
+    :param target: table of the constraint
+    :type target: Any
+    :param bind: connection the DDL runs on
+    :type bind: Any
+    :param kwargs: ``dialect`` and other details of the DDL run
+    :type kwargs: Any
+    :return: True on databases without unsigned integers
+    :rtype: bool
+    """
+    return kwargs["dialect"].name not in UNSIGNED_INTEGER_DIALECTS
+
+
+class IntegerField(BaseField):
+    """
+    Field of an integer column. An unsigned one gets a check on databases
+    without unsigned integers::
+
+        CHECK (id >= 0)  -- PostgreSQL, SQLite; MySQL uses INTEGER UNSIGNED
+    """
+
+    unsigned: bool = False
+
+    def construct_table_constraints(self) -> list:
+        """
+        :return: the ``>= 0`` check of an unsigned column, empty otherwise
+        :rtype: list
+        """
+        if not self.unsigned:
+            return []
+        check = sqlalchemy.CheckConstraint(sqlalchemy.column(self.get_alias()) >= 0)
+        return [check.ddl_if(callable_=creates_unsigned_check)]
+
+
 class Integer(ModelFieldFactory, int):
     """
     Integer field factory that construct Field classes and populated their values.
     """
 
+    _bases = (IntegerField,)
     _type = int
     _sample = 0
 
@@ -218,8 +289,11 @@ class Integer(ModelFieldFactory, int):
         minimum: Optional[int] = None,
         maximum: Optional[int] = None,
         multiple_of: Optional[int] = None,
+        unsigned: bool = False,
         **kwargs: Any,
     ) -> Self:
+        if unsigned and minimum is None:
+            minimum = 0
         autoincrement = kwargs.pop("autoincrement", None)
         autoincrement_explicit = autoincrement is not None
         autoincrement = (
@@ -250,7 +324,9 @@ class Integer(ModelFieldFactory, int):
         :return: initialized column with proper options
         :rtype: sqlalchemy Column
         """
-        return sqlalchemy.Integer()
+        return unsigned_on_mysql(
+            sqlalchemy.Integer(), mysql.INTEGER, kwargs.get("unsigned", False)
+        )
 
 
 class Text(ModelFieldFactory, str):
@@ -521,33 +597,6 @@ class BigInteger(Integer, int):
     _type = int
     _sample = 0
 
-    def __new__(  # type: ignore
-        cls,
-        *,
-        minimum: Optional[int] = None,
-        maximum: Optional[int] = None,
-        multiple_of: Optional[int] = None,
-        **kwargs: Any,
-    ) -> Self:
-        autoincrement = kwargs.pop("autoincrement", None)
-        autoincrement_explicit = autoincrement is not None
-        autoincrement = (
-            autoincrement
-            if autoincrement is not None
-            else kwargs.get("primary_key", False)
-        )
-        kwargs = {
-            **kwargs,
-            **{
-                k: v
-                for k, v in locals().items()
-                if k not in ["cls", "__class__", "kwargs"]
-            },
-        }
-        kwargs["ge"] = kwargs["minimum"]
-        kwargs["le"] = kwargs["maximum"]
-        return super().__new__(cls, **kwargs)
-
     @classmethod
     def get_column_type(cls, **kwargs: Any) -> Any:
         """
@@ -559,7 +608,9 @@ class BigInteger(Integer, int):
         :return: initialized column with proper options
         :rtype: sqlalchemy Column
         """
-        return sqlalchemy.BigInteger()
+        return unsigned_on_mysql(
+            sqlalchemy.BigInteger(), mysql.BIGINT, kwargs.get("unsigned", False)
+        )
 
 
 class SmallInteger(Integer, int):
@@ -570,33 +621,6 @@ class SmallInteger(Integer, int):
     _type = int
     _sample = 0
 
-    def __new__(  # type: ignore
-        cls,
-        *,
-        minimum: Optional[int] = None,
-        maximum: Optional[int] = None,
-        multiple_of: Optional[int] = None,
-        **kwargs: Any,
-    ) -> Self:
-        autoincrement = kwargs.pop("autoincrement", None)
-        autoincrement_explicit = autoincrement is not None
-        autoincrement = (
-            autoincrement
-            if autoincrement is not None
-            else kwargs.get("primary_key", False)
-        )
-        kwargs = {
-            **kwargs,
-            **{
-                k: v
-                for k, v in locals().items()
-                if k not in ["cls", "__class__", "kwargs"]
-            },
-        }
-        kwargs["ge"] = kwargs["minimum"]
-        kwargs["le"] = kwargs["maximum"]
-        return super().__new__(cls, **kwargs)
-
     @classmethod
     def get_column_type(cls, **kwargs: Any) -> Any:
         """
@@ -608,7 +632,9 @@ class SmallInteger(Integer, int):
         :return: initialized column with proper options
         :rtype: sqlalchemy Column
         """
-        return sqlalchemy.SmallInteger()
+        return unsigned_on_mysql(
+            sqlalchemy.SmallInteger(), mysql.SMALLINT, kwargs.get("unsigned", False)
+        )
 
 
 class Decimal(ModelFieldFactory, decimal.Decimal):

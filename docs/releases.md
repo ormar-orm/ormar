@@ -54,6 +54,10 @@
     # country INTEGER NOT NULL CHECK (country IN (1, 2))
     ```
 
+* **Unsigned integers with `unsigned=True`** ([#1015](https://github.com/ormar-orm/ormar/issues/1015))
+
+    `Integer`, `BigInteger` and `SmallInteger` accept `unsigned=True`: the column is `UNSIGNED` on MySQL and MariaDB (foreign keys to it too), gets `CHECK (column >= 0)` on PostgreSQL and SQLite, and `minimum` defaults to `0`. Alembic autogenerate no longer recreates columns that were made unsigned by hand.
+
 ### 🐛 Fixes
 
 * `OrmarConfig(constraints=[...])` and `ormar_config.copy(constraints=[...])` accept `IndexColumns` for type checkers. The annotation was `list[ColumnCollectionConstraint]`, which `IndexColumns` (a subclass of `sqlalchemy.Index`) is not, so mypy rejected it although it worked at runtime. [#1982](https://github.com/ormar-orm/ormar/pull/1982)
