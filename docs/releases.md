@@ -56,7 +56,7 @@
 
 * **Unsigned integers with `unsigned=True`** ([#1015](https://github.com/ormar-orm/ormar/issues/1015))
 
-    `Integer`, `BigInteger` and `SmallInteger` accept `unsigned=True`: the column is `UNSIGNED` on MySQL and MariaDB (foreign keys to it too) and `minimum` defaults to `0`. Alembic autogenerate no longer recreates columns that were made unsigned by hand.
+    `Integer`, `BigInteger` and `SmallInteger` accept `unsigned=True`: the column is `UNSIGNED` on MySQL and MariaDB (foreign keys to it too), gets `CHECK (column >= 0)` on PostgreSQL and SQLite, and `minimum` defaults to `0`. Alembic autogenerate no longer recreates columns that were made unsigned by hand.
 
 ### 🐛 Fixes
 

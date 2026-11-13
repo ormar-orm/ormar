@@ -82,13 +82,19 @@ Each of the `Fields` has assigned both `sqlalchemy` column class and python type
 
 #### Unsigned integers
 
-`unsigned=True` on `Integer`, `BigInteger` and `SmallInteger` makes the column `UNSIGNED` on MySQL and MariaDB, and sets `minimum` to `0` if you did not set it. A foreign key to an unsigned primary key gets an unsigned column too. Other databases have no unsigned integers, so there the column keeps its plain type and only the `minimum` applies.
+`unsigned=True` on `Integer`, `BigInteger` and `SmallInteger` makes the column `UNSIGNED` on MySQL and MariaDB, and sets `minimum` to `0` if you did not set it. A foreign key to an unsigned primary key gets an unsigned column too. PostgreSQL and SQLite have no unsigned integers, so there the column keeps its type and gets a `CHECK (column >= 0)` instead.
 
 ```python
 class Owner(ormar.Model):
     id: int = ormar.Integer(primary_key=True, unsigned=True)
     # MySQL: id INTEGER UNSIGNED NOT NULL AUTO_INCREMENT
+    # PostgreSQL: id SERIAL NOT NULL, ... CHECK (id >= 0)
 ```
+
+The database only guards against negative values. A `minimum` above `0` is checked by pydantic, as on other fields.
+
+!!!note
+    An unsigned column on MySQL holds values up to twice as large as the same type on PostgreSQL and SQLite (`INTEGER UNSIGNED` up to 4294967295, `INTEGER` up to 2147483647). If you need that range everywhere use `BigInteger`.
 
 
 ### Float

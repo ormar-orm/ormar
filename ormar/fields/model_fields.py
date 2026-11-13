@@ -228,11 +228,52 @@ def unsigned_on_mysql(column_type: Any, mysql_type: Any, unsigned: bool) -> Any:
     return column_type.with_variant(mysql_type(unsigned=True), "mysql", "mariadb")
 
 
+def creates_unsigned_check(ddl: Any, target: Any, bind: Any, **kwargs: Any) -> bool:
+    """
+    Return whether the ``>= 0`` check of an unsigned column is created: on
+    MySQL and MariaDB the column is ``UNSIGNED`` and needs no check.
+
+    :param ddl: DDL element being created
+    :type ddl: Any
+    :param target: table of the constraint
+    :type target: Any
+    :param bind: connection the DDL runs on
+    :type bind: Any
+    :param kwargs: ``dialect`` and other details of the DDL run
+    :type kwargs: Any
+    :return: True on databases without unsigned integers
+    :rtype: bool
+    """
+    return kwargs["dialect"].name not in ("mysql", "mariadb")
+
+
+class IntegerField(BaseField):
+    """
+    Field of an integer column. An unsigned one gets a check on databases
+    without unsigned integers::
+
+        CHECK (id >= 0)  -- PostgreSQL, SQLite; MySQL uses INTEGER UNSIGNED
+    """
+
+    unsigned: bool = False
+
+    def construct_table_constraints(self) -> list:
+        """
+        :return: the ``>= 0`` check of an unsigned column, empty otherwise
+        :rtype: list
+        """
+        if not self.unsigned:
+            return []
+        check = sqlalchemy.CheckConstraint(sqlalchemy.column(self.get_alias()) >= 0)
+        return [check.ddl_if(callable_=creates_unsigned_check)]
+
+
 class Integer(ModelFieldFactory, int):
     """
     Integer field factory that construct Field classes and populated their values.
     """
 
+    _bases = (IntegerField,)
     _type = int
     _sample = 0
 

@@ -2,7 +2,8 @@ from typing import Optional
 
 import pydantic
 import pytest
-from sqlalchemy.dialects import mysql, postgresql
+import sqlalchemy
+from sqlalchemy.dialects import mysql, postgresql, sqlite
 from sqlalchemy.schema import CreateTable
 
 import ormar
@@ -40,6 +41,7 @@ def test_unsigned_columns_on_mysql():
     assert "big BIGINT UNSIGNED" in owners
     assert "small SMALLINT UNSIGNED" in owners
     assert "owner INTEGER UNSIGNED" in create_table_sql(Pet, mysql.dialect())
+    assert "CHECK" not in owners
 
 
 def test_unsigned_columns_keep_plain_type_on_other_databases():
@@ -47,6 +49,11 @@ def test_unsigned_columns_keep_plain_type_on_other_databases():
     assert "id SERIAL NOT NULL" in owners
     assert "big BIGINT" in owners
     assert "UNSIGNED" not in owners
+    for dialect in (postgresql.dialect(), sqlite.dialect()):
+        owners = create_table_sql(Owner, dialect)
+        assert "CHECK (id >= 0)" in owners
+        assert "CHECK (big >= 0)" in owners
+        assert "CHECK (small >= 0)" in owners
 
 
 def test_unsigned_rejects_negative_values():
@@ -68,3 +75,15 @@ async def test_unsigned_columns_store_and_load_values():
             pet = await Pet.objects.select_related("owner").get()
             assert pet.owner.id == owner.id
             assert (pet.owner.big, pet.owner.small) == (2**40, 300)
+
+
+@pytest.mark.asyncio
+async def test_database_rejects_negative_unsigned_value():
+    async with base_ormar_config.database:
+        with pytest.raises(sqlalchemy.exc.DBAPIError):
+            async with base_ormar_config.database.connection() as connection:
+                await connection.execute(
+                    sqlalchemy.text(
+                        "INSERT INTO unsigned_owners (big, small) VALUES (-1, 10)"
+                    )
+                )
