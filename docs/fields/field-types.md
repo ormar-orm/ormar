@@ -235,6 +235,24 @@ country: Country = ormar.Enum(
 
 The column holds `"1"` and `"2"` and loads back `Country.UK` and `Country.US`. Database enum types hold strings, so the values are stored as strings.
 
+To store the values themselves pass `store_values=True`:
+
+```python
+class Country(IntEnum):
+    UK = 1
+    US = 2
+
+country: Country = ormar.Enum(enum_class=Country, store_values=True)
+```
+
+* An `int` enum gets an `INTEGER` column with a check constraint on its values: `country INTEGER CHECK (country IN (1, 2))`. Filters with `>`/`<` and sorting work on the numbers.
+* Any other enum gets `sqlalchemy.Enum` of its values as strings, the same as `values_callable` above.
+
+`store_values` and `values_callable` can't be used together.
+
+!!!note
+    Alembic autogenerate does not detect changes in check constraints, so adding a member to an `int` enum stored with `store_values=True` needs a hand-written migration that replaces the constraint.
+
 
 [relations]: ../relations/index.md
 [queries]: ../queries.md

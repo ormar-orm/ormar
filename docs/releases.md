@@ -41,6 +41,19 @@
     )
     ```
 
+* **Enums stored by value with `ormar.Enum(store_values=True)`**
+
+    An `int` enum gets an `INTEGER` column with a check constraint on its values instead of a string enum column, so the database holds `1`, `2` and compares them as numbers. Other enums store their values instead of member names.
+
+    ```python
+    class Country(IntEnum):
+        UK = 1
+        US = 2
+
+    country: Country = ormar.Enum(enum_class=Country, store_values=True)
+    # country INTEGER NOT NULL CHECK (country IN (1, 2))
+    ```
+
 ### 🐛 Fixes
 
 * `OrmarConfig(constraints=[...])` and `ormar_config.copy(constraints=[...])` accept `IndexColumns` for type checkers. The annotation was `list[ColumnCollectionConstraint]`, which `IndexColumns` (a subclass of `sqlalchemy.Index`) is not, so mypy rejected it although it worked at runtime. [#1982](https://github.com/ormar-orm/ormar/pull/1982)

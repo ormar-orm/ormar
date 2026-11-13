@@ -7,6 +7,7 @@ from typing import Any, Optional
 
 import pydantic
 import sqlalchemy
+from sqlalchemy.sql.base import SchemaEventTarget
 
 import ormar  # noqa I101
 from ormar import ModelDefinitionError  # noqa I101
@@ -736,6 +737,36 @@ _SQLALCHEMY_ENUM_KWARGS = frozenset(
 )
 
 
+class IntegerEnum(sqlalchemy.types.TypeDecorator, SchemaEventTarget):
+    """
+    Integer column of an ``int`` enum: stores the member's value and loads it
+    back as the member, with a CHECK constraint limiting the column to the
+    enum's values::
+
+        country INTEGER CHECK (country IN (1, 2))
+    """
+
+    impl = sqlalchemy.Integer
+    cache_ok = True
+
+    def __init__(self, enum_class: type[E]) -> None:
+        super().__init__()
+        self.enum_class = enum_class
+
+    def _set_parent(self, parent: Any, **kwargs: Any) -> None:
+        sqlalchemy.event.listen(parent, "after_parent_attach", self._add_check)
+
+    def _add_check(self, column: sqlalchemy.Column, table: sqlalchemy.Table) -> None:
+        values = [int(member) for member in self.enum_class]
+        table.append_constraint(sqlalchemy.CheckConstraint(column.in_(values)))
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Optional[int]:
+        return None if value is None else int(value)
+
+    def process_result_value(self, value: Any, dialect: Any) -> Any:
+        return None if value is None else self.enum_class(value)
+
+
 class Enum(ModelFieldFactory):
     """
     Enum field factory that construct Field classes and populated their values.
@@ -745,7 +776,7 @@ class Enum(ModelFieldFactory):
     _sample = None
 
     def __new__(  # type: ignore # noqa CFQ002
-        cls, *, enum_class: type[E], **kwargs: Any
+        cls, *, enum_class: type[E], store_values: bool = False, **kwargs: Any
     ) -> Self:
         kwargs = {
             **kwargs,
@@ -762,19 +793,33 @@ class Enum(ModelFieldFactory):
         enum_class = kwargs.get("enum_class")
         if enum_class is None or not isinstance(enum_class, EnumMeta):
             raise ModelDefinitionError("Enum Field choices must be EnumType")
+        if kwargs.get("store_values") and kwargs.get("values_callable"):
+            raise ModelDefinitionError(
+                "Enum Field accepts store_values or values_callable, not both"
+            )
 
     @classmethod
     def get_column_type(cls, **kwargs: Any) -> Any:
         """
-        Return a SQLAlchemy Enum column type.
+        Return the column type of the enum.
 
         SQLAlchemy Enum options, such as ``values_callable``, are forwarded
         so callers can store enum values instead of enum names.
+
+        With ``store_values=True`` the column stores member values: an ``int``
+        enum gets an ``INTEGER`` column (see ``IntegerEnum``), any other enum
+        a ``sqlalchemy.Enum`` of its values as strings.
         """
         enum_cls = kwargs.get("enum_class")
+        if kwargs.get("store_values") and issubclass(enum_cls, int):
+            return IntegerEnum(enum_cls)
         enum_kwargs = {
             key: value
             for key, value in kwargs.items()
             if key in _SQLALCHEMY_ENUM_KWARGS
         }
+        if kwargs.get("store_values"):
+            enum_kwargs["values_callable"] = lambda enum: [
+                str(member.value) for member in enum
+            ]
         return sqlalchemy.Enum(enum_cls, **enum_kwargs)
