@@ -45,7 +45,8 @@ Each of the `Fields` has assigned both `sqlalchemy` column class and python type
 
 `Integer(minimum: int = None,
         maximum: int = None,
-        multiple_of: int = None)` has no required parameters.  
+        multiple_of: int = None,
+        unsigned: bool = False)` has no required parameters.  
 
 * Sqlalchemy column: `sqlalchemy.Integer`  
 * Type (used for pydantic): `int` 
@@ -57,7 +58,8 @@ Each of the `Fields` has assigned both `sqlalchemy` column class and python type
 
 `BigInteger(minimum: int = None,
         maximum: int = None,
-        multiple_of: int = None)` has no required parameters.  
+        multiple_of: int = None,
+        unsigned: bool = False)` has no required parameters.  
 
 * Sqlalchemy column: `sqlalchemy.BigInteger`  
 * Type (used for pydantic): `int` 
@@ -69,13 +71,30 @@ Each of the `Fields` has assigned both `sqlalchemy` column class and python type
 
 `SmallInteger(minimum: int = None,
         maximum: int = None,
-        multiple_of: int = None)` has no required parameters.  
+        multiple_of: int = None,
+        unsigned: bool = False)` has no required parameters.  
 
 * Sqlalchemy column: `sqlalchemy.SmallInteger`  
 * Type (used for pydantic): `int` 
 
 !!!tip
     For explanation of other parameters check [pydantic][pydantic] documentation.
+
+#### Unsigned integers
+
+`unsigned=True` on `Integer`, `BigInteger` and `SmallInteger` makes the column `UNSIGNED` on MySQL and MariaDB, and sets `minimum` to `0` if you did not set it. A foreign key to an unsigned primary key gets an unsigned column too. PostgreSQL and SQLite have no unsigned integers, so there the column keeps its type and gets a `CHECK (column >= 0)` instead.
+
+```python
+class Owner(ormar.Model):
+    id: int = ormar.Integer(primary_key=True, unsigned=True)
+    # MySQL: id INTEGER UNSIGNED NOT NULL AUTO_INCREMENT
+    # PostgreSQL: id SERIAL NOT NULL, ... CHECK (id >= 0)
+```
+
+The database only guards against negative values. A `minimum` above `0` is checked by pydantic, as on other fields.
+
+!!!note
+    An unsigned column on MySQL holds values up to twice as large as the same type on PostgreSQL and SQLite (`INTEGER UNSIGNED` up to 4294967295, `INTEGER` up to 2147483647). If you need that range everywhere use `BigInteger`.
 
 
 ### Float
@@ -219,6 +238,39 @@ So which one to use depends on the backend you use and on the column/ data type 
 
 * Sqlalchemy column: `sqlalchemy.Enum`  
 * Type (used for pydantic): `type[Enum]`
+
+By default the column stores member names. Options of `sqlalchemy.Enum` are passed through, so `values_callable` stores the values instead (`name` is not passed, ormar uses it for the column name):
+
+```python
+class Country(int, Enum):
+    UK = 1
+    US = 2
+
+country: Country = ormar.Enum(
+    enum_class=Country,
+    values_callable=lambda enum: [str(member.value) for member in enum],
+)
+```
+
+The column holds `"1"` and `"2"` and loads back `Country.UK` and `Country.US`. Database enum types hold strings, so the values are stored as strings.
+
+To store the values themselves pass `store_values=True`:
+
+```python
+class Country(IntEnum):
+    UK = 1
+    US = 2
+
+country: Country = ormar.Enum(enum_class=Country, store_values=True)
+```
+
+* An `int` enum gets an `INTEGER` column with a check constraint on its values: `country INTEGER CHECK (country IN (1, 2))`. Filters with `>`/`<` and sorting work on the numbers.
+* Any other enum gets `sqlalchemy.Enum` of its values as strings, the same as `values_callable` above.
+
+`store_values` and `values_callable` can't be used together.
+
+!!!note
+    Alembic autogenerate does not detect changes in check constraints, so adding a member to an `int` enum stored with `store_values=True` needs a hand-written migration that replaces the constraint.
 
 
 [relations]: ../relations/index.md

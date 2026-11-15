@@ -84,12 +84,15 @@ from ormar.queryset.templates.writes import (
     build_insert,
     build_pk_select,
     build_update,
+    build_update_assignment,
     delete_template,
     insert_statement,
     insert_template,
     pk_select_template,
     rows_select_template,
     update_template,
+    update_values_key,
+    update_values_params,
 )
 
 __all__ = [
@@ -107,6 +110,7 @@ __all__ = [
     "build_insert",
     "build_pk_select",
     "build_update",
+    "build_update_assignment",
     "cached_statement",
     "canonical_actions",
     "clauses_cache_key",
@@ -124,6 +128,8 @@ __all__ = [
     "template_cache_for",
     "template_params",
     "update_template",
+    "update_values_key",
+    "update_values_params",
     "value_binds",
     "value_cache_key",
     "value_params",

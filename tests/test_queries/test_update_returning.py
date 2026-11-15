@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+import re
 from typing import Any, Optional
 
 import pytest
@@ -250,6 +251,11 @@ async def test_update_returning_statements(catalog):
     )
 
 
+def without_bind_casts(sql: str) -> str:
+    """SQLAlchemy 2.1 casts postgres bind parameters (``::INTEGER``), 2.0 does not."""
+    return re.sub(r"::[A-Z]+", "", sql)
+
+
 def single_spaced(compiled: Any) -> str:
     return " ".join(str(compiled).split())
 
@@ -290,14 +296,17 @@ async def test_update_sql_is_unchanged(catalog):
             for template in (plain, expression)
         ]
         assert rendered == expected[dialect.name]
-    assert single_spaced(related.statement.compile(dialect=postgresql.dialect())) == (
-        "UPDATE urt_releases SET copies=%(ormar_v0)s::INTEGER "
+    postgres_sql = single_spaced(
+        related.statement.compile(dialect=postgresql.dialect())
+    )
+    assert without_bind_casts(postgres_sql) == (
+        "UPDATE urt_releases SET copies=%(ormar_v0)s "
         "WHERE (urt_releases.region, urt_releases.number) IN "
         "(SELECT ormar_matched.region, ormar_matched.number FROM "
         "(SELECT urt_releases.region AS region, urt_releases.number AS number "
         "FROM urt_releases LEFT OUTER JOIN urt_albums AS t1b26c7_urt_albums "
         "ON t1b26c7_urt_albums.id=urt_releases.album "
-        "WHERE t1b26c7_urt_albums.name = %(ormar_p0)s::VARCHAR) AS ormar_matched)"
+        "WHERE t1b26c7_urt_albums.name = %(ormar_p0)s) AS ormar_matched)"
     )
 
 
