@@ -26,7 +26,7 @@ from ormar.exceptions import (
     QueryDefinitionError,
 )
 from ormar.models.row_registry import RowRegistry
-from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
+from ormar.queryset import FieldAccessor, SelectAction
 from ormar.queryset.actions.order_action import (
     OrderAction,
     RandomOrder,
@@ -37,7 +37,6 @@ from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.expressions import (
     Expression,
     Random,
-    expression_clause,
     expression_key,
     expression_params,
 )
@@ -66,7 +65,6 @@ from ormar.queryset.templates import (
     template_params,
     update_values_key,
     update_values_params,
-    value_binds,
     value_params,
 )
 from ormar.queryset.utils import (
@@ -76,7 +74,7 @@ from ormar.queryset.utils import (
     normalize_slice,
 )
 from ormar.queryset.values_columns import extract_values, values_column_map
-from ormar.relations.aliases import alias_for, prefixed_table
+from ormar.queryset.write_statements import WRITE_STATEMENTS, forward_join_conditions
 
 # rows built between yields to the event loop when materializing flat rows
 FLAT_ROWS_CHUNK = 500
@@ -102,7 +100,7 @@ def dump_for_save(obj: "Model") -> dict:
 
 
 if TYPE_CHECKING:  # pragma no cover
-    from ormar import ForeignKeyField, Model
+    from ormar import Model
     from ormar.models import T
     from ormar.models.excludable import ExcludableItems, Slot
     from ormar.models.ormar_config import OrmarConfig
@@ -598,13 +596,14 @@ class QuerySet(Generic[T]):
     ) -> Any:
         """
         Build the update, delete or row lock of this queryset with named slots
-        for the updated values and the filter values, in three steps::
+        for the updated values and the filter values, by the statement class
+        of the kind (see ``write_statements``)::
 
-            target   UPDATE / DELETE / SELECT <pk> FOR UPDATE, joined to the
-                     tables the updated values read  (write_target)
-            rows     WHERE: locked primary keys, matched rows or the filters
-                     (restrict_written_rows)
-            returns  RETURNING all columns, for WriteKind.UPDATE_RETURNING
+            WriteKind.UPDATE            -> UpdateWrite
+            WriteKind.DELETE            -> DeleteWrite
+            WriteKind.UPDATE_RETURNING  -> UpdateReturningWrite
+            WriteKind.LOCK              -> LockWrite
+            WriteKind.UPDATE_LOCKED     -> UpdateLockedWrite
 
         :param kind: statement to build
         :type kind: WriteKind
@@ -615,90 +614,8 @@ class QuerySet(Generic[T]):
         :return: statement to execute
         :rtype: Any
         """
-        expr = self.write_target(kind=kind, values=values)
-        expr = self.restrict_written_rows(expr=expr, kind=kind, binder=binder)
-        if kind is WriteKind.UPDATE_RETURNING:
-            expr = expr.returning(*self.table.c)
-        return expr
-
-    def write_target(self, kind: WriteKind, values: dict) -> Any:
-        """
-        Return the statement of the kind before its rows are restricted: the
-        update setting the values, the delete, or the select of the primary
-        key locking the rows.
-
-        Expressions reading related models join those tables (``UPDATE ...
-        FROM`` or a multi-table ``UPDATE`` on MySQL, as SQLAlchemy renders it).
-        The lock joins them too, so it selects the rows the update touches.
-
-        :param kind: statement to build
-        :type kind: WriteKind
-        :param values: updated values by column name (empty for delete)
-        :type values: dict
-        :return: statement without the row restriction
-        :rtype: Any
-        """
-        table = self.table
-        names = tuple(sorted(values))
-        binds = value_binds(table=table, names=names)
-        join_conditions: dict[str, list] = {}
-        for index, name in enumerate(names):
-            if isinstance(values[name], Expression):
-                columns = expression_columns(node=values[name], model=self.model)
-                binds[table.c[name]] = expression_clause(
-                    node=values[name], columns=columns, slot=f"ormar_v{index}"
-                )
-                for column in columns.values():
-                    join_conditions.update(
-                        forward_join_conditions(
-                            model=self.model, path=column.related_parts
-                        )
-                    )
-        expr: Any
-        if kind is WriteKind.DELETE:
-            expr = table.delete()
-        elif kind is WriteKind.LOCK:
-            expr = sqlalchemy.select(*self.model_config.pk.columns()).with_for_update(
-                of=table
-            )
-        else:
-            expr = table.update().values(binds)
-        for conditions in join_conditions.values():
-            expr = expr.where(*conditions)
-        return expr
-
-    def restrict_written_rows(
-        self, expr: Any, kind: WriteKind, binder: SlotBinder
-    ) -> Any:
-        """
-        Restrict the statement to the rows it writes, by one of:
-
-        * the locked primary keys (``PKS_SLOT``) for
-          ``WriteKind.UPDATE_LOCKED``, the filters already chose the rows
-        * the primary keys the same queryset selects (see
-          ``matched_rows_clause``) when a filter reads a related model, so the
-          statement touches the rows the filters select in ``all()``
-        * the filter and exclude clauses otherwise
-
-        :param expr: statement to restrict
-        :type expr: Any
-        :param kind: statement to build
-        :type kind: WriteKind
-        :param binder: names filter values for templates
-        :type binder: SlotBinder
-        :return: restricted statement
-        :rtype: Any
-        """
-        if kind is WriteKind.UPDATE_LOCKED:
-            return expr.where(self.model_config.pk.in_clause(slot=PKS_SLOT))
-        if self._filters_read_related():
-            return expr.where(self.matched_rows_clause(binder=binder))
-        expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
-            expr=expr
-        )
-        return FilterQuery(
-            filter_clauses=self.exclude_clauses, exclude=True, binder=binder
-        ).apply(expr=expr)
+        statement_cls = WRITE_STATEMENTS[kind]
+        return statement_cls(queryset=self, values=values, binder=binder).build()
 
     def matched_rows_clause(self, binder: Optional[SlotBinder]) -> Any:
         """
@@ -2456,43 +2373,3 @@ class QuerySet(Generic[T]):
             order_bys=order_bys,
             reverse_result=bounds.reverse,
         )
-
-
-def forward_join_conditions(model: type["Model"], path: list[str]) -> dict[str, list]:
-    """
-    Return the join conditions of the tables an update expression reads from,
-    by table alias, following a path of foreign keys from ``model``::
-
-        forward_join_conditions(model=Track, path=["album"])
-        # -> {"t1b26c7": [t1b26c7_albums.id == tracks.album]}
-
-    Every table is aliased like in selects, so the conditions join the aliased
-    columns the expression reads.
-
-    :param model: updated model
-    :type model: type[Model]
-    :param path: relation names leading to the read model
-    :type path: list[str]
-    :raises QueryDefinitionError: if the path follows a reverse, many to many or
-        through relation, which can match many rows
-    :return: join conditions by table alias
-    :rtype: dict[str, list]
-    """
-    conditions: dict[str, list] = {}
-    source_table: Any = model.ormar_config.table
-    for index, relation in enumerate(path):
-        field = cast("ForeignKeyField", model.ormar_config.model_fields[relation])
-        if field.is_multi or field.virtual or field.is_through:
-            raise QueryDefinitionError(
-                f"update() expressions read related models only through foreign "
-                f"keys, '{'__'.join(path)}' follows the reverse or many to many "
-                f"relation '{relation}', which can match many rows."
-            )
-        alias = alias_for("__".join(path[: index + 1]))
-        target_table = prefixed_table(alias=alias, table=field.to.ormar_config.table)
-        conditions[alias] = [
-            target_table.c[pair.target_column] == source_table.c[pair.source_column]
-            for pair in field.link.pairs
-        ]
-        model, source_table = field.to, target_table
-    return conditions
