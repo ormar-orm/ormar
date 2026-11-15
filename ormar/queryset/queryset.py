@@ -855,7 +855,9 @@ class QuerySet(Generic[T]):
         related = sorted(list(set(list(self._select_related) + related)))
         return self.rebuild_self(select_related=related)
 
-    def select_all(self, follow: bool = False) -> "QuerySet[T]":
+    def select_all(
+        self, follow: bool = False, max_depth: Optional[int] = None
+    ) -> "QuerySet[T]":
         """
         By default adds only directly related models.
 
@@ -873,12 +875,16 @@ class QuerySet(Generic[T]):
         by default only directly related models are saved
         with follow=True also related models of related models are saved
         :type follow: bool
+        :param max_depth: number of relations to follow at most with
+            follow=True, by default unlimited (``map`` traversal) or
+            ``DEFAULT_FOLLOW_DEPTH`` (``instance`` traversal)
+        :type max_depth: Optional[int]
         :return: reloaded Model
         :rtype: Model
         """
         relations = list(self.model.extract_related_names())
         if follow:
-            relations = self.model._iterate_related_models()
+            relations = self.model._follow_relation_paths(max_depth=max_depth)
         return self.rebuild_self(select_related=relations)
 
     def prefetch_related(

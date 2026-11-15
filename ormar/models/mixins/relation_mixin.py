@@ -1,7 +1,15 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from ormar import BaseField, ForeignKeyField
 from ormar.models.relation_graph import RelationGraph
+from ormar.models.traversal import (
+    DEFAULT_FOLLOW_DEPTH,
+    PathRelationMap,
+    instance_traversal_enabled,
+    relation_paths,
+    visited_paths_cached,
+)
 from ormar.models.traversible import NodeList
 
 
@@ -284,6 +292,54 @@ class RelationMixin:
             tree = build_relation_tree(model=cls)
             cls.__relation_tree__ = tree
         return tree
+
+    @classmethod
+    def _default_relation_map(cls) -> Mapping[str, Any]:
+        """
+        Returns the default relation map of ``model_dump`` and ``save_related``:
+        the cached ``_relation_tree()`` or, in ``instance`` traversal mode, a
+        ``PathRelationMap`` that decides from the path of the walk (kept on the
+        class in ``instance_cached`` mode)::
+
+            Author._default_relation_map()  # -> PathRelationMap(author)
+
+        :return: relation map to follow
+        :rtype: Mapping[str, Any]
+        """
+        if instance_traversal_enabled():
+            if not visited_paths_cached():
+                return PathRelationMap(model=cls, ancestors=())
+            cached = cls.__dict__.get("_path_root")
+            if cached is None or cached[0] != RelationGraph.version:
+                cached = (
+                    RelationGraph.version,
+                    PathRelationMap(model=cls, ancestors=()),
+                )
+                cls._path_root = cached  # type: ignore[attr-defined]
+            return cached[1]
+        return cls._relation_tree()
+
+    @classmethod
+    def _follow_relation_paths(cls, max_depth: Optional[int] = None) -> list[str]:
+        """
+        Returns the relation paths loaded by ``select_all(follow=True)`` and
+        ``load_all(follow=True)``. Without ``max_depth`` the cached
+        ``_iterate_related_models()`` paths are used, or in ``instance``
+        traversal mode the paths up to ``DEFAULT_FOLLOW_DEPTH`` relations deep::
+
+            Book._follow_relation_paths(max_depth=1)  # -> ["author", "tags"]
+
+        :param max_depth: number of relations to follow at most
+        :type max_depth: Optional[int]
+        :return: relation paths in dunder notation
+        :rtype: list[str]
+        """
+        if max_depth is None and not instance_traversal_enabled():
+            return cls._iterate_related_models()
+        return relation_paths(
+            model=cls,
+            max_depth=max_depth if max_depth is not None else DEFAULT_FOLLOW_DEPTH,
+        )
 
     @classmethod
     def _drop_stale_relation_maps(cls) -> None:

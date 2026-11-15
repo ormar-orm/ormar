@@ -1466,7 +1466,9 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         }
 
         relation_map = (
-            relation_map if relation_map is not None else self._relation_tree()
+            relation_map
+            if relation_map is not None
+            else cast(builtins.dict, self._default_relation_map())
         )
         if relation_map and getattr(self, "__pk_only__", False):
             # a key-only model holds no relations besides the ones in its key

@@ -18,6 +18,8 @@ from ormar.models.excludable import (
 )
 from ormar.models.helpers.pydantic import extract_pk_value
 from ormar.models.mixins.relation_mixin import RelationMixin  # noqa: I100, I202
+from ormar.models.recursive_schema import RecursiveSchemaBuilder
+from ormar.models.traversal import instance_traversal_enabled
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import Model
@@ -40,6 +42,8 @@ class PydanticMixin(RelationMixin):
             set, list, str, tuple, dict, "FieldAccessor", None
         ] = None,
         flatten_all: bool = False,
+        max_depth: Optional[int] = None,
+        omit_back_relations: bool = True,
     ) -> type[pydantic.BaseModel]:
         """
         Returns a pydantic model out of ormar model.
@@ -62,10 +66,15 @@ class PydanticMixin(RelationMixin):
         :type flatten_fields: Union[set, list, str, tuple, dict, FieldAccessor, None]
         :param flatten_all: if True every relation is represented as its pk
         :type flatten_all: bool
+        :param max_depth: number of relation levels to nest at most, only in
+            ``instance`` relation traversal mode
+        :type max_depth: Optional[int]
+        :param omit_back_relations: leave the relation back to the parent out
+            of nested models, only in ``instance`` relation traversal mode
+        :type omit_back_relations: bool
         :raises QueryDefinitionError: on invalid flatten paths or when a
             flattened relation has sub-field include/exclude
         """
-        relation_map = cls._relation_tree()
         flatten_map = resolve_flatten_map(
             model_cls=cast(type["Model"], cls),
             flatten_fields=flatten_fields,
@@ -75,11 +84,21 @@ class PydanticMixin(RelationMixin):
             flatten_map.check_vs_selector(normalize_to_dict(include), "include")
             flatten_map.check_vs_selector(normalize_to_dict(exclude), "exclude")
 
+        if instance_traversal_enabled():
+            return RecursiveSchemaBuilder(
+                omit_back_relations=omit_back_relations
+            ).build(
+                model=cls,
+                include=include,
+                exclude=exclude,
+                flatten_map=flatten_map,
+                max_depth=max_depth,
+            )
         return cls._convert_ormar_to_pydantic(
             include=include,
             exclude=exclude,
             flatten_map=flatten_map,
-            relation_map=relation_map,
+            relation_map=cls._relation_tree(),
         )
 
     @classmethod
@@ -280,9 +299,17 @@ class PydanticMixin(RelationMixin):
             model.__pydantic_decorators__.computed_fields[name] = copy.copy(decorator)
 
     @classmethod
-    def _copy_field_validators(cls, model: type[pydantic.BaseModel]) -> None:
+    def _copy_field_validators(
+        cls, model: type[pydantic.BaseModel], rebuild: bool = True
+    ) -> None:
         """
         Copy field validators from ormar model to generated pydantic model.
+
+        :param model: pydantic model generated from the ormar model
+        :type model: type[pydantic.BaseModel]
+        :param rebuild: rebuild the model right away, False when its forward
+            references are resolved later
+        :type rebuild: bool
         """
         filed_names = list(model.model_fields.keys())
         cls.copy_selected_validators_type(
@@ -300,7 +327,8 @@ class PydanticMixin(RelationMixin):
         model.__pydantic_decorators__.model_validators.update(
             copy.deepcopy(model_validators)
         )
-        model.model_rebuild(force=True)
+        if rebuild:
+            model.model_rebuild(force=True)
 
     @classmethod
     def copy_selected_validators_type(
