@@ -380,3 +380,37 @@ async def test_rows_changed_by_others_come_back_as_stored(
                 ]
         finally:
             await delete_catalog()
+
+
+class RecordingExecutor:
+    def __init__(self, statements: list) -> None:
+        self.statements = statements
+
+    async def __aenter__(self) -> "RecordingExecutor":
+        return self
+
+    async def __aexit__(self, *exc_info: Any) -> None:
+        return None
+
+    async def fetch_all(self, statement: Any, params: Any) -> list:
+        self.statements.append(statement)
+        return []
+
+
+@pytest.mark.asyncio
+async def test_update_returning_statement_is_sent_when_database_has_returning(
+    monkeypatch,
+):
+    # MySQL has no RETURNING, so its run covers this branch with a stand-in
+    sent: list = []
+    monkeypatch.setattr(type(database.rules), "update_returning", True)
+    monkeypatch.setattr(
+        type(database), "get_query_executor", lambda self: RecordingExecutor(sent)
+    )
+    async with database:
+        returned = await Track.objects.filter(title="a").update_returning(position=3)
+    assert returned == []
+    assert len(sent) == 1
+    assert str(sent[0].compile(dialect=postgresql.dialect())).startswith(
+        "UPDATE urt_tracks SET position="
+    )
