@@ -12,13 +12,15 @@ import ormar
 from ormar.databases.native import compiler
 from ormar.models import NewBaseModel
 from ormar.queryset.templates import (
-    build_pk_select,
-    delete_template,
     insert_statement,
     insert_template,
-    pk_select_template,
     template_cache_for,
-    update_template,
+)
+from ormar.queryset.write_statements import (
+    DeleteWrite,
+    RowSelectWrite,
+    UpdateWrite,
+    row_template,
 )
 from tests import cross_check
 from tests.lifespan import init_tests
@@ -119,7 +121,7 @@ async def test_insert_template_per_column_set(connected):
 
 @pytest.mark.asyncio
 async def test_update_template_binds_values_and_pk(connected):
-    template = update_template(Item, {"note": "n", "name": "m"}, 5)
+    template = row_template(UpdateWrite, Item, 5, {"note": "n", "name": "m"})
     sql = str(template.statement.compile())
     assert "ormar_pk" in sql
     assert template.params == {"ormar_v0": "m", "ormar_v1": "n", "ormar_pk": 5}
@@ -127,11 +129,12 @@ async def test_update_template_binds_values_and_pk(connected):
 
 @pytest.mark.asyncio
 async def test_delete_and_pk_select_templates(connected):
-    assert delete_template(Item, 3).params == {"ormar_pk": 3}
-    assert delete_template(Item, 4).statement is delete_template(Item, 9).statement
-    selected = pk_select_template(Item, 6)
+    assert row_template(DeleteWrite, Item, 3).params == {"ormar_pk": 3}
+    deleted = row_template(DeleteWrite, Item, 4)
+    assert row_template(DeleteWrite, Item, 9).statement is deleted.statement
+    selected = row_template(RowSelectWrite, Item, 6)
     assert selected.params == {"ormar_pk": 6}
-    assert pk_select_template(Item, 7).statement is selected.statement
+    assert row_template(RowSelectWrite, Item, 7).statement is selected.statement
 
 
 @pytest.mark.asyncio
@@ -182,11 +185,10 @@ async def test_save_with_explicit_pk_keeps_it(connected):
 async def test_write_cross_check_detects_mismatch(connected, monkeypatch):
     monkeypatch.setattr(cross_check, "ENABLED", True)
     template_cache_for(Item).clear()
-    table = Item.ormar_config.table
-    wrong = build_pk_select(table=table, primary_key=Item.ormar_config.pk)
+    wrong = RowSelectWrite.make(model=Item)
     template_cache_for(Item).put(("delete",), wrong)
     with pytest.raises(AssertionError, match="template mismatch"):
-        delete_template(Item, 1)
+        row_template(DeleteWrite, Item, 1)
     template_cache_for(Item).clear()
 
 
@@ -349,8 +351,8 @@ async def test_direct_binding_of_one_statement_matches_expanded(connected, monke
     if backend is None:  # pragma: no cover
         pytest.skip("native execution only")
     stamp = datetime.datetime(2021, 1, 2, 3, 4, 5)
-    template = update_template(
-        Stamped, {"name": "n", "payload": {"a": 1}, "stamp": stamp}, 7
+    template = row_template(
+        UpdateWrite, Stamped, 7, {"name": "n", "payload": {"a": 1}, "stamp": stamp}
     )
     direct = backend.compiler.bind(template.statement, template.params)
     monkeypatch.setattr(compiler, "binds_directly", lambda compiled, row: False)

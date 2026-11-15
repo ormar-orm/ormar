@@ -258,6 +258,32 @@ class PrimaryKey(abc.ABC):
         ]
         return sqlalchemy.and_(*comparisons)
 
+    def row_value(self) -> sqlalchemy.ColumnElement:
+        """
+        :return: the key column, or the key columns as a tuple for a composite
+            key, to compare whole keys: ``authors.id`` / ``(orders.a, orders.b)``
+        :rtype: sqlalchemy.ColumnElement
+        """
+        columns = self.columns()
+        return columns[0] if len(columns) == 1 else sqlalchemy.tuple_(*columns)
+
+    def in_clause(self, *, slot: str) -> sqlalchemy.ColumnElement:
+        """
+        Build the condition matching the rows of a list of keys bound to one
+        expanding parameter, one value per row (a tuple for a composite key)::
+
+            authors.id IN (:ormar_pks)  # rendered as IN (?, ?, ...) per call
+
+        :param slot: bind parameter name
+        :type slot: str
+        :return: condition over the key columns
+        :rtype: sqlalchemy.ColumnElement
+        """
+        target = self.row_value()
+        return target.in_(
+            sqlalchemy.bindparam(key=slot, expanding=True, type_=target.type)
+        )
+
     def expand_pk_kwarg(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """
         Replace a ``pk`` keyword with the key fields it stands for::

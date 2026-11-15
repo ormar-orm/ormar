@@ -46,6 +46,10 @@ class QuerySetProtocol(Protocol):  # pragma: nocover
 
     async def update(self, each: bool = False, **kwargs: Any) -> int: ...
 
+    async def update_returning(
+        self, each: bool = False, **kwargs: Any
+    ) -> Sequence["Model"]: ...
+
     async def get_or_create(
         self,
         _defaults: Optional[dict[str, Any]] = None,

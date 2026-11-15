@@ -33,12 +33,16 @@ from ormar.queryset import queryset as queryset_module
 from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.expressions import Expression, expression_clause
 from ormar.queryset.queryset import QuerySet, forward_join_conditions
-from ormar.queryset.templates import (
-    StatementTemplate,
-    delete_template,
-    insert_template,
-    pk_select_template,
-    update_template,
+from ormar.queryset.templates import StatementTemplate, insert_template
+from ormar.queryset.write_statements import (
+    DeleteWrite,
+    LockWrite,
+    RowSelectWrite,
+    UpdateLockedWrite,
+    UpdateReturningWrite,
+    UpdateWrite,
+    WriteStatement,
+    row_template,
 )
 
 ENABLED = True
@@ -72,9 +76,7 @@ ORIGINAL_SELECT_TEMPLATE = QuerySet.build_select_template
 ORIGINAL_WRITE_TEMPLATE = QuerySet.build_write_template
 ORIGINAL_CONSTRUCT_ROW = ModelRow.__dict__["construct_row_instance"].__func__
 ORIGINAL_INSERT_TEMPLATE = insert_template
-ORIGINAL_UPDATE_TEMPLATE = update_template
-ORIGINAL_DELETE_TEMPLATE = delete_template
-ORIGINAL_PK_SELECT_TEMPLATE = pk_select_template
+ORIGINAL_ROW_TEMPLATE = row_template
 ORIGINAL_DUMP_FOR_SAVE = queryset_module.dump_for_save
 
 
@@ -270,31 +272,37 @@ def checked_select_template(
 
 
 def checked_write_template(
-    self: QuerySet, kind: str, values: dict
+    self: QuerySet, statement: type[WriteStatement], values: dict
 ) -> StatementTemplate:
     """
-    ``QuerySet.build_write_template`` compared with the filtered update or
-    delete built with literal values.
+    ``QuerySet.build_write_template`` compared with the filtered update,
+    delete, update with ``RETURNING`` or row lock of ``update_returning()``
+    built with literal values. The update by locked primary keys binds the
+    keys only when it runs, so it is not compared.
 
     :param self: queryset
     :type self: QuerySet
-    :param kind: ``"update"`` or ``"delete"``
-    :type kind: str
+    :param statement: statement class
+    :type statement: type[WriteStatement]
     :param values: updated values by column name (empty for delete)
     :type values: dict
     :return: statement and values to bind
     :rtype: StatementTemplate
     """
-    template = ORIGINAL_WRITE_TEMPLATE(self, kind=kind, values=values)
-    if ENABLED:
+    template = ORIGINAL_WRITE_TEMPLATE(self, statement=statement, values=values)
+    if ENABLED and statement is not UpdateLockedWrite:
         table = self.table
-        expr: Any = (
-            table.update().values(
+        expr: Any
+        if statement is DeleteWrite:
+            expr = table.delete()
+        elif statement is LockWrite:
+            expr = sqlalchemy.select(*self.model_config.pk.columns()).with_for_update(
+                of=table
+            )
+        else:
+            expr = table.update().values(
                 literal_values(table=table, values=values, model=self.model)
             )
-            if kind == "update"
-            else table.delete()
-        )
         join_conditions: Dict[str, list] = {}
         for name in sorted(values):
             if isinstance(values[name], Expression):
@@ -314,6 +322,8 @@ def checked_write_template(
             expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
                 expr=expr
             )
+        if statement is UpdateReturningWrite:
+            expr = expr.returning(*table.c)
         assert_same_write(model_cls=self.model, template=template, fresh=expr)
     return template
 
@@ -344,67 +354,43 @@ def checked_insert_template(
     return template
 
 
-def checked_update_template(
-    model_cls: Any, values: Mapping[str, Any], pk: Any
+def checked_row_template(
+    statement: type[WriteStatement],
+    model_cls: Any,
+    pk: Any,
+    values: Optional[Mapping[str, Any]] = None,
 ) -> StatementTemplate:
     """
-    ``update_template`` compared with the update built with literal values.
+    ``row_template`` compared with the update, delete or select built with
+    literal values and pk. The locking select of many keys binds the keys as
+    one expanding parameter, so it is not compared.
 
-    :param model_cls: updated model
+    :param statement: statement class
+    :type statement: type[WriteStatement]
+    :param model_cls: model
     :type model_cls: Any
-    :param values: values by column name
-    :type values: Mapping[str, Any]
     :param pk: primary key of the row
     :type pk: Any
+    :param values: values by column name, for an update
+    :type values: Optional[Mapping[str, Any]]
     :return: statement and values to bind
     :rtype: StatementTemplate
     """
-    template = ORIGINAL_UPDATE_TEMPLATE(model_cls=model_cls, values=values, pk=pk)
-    if ENABLED:
-        table = model_cls.ormar_config.table
-        fresh = (
-            table.update()
-            .values(literal_values(table=table, values=values))
-            .where(primary_key_condition(model_cls=model_cls, pk=pk))
+    template = ORIGINAL_ROW_TEMPLATE(
+        statement=statement, model_cls=model_cls, pk=pk, values=values
+    )
+    table = model_cls.ormar_config.table
+    targets = {
+        UpdateWrite: lambda: table.update().values(
+            literal_values(table=table, values=values or {})
+        ),
+        DeleteWrite: table.delete,
+        RowSelectWrite: table.select,
+    }
+    if ENABLED and statement in targets:
+        fresh = targets[statement]().where(
+            primary_key_condition(model_cls=model_cls, pk=pk)
         )
-        assert_same_write(model_cls=model_cls, template=template, fresh=fresh)
-    return template
-
-
-def checked_delete_template(model_cls: Any, pk: Any) -> StatementTemplate:
-    """
-    ``delete_template`` compared with the delete built with a literal pk.
-
-    :param model_cls: model
-    :type model_cls: Any
-    :param pk: primary key of the row
-    :type pk: Any
-    :return: statement and values to bind
-    :rtype: StatementTemplate
-    """
-    template = ORIGINAL_DELETE_TEMPLATE(model_cls=model_cls, pk=pk)
-    if ENABLED:
-        table = model_cls.ormar_config.table
-        fresh = table.delete().where(primary_key_condition(model_cls=model_cls, pk=pk))
-        assert_same_write(model_cls=model_cls, template=template, fresh=fresh)
-    return template
-
-
-def checked_pk_select_template(model_cls: Any, pk: Any) -> StatementTemplate:
-    """
-    ``pk_select_template`` compared with the select built with a literal pk.
-
-    :param model_cls: model
-    :type model_cls: Any
-    :param pk: primary key of the row
-    :type pk: Any
-    :return: statement and values to bind
-    :rtype: StatementTemplate
-    """
-    template = ORIGINAL_PK_SELECT_TEMPLATE(model_cls=model_cls, pk=pk)
-    if ENABLED:
-        table = model_cls.ormar_config.table
-        fresh = table.select().where(primary_key_condition(model_cls=model_cls, pk=pk))
         assert_same_write(model_cls=model_cls, template=template, fresh=fresh)
     return template
 
@@ -596,9 +582,7 @@ def install() -> None:
     ModelRow.construct_row_instance = classmethod(checked_construct_row_instance)  # type: ignore[method-assign,assignment]
     for original, checked in (
         (ORIGINAL_INSERT_TEMPLATE, checked_insert_template),
-        (ORIGINAL_UPDATE_TEMPLATE, checked_update_template),
-        (ORIGINAL_DELETE_TEMPLATE, checked_delete_template),
-        (ORIGINAL_PK_SELECT_TEMPLATE, checked_pk_select_template),
+        (ORIGINAL_ROW_TEMPLATE, checked_row_template),
         (ORIGINAL_DUMP_FOR_SAVE, checked_dump_for_save),
     ):
         replace_function(original=original, checked=checked)

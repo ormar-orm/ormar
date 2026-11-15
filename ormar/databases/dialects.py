@@ -12,12 +12,15 @@ Rules only build statements and answer questions about the dialect. Running
 statements and reading results stays with the driver adapters.
 """
 
-from typing import Any, ClassVar, Dict, Tuple, Type, Union
+import sqlite3
+from typing import Any, Callable, ClassVar, Dict, Optional, Tuple, Type, Union
 
 import sqlalchemy
 from sqlalchemy.dialects import mysql, postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql import Executable
+from sqlalchemy.sql.elements import BindParameter
+from sqlalchemy.sql.visitors import replacement_traverse
 
 from ormar.exceptions import QueryDefinitionError
 
@@ -31,13 +34,20 @@ def conflict_updates(
     inserted: Any,
     update_names: Tuple[str, ...],
     on_update: Tuple[str, ...],
-    on_update_variables: bool = False,
+    value_updates: Optional[Callable[[Any], Dict[str, Any]]] = None,
+    update_variables: bool = False,
 ) -> Dict[str, Any]:
     """
     Return the columns a conflicting row is updated with: ``update_names`` from
     the inserted row, ``on_update`` columns from ``ormar_on_update_<column>``
-    parameters, or with ``on_update_variables`` from the MySQL user variables
-    ``on_update_assignment`` sets.
+    parameters and the ``update_values`` columns ``value_updates`` builds for
+    the inserted row (see ``update_value_clauses``)::
+
+        score = excluded.score
+        completed = tracks.completed + :ormar_u0_0
+
+    With ``update_variables`` every bound value is read from a MySQL user
+    variable instead (see ``update_assignment``).
 
     :param table: written table
     :type table: sqlalchemy.Table
@@ -47,23 +57,47 @@ def conflict_updates(
     :type update_names: Tuple[str, ...]
     :param on_update: columns updated with their ``on_update`` value
     :type on_update: Tuple[str, ...]
-    :param on_update_variables: read the ``on_update`` values from user variables
-    :type on_update_variables: bool
+    :param value_updates: builds the ``update_values`` columns from the
+        inserted row
+    :type value_updates: Optional[Callable[[Any], Dict[str, Any]]]
+    :param update_variables: read the bound values from user variables
+    :type update_variables: bool
     :return: value per updated column
     :rtype: Dict[str, Any]
     """
     updates: Dict[str, Any] = {name: inserted[name] for name in update_names}
-    for index, name in enumerate(on_update):
-        updates[name] = (
-            sqlalchemy.literal_column(
-                on_update_variable(index=index), type_=table.c[name].type
-            )
-            if on_update_variables
-            else sqlalchemy.bindparam(
-                key=f"ormar_on_update_{name}", type_=table.c[name].type
-            )
+    for name in on_update:
+        updates[name] = sqlalchemy.bindparam(
+            key=f"ormar_on_update_{name}", type_=table.c[name].type
         )
-    return updates
+    if value_updates is not None:
+        updates.update(value_updates(inserted))
+    if not update_variables:
+        return updates
+    variables = {
+        f"ormar_on_update_{name}": on_update_variable(index=index)
+        for index, name in enumerate(on_update)
+    }
+
+    def read_variable(element: Any, **kwargs: Any) -> Any:
+        """
+        :param element: element of an update clause
+        :type element: Any
+        :param kwargs: traversal options, unused
+        :type kwargs: Any
+        :return: the user variable of a bind parameter, None keeps the element
+        :rtype: Any
+        """
+        if isinstance(element, BindParameter):
+            return sqlalchemy.literal_column(
+                variables.get(element.key, f"@{element.key}"), type_=element.type
+            )
+        return None
+
+    return {
+        name: replacement_traverse(value, {}, read_variable)
+        for name, value in updates.items()
+    }
 
 
 def on_update_variable(index: int) -> str:
@@ -74,6 +108,9 @@ def on_update_variable(index: int) -> str:
 
         on_update_variable(index=0)  # -> @ormar_on_update_0
 
+    The values of ``update_values`` are held in variables named like their
+    bind parameters (``@ormar_u0``, ``@ormar_u1_0``).
+
     :param index: position of the column in ``on_update``
     :type index: int
     :return: variable name
@@ -82,15 +119,18 @@ def on_update_variable(index: int) -> str:
     return f"@ormar_on_update_{index}"
 
 
-def on_update_assignment(
-    table: sqlalchemy.Table, on_update: Tuple[str, ...]
+def update_assignment(
+    table: sqlalchemy.Table,
+    on_update: Tuple[str, ...],
+    value_binds: Tuple[BindParameter, ...] = (),
 ) -> Executable:
     """
-    Build the MySQL statement that stores the ``on_update`` values in user
-    variables, bound as ``ormar_on_update_<index>`` in the order of
-    ``on_update``::
+    Build the MySQL statement that stores the values a conflicting row is
+    updated with in user variables: the ``on_update`` values bound as
+    ``ormar_on_update_<index>`` in the order of ``on_update`` and the bound
+    values of ``update_values`` under their own names::
 
-        SET @ormar_on_update_0 = %s
+        SET @ormar_on_update_0 = %s, @ormar_u0_0 = %s
 
     MySQL drivers turn ``executemany`` of an insert into one multi-row VALUES
     and leave binds after it unfilled, so a multi-row upsert reads the values
@@ -100,21 +140,25 @@ def on_update_assignment(
     :type table: sqlalchemy.Table
     :param on_update: columns updated with their ``on_update`` value
     :type on_update: Tuple[str, ...]
+    :param value_binds: bind parameters of the ``update_values`` columns
+    :type value_binds: Tuple[BindParameter, ...]
     :return: assignment statement
     :rtype: Executable
     """
+    binds = [
+        sqlalchemy.bindparam(key=f"ormar_on_update_{index}", type_=table.c[name].type)
+        for index, name in enumerate(on_update)
+    ]
+    binds.extend(
+        sqlalchemy.bindparam(key=bind.key, type_=bind.type) for bind in value_binds
+    )
+    variables = [on_update_variable(index=index) for index in range(len(on_update))] + [
+        f"@{bind.key}" for bind in value_binds
+    ]
     assignments = ", ".join(
-        f"{on_update_variable(index=index)} = :ormar_on_update_{index}"
-        for index in range(len(on_update))
+        f"{variable} = :{bind.key}" for variable, bind in zip(variables, binds)
     )
-    return sqlalchemy.text(f"SET {assignments}").bindparams(
-        *(
-            sqlalchemy.bindparam(
-                key=f"ormar_on_update_{index}", type_=table.c[name].type
-            )
-            for index, name in enumerate(on_update)
-        )
-    )
+    return sqlalchemy.text(f"SET {assignments}").bindparams(*binds)
 
 
 class DialectRules:
@@ -129,6 +173,9 @@ class DialectRules:
     autocommit_engine: ClassVar[bool] = False
     #: a skipping conflict insert returns the written primary key
     conflict_returning: ClassVar[bool] = True
+    #: ``update_returning()`` runs one ``UPDATE ... RETURNING``; without it
+    #: the rows are locked, updated and read back by primary key
+    update_returning: ClassVar[bool] = True
     #: ``execute_many`` fills binds placed after the VALUES clause
     execute_many_with_trailing_binds: ClassVar[bool] = True
     #: foreign keys may reference a table in another schema
@@ -174,7 +221,8 @@ class DialectRules:
         update_names: Tuple[str, ...],
         on_update: Tuple[str, ...],
         returning: Tuple[str, ...],
-        on_update_variables: bool = False,
+        value_updates: Optional[Callable[[Any], Dict[str, Any]]] = None,
+        update_variables: bool = False,
     ) -> Executable:
         """
         Build an insert that skips or updates a row conflicting with an
@@ -197,9 +245,12 @@ class DialectRules:
         :type on_update: Tuple[str, ...]
         :param returning: columns of the written row to return, if any
         :type returning: Tuple[str, ...]
-        :param on_update_variables: read the ``on_update`` values from MySQL user
-            variables (see ``on_update_assignment``)
-        :type on_update_variables: bool
+        :param value_updates: builds the ``update_values`` columns from the
+            inserted row
+        :type value_updates: Optional[Callable[[Any], Dict[str, Any]]]
+        :param update_variables: read the bound update values from MySQL user
+            variables (see ``update_assignment``)
+        :type update_variables: bool
         :return: insert statement
         :rtype: Executable
         """
@@ -212,7 +263,8 @@ class DialectRules:
                     inserted=statement.excluded,
                     update_names=update_names,
                     on_update=on_update,
-                    on_update_variables=on_update_variables,
+                    value_updates=value_updates,
+                    update_variables=update_variables,
                 ),
             )
         else:
@@ -278,6 +330,8 @@ class SqliteRules(DialectRules):
     cross_schema_foreign_keys = False
     foreign_keys_pragma = True
     explicit_begin = True
+    # RETURNING came with SQLite 3.35, aiosqlite runs the stdlib sqlite3
+    update_returning = sqlite3.sqlite_version_info >= (3, 35)
 
     def make_insert(self, *, table: sqlalchemy.Table) -> sqlite.Insert:
         """
@@ -320,12 +374,14 @@ class PostgresRules(DialectRules):
 
 class MysqlRules(DialectRules):
     """
-    MySQL and MariaDB: ``ON DUPLICATE KEY UPDATE`` inserts without RETURNING,
+    MySQL and MariaDB: ``ON DUPLICATE KEY UPDATE`` inserts and updates without
+    RETURNING,
     no ``NULLS FIRST`` / ``NULLS LAST``, ``rand()`` and an AUTOCOMMIT engine.
     """
 
     autocommit_engine = True
     conflict_returning = False
+    update_returning = False
     execute_many_with_trailing_binds = False
     random_order = "rand()"
 
@@ -339,7 +395,8 @@ class MysqlRules(DialectRules):
         update_names: Tuple[str, ...],
         on_update: Tuple[str, ...],
         returning: Tuple[str, ...],
-        on_update_variables: bool = False,
+        value_updates: Optional[Callable[[Any], Dict[str, Any]]] = None,
+        update_variables: bool = False,
     ) -> Executable:
         """
         Build an insert that skips or updates a row conflicting with an
@@ -365,7 +422,8 @@ class MysqlRules(DialectRules):
                     inserted=statement.inserted,
                     update_names=update_names,
                     on_update=on_update,
-                    on_update_variables=on_update_variables,
+                    value_updates=value_updates,
+                    update_variables=update_variables,
                 )
             )
         return statement.on_duplicate_key_update({target[0]: table.c[target[0]]})
