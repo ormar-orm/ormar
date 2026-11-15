@@ -9,6 +9,7 @@ Each runs one cached statement per model and set of written columns::
     #    {"ormar_v0": "a", "ormar_v1": 1}
 """
 
+import enum
 import functools
 from typing import (
     TYPE_CHECKING,
@@ -40,6 +41,26 @@ from ormar.queryset.templates.slots import PKS_SLOT, value_binds, value_params
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.databases.dialects import DialectRules
     from ormar.models.primary_key import PrimaryKey
+
+
+class WriteKind(str, enum.Enum):
+    """
+    Statements of ``QuerySet.build_write_statement``: filtered update and
+    delete, and the statements of ``update_returning()``.
+    """
+
+    #: ``UPDATE ... WHERE <filters>``
+    UPDATE = "update"
+    #: ``DELETE ... WHERE <filters>``
+    DELETE = "delete"
+    #: ``UPDATE ... WHERE <filters> RETURNING <all columns>``
+    UPDATE_RETURNING = "update_returning"
+    #: ``SELECT <pk> ... WHERE <filters> FOR UPDATE``: the rows the update
+    #: would touch, locked (``update_returning()`` without ``RETURNING``)
+    LOCK = "lock"
+    #: ``UPDATE ... WHERE <pk> IN (<locked keys>)``: the update of the locked
+    #: rows, by primary key (``PKS_SLOT``) instead of the filters
+    UPDATE_LOCKED = "update_locked"
 
 
 def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:

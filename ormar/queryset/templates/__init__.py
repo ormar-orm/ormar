@@ -79,6 +79,7 @@ from ormar.queryset.templates.slots import (
     value_params,
 )
 from ormar.queryset.templates.writes import (
+    WriteKind,
     build_bulk_update,
     build_delete,
     build_insert,
@@ -102,6 +103,7 @@ __all__ = [
     "PKS_SLOT",
     "SlotBinder",
     "StatementTemplate",
+    "WriteKind",
     "TemplateCache",
     "action_cache_key",
     "aggregate_statement",

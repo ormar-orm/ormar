@@ -35,6 +35,7 @@ from ormar.queryset.expressions import Expression, expression_clause
 from ormar.queryset.queryset import QuerySet, forward_join_conditions
 from ormar.queryset.templates import (
     StatementTemplate,
+    WriteKind,
     delete_template,
     insert_template,
     pk_select_template,
@@ -270,7 +271,7 @@ def checked_select_template(
 
 
 def checked_write_template(
-    self: QuerySet, kind: str, values: dict
+    self: QuerySet, kind: WriteKind, values: dict
 ) -> StatementTemplate:
     """
     ``QuerySet.build_write_template`` compared with the filtered update,
@@ -280,21 +281,20 @@ def checked_write_template(
 
     :param self: queryset
     :type self: QuerySet
-    :param kind: ``"update"``, ``"delete"``, ``"update_returning"``, ``"lock"``
-        or ``"update_locked"``
-    :type kind: str
+    :param kind: statement to build
+    :type kind: WriteKind
     :param values: updated values by column name (empty for delete)
     :type values: dict
     :return: statement and values to bind
     :rtype: StatementTemplate
     """
     template = ORIGINAL_WRITE_TEMPLATE(self, kind=kind, values=values)
-    if ENABLED and kind != "update_locked":
+    if ENABLED and kind is not WriteKind.UPDATE_LOCKED:
         table = self.table
         expr: Any
-        if kind == "delete":
+        if kind is WriteKind.DELETE:
             expr = table.delete()
-        elif kind == "lock":
+        elif kind is WriteKind.LOCK:
             expr = sqlalchemy.select(*self.model_config.pk.columns()).with_for_update(
                 of=table
             )
@@ -321,7 +321,7 @@ def checked_write_template(
             expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
                 expr=expr
             )
-        if kind == "update_returning":
+        if kind is WriteKind.UPDATE_RETURNING:
             expr = expr.returning(*table.c)
         assert_same_write(model_cls=self.model, template=template, fresh=expr)
     return template

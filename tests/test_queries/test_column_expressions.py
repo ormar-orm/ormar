@@ -6,7 +6,7 @@ import pytest_asyncio
 import ormar
 from ormar import F
 from ormar.exceptions import QueryDefinitionError
-from ormar.queryset.templates import template_cache_for
+from ormar.queryset.templates import WriteKind, template_cache_for
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -233,9 +233,11 @@ async def test_update_with_expressions(slots):
 async def test_literal_types_get_their_own_statement(slots):
     template_cache_for(model_cls=Slot).clear()
     qs = Slot.objects.filter(name="free")
-    as_int = qs.build_write_template(kind="update", values={"price": F("price") + 1})
+    as_int = qs.build_write_template(
+        kind=WriteKind.UPDATE, values={"price": F("price") + 1}
+    )
     as_float = qs.build_write_template(
-        kind="update", values={"price": F("price") + 1.5}
+        kind=WriteKind.UPDATE, values={"price": F("price") + 1.5}
     )
     assert as_int.statement is not as_float.statement
     await qs.update(price=Slot.price + 1)
@@ -249,7 +251,7 @@ async def test_expression_statements_are_shared_by_shape(slots):
     qs = Slot.objects.filter(id=1)
 
     def update(value):
-        return qs.build_write_template(kind="update", values={"taken": value})
+        return qs.build_write_template(kind=WriteKind.UPDATE, values={"taken": value})
 
     plus_one, plus_five = update(F("taken") + 1), update(F("taken") + 5)
     assert plus_one.statement is plus_five.statement

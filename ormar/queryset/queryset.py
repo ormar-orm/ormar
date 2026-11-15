@@ -48,6 +48,7 @@ from ormar.queryset.templates import (
     PKS_SLOT,
     SlotBinder,
     StatementTemplate,
+    WriteKind,
     aggregate_statement,
     build_bulk_update,
     build_update_assignment,
@@ -535,15 +536,15 @@ class QuerySet(Generic[T]):
         release_values(statement=statement)
         return statement
 
-    def build_write_template(self, kind: str, values: dict) -> StatementTemplate:
+    def build_write_template(self, kind: WriteKind, values: dict) -> StatementTemplate:
         """
-        Return the filtered update (``kind="update"``) or delete of this
+        Return the filtered update (``WriteKind.UPDATE``) or delete of this
         queryset, or a statement of ``update_returning()`` (see
         ``build_write_statement``), from the model's template cache, with the
         values to bind::
 
             Author.objects.filter(score__lt=5).build_write_template(
-                kind="update", values={"name": "x"}
+                kind=WriteKind.UPDATE, values={"name": "x"}
             )
             # -> UPDATE authors SET name=:ormar_v0 WHERE authors.score < :ormar_p0
             #    {"ormar_p0": 5, "ormar_v0": "x"}
@@ -556,9 +557,8 @@ class QuerySet(Generic[T]):
         ``SlotBinder`` like in reads, updated values like in single-row writes
         (``ormar_v{i}``).
 
-        :param kind: ``"update"``, ``"delete"``, ``"update_returning"``,
-            ``"lock"`` or ``"update_locked"``
-        :type kind: str
+        :param kind: statement to build
+        :type kind: WriteKind
         :param values: updated values by column name (empty for delete)
         :type values: dict
         :return: statement and values to bind
@@ -593,30 +593,21 @@ class QuerySet(Generic[T]):
             cache.put(key=key, statement=statement)
         return StatementTemplate(statement=statement, params=params)
 
-    def build_write_statement(self, kind: str, values: dict, binder: SlotBinder) -> Any:
+    def build_write_statement(
+        self, kind: WriteKind, values: dict, binder: SlotBinder
+    ) -> Any:
         """
-        Build the filtered update or delete with named slots for the updated
-        values and the filter values.
+        Build the update, delete or row lock of this queryset with named slots
+        for the updated values and the filter values, in three steps::
 
-        Filters on related models restrict the rows to the primary keys the
-        same queryset selects (see ``matched_rows_clause``), so the statement
-        touches the rows the filters select in ``all()``. Expressions reading related
-        models join those tables in the statement (``UPDATE ... FROM`` or a
-        multi-table ``UPDATE`` on MySQL, as SQLAlchemy renders it).
+            target   UPDATE / DELETE / SELECT <pk> FOR UPDATE, joined to the
+                     tables the updated values read  (write_target)
+            rows     WHERE: locked primary keys, matched rows or the filters
+                     (restrict_written_rows)
+            returns  RETURNING all columns, for WriteKind.UPDATE_RETURNING
 
-        ``update_returning()`` uses three more kinds:
-
-        * ``"update_returning"`` - the update with ``RETURNING`` all columns of
-          the table
-        * ``"lock"`` - without ``RETURNING`` (MySQL), ``SELECT <pk> ... FOR
-          UPDATE`` of the rows the update would touch: same tables, joins and
-          filters
-        * ``"update_locked"`` - the update of the locked rows, by primary key
-          (``PKS_SLOT``) instead of the filters
-
-        :param kind: ``"update"``, ``"delete"``, ``"update_returning"``,
-            ``"lock"`` or ``"update_locked"``
-        :type kind: str
+        :param kind: statement to build
+        :type kind: WriteKind
         :param values: updated values by column name (empty for delete)
         :type values: dict
         :param binder: names filter values for templates
@@ -624,8 +615,30 @@ class QuerySet(Generic[T]):
         :return: statement to execute
         :rtype: Any
         """
+        expr = self.write_target(kind=kind, values=values)
+        expr = self.restrict_written_rows(expr=expr, kind=kind, binder=binder)
+        if kind is WriteKind.UPDATE_RETURNING:
+            expr = expr.returning(*self.table.c)
+        return expr
+
+    def write_target(self, kind: WriteKind, values: dict) -> Any:
+        """
+        Return the statement of the kind before its rows are restricted: the
+        update setting the values, the delete, or the select of the primary
+        key locking the rows.
+
+        Expressions reading related models join those tables (``UPDATE ...
+        FROM`` or a multi-table ``UPDATE`` on MySQL, as SQLAlchemy renders it).
+        The lock joins them too, so it selects the rows the update touches.
+
+        :param kind: statement to build
+        :type kind: WriteKind
+        :param values: updated values by column name (empty for delete)
+        :type values: dict
+        :return: statement without the row restriction
+        :rtype: Any
+        """
         table = self.table
-        primary_key = self.model_config.pk
         names = tuple(sorted(values))
         binds = value_binds(table=table, names=names)
         join_conditions: dict[str, list] = {}
@@ -642,28 +655,50 @@ class QuerySet(Generic[T]):
                         )
                     )
         expr: Any
-        if kind == "delete":
+        if kind is WriteKind.DELETE:
             expr = table.delete()
-        elif kind == "lock":
-            expr = sqlalchemy.select(*primary_key.columns()).with_for_update(of=table)
+        elif kind is WriteKind.LOCK:
+            expr = sqlalchemy.select(*self.model_config.pk.columns()).with_for_update(
+                of=table
+            )
         else:
             expr = table.update().values(binds)
         for conditions in join_conditions.values():
             expr = expr.where(*conditions)
-        if kind == "update_locked":
-            return expr.where(primary_key.in_clause(slot=PKS_SLOT))
-        if self._filters_read_related():
-            expr = expr.where(self.matched_rows_clause(binder=binder))
-        else:
-            expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
-                expr=expr
-            )
-            expr = FilterQuery(
-                filter_clauses=self.exclude_clauses, exclude=True, binder=binder
-            ).apply(expr=expr)
-        if kind == "update_returning":
-            return expr.returning(*table.c)
         return expr
+
+    def restrict_written_rows(
+        self, expr: Any, kind: WriteKind, binder: SlotBinder
+    ) -> Any:
+        """
+        Restrict the statement to the rows it writes, by one of:
+
+        * the locked primary keys (``PKS_SLOT``) for
+          ``WriteKind.UPDATE_LOCKED``, the filters already chose the rows
+        * the primary keys the same queryset selects (see
+          ``matched_rows_clause``) when a filter reads a related model, so the
+          statement touches the rows the filters select in ``all()``
+        * the filter and exclude clauses otherwise
+
+        :param expr: statement to restrict
+        :type expr: Any
+        :param kind: statement to build
+        :type kind: WriteKind
+        :param binder: names filter values for templates
+        :type binder: SlotBinder
+        :return: restricted statement
+        :rtype: Any
+        """
+        if kind is WriteKind.UPDATE_LOCKED:
+            return expr.where(self.model_config.pk.in_clause(slot=PKS_SLOT))
+        if self._filters_read_related():
+            return expr.where(self.matched_rows_clause(binder=binder))
+        expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
+            expr=expr
+        )
+        return FilterQuery(
+            filter_clauses=self.exclude_clauses, exclude=True, binder=binder
+        ).apply(expr=expr)
 
     def matched_rows_clause(self, binder: Optional[SlotBinder]) -> Any:
         """
@@ -1403,7 +1438,7 @@ class QuerySet(Generic[T]):
         :rtype: int
         """
         updates = self.update_values(each=each, values=kwargs)
-        template = self.build_write_template(kind="update", values=updates)
+        template = self.build_write_template(kind=WriteKind.UPDATE, values=updates)
         async with self.model_config.database.get_query_executor() as executor:
             return await executor.execute(template.statement, template.params)
 
@@ -1438,7 +1473,7 @@ class QuerySet(Generic[T]):
         database = self.model_config.database
         if database.rules.update_returning:
             template = self.build_write_template(
-                kind="update_returning", values=updates
+                kind=WriteKind.UPDATE_RETURNING, values=updates
             )
             async with database.get_query_executor() as executor:
                 rows = await executor.fetch_all(template.statement, template.params)
@@ -1465,8 +1500,8 @@ class QuerySet(Generic[T]):
         :return: rows of the updated models
         :rtype: list
         """
-        lock = self.build_write_template(kind="lock", values=updates)
-        update = self.build_write_template(kind="update_locked", values=updates)
+        lock = self.build_write_template(kind=WriteKind.LOCK, values=updates)
+        update = self.build_write_template(kind=WriteKind.UPDATE_LOCKED, values=updates)
         aliases = self.model_config.pk.column_aliases()
         async with self.model_config.database.get_query_executor(
             transactional=True
@@ -1578,7 +1613,7 @@ class QuerySet(Generic[T]):
                 "You cannot delete without filtering the queryset first. "
                 "If you want to delete all rows use delete(each=True)"
             )
-        template = self.build_write_template(kind="delete", values={})
+        template = self.build_write_template(kind=WriteKind.DELETE, values={})
         async with self.model_config.database.get_query_executor() as executor:
             return await executor.execute(template.statement, template.params)
 

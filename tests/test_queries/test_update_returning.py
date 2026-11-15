@@ -11,6 +11,7 @@ from sqlalchemy.dialects import mysql, postgresql, sqlite
 import ormar
 from ormar import F, Greatest
 from ormar.exceptions import QueryDefinitionError
+from ormar.queryset.templates import WriteKind
 from tests.lifespan import init_tests
 from tests.settings import DATABASE_URL, create_config
 
@@ -232,17 +233,19 @@ async def test_update_returning_outside_transaction(statements):
 async def test_update_returning_statements(catalog):
     queryset = Track.objects.filter(album__name="first")
     values = {"position": F("album__rank")._node()}
-    returning = queryset.build_write_template(kind="update_returning", values=values)
+    returning = queryset.build_write_template(
+        kind=WriteKind.UPDATE_RETURNING, values=values
+    )
     assert str(returning.statement.compile(dialect=postgresql.dialect())).endswith(
         "RETURNING urt_tracks.id, urt_tracks.title, urt_tracks.position, "
         "urt_tracks.album"
     )
-    lock = queryset.build_write_template(kind="lock", values=values)
+    lock = queryset.build_write_template(kind=WriteKind.LOCK, values=values)
     lock_sql = str(lock.statement.compile(dialect=postgresql.dialect()))
     assert lock_sql.startswith("SELECT urt_tracks.id \nFROM urt_tracks, urt_albums")
     assert lock_sql.endswith("FOR UPDATE OF urt_tracks")
     locked = Release.objects.build_write_template(
-        kind="update_locked", values={"copies": 1}
+        kind=WriteKind.UPDATE_LOCKED, values={"copies": 1}
     )
     assert str(locked.statement.compile(dialect=sqlite.dialect())) == (
         "UPDATE urt_releases SET copies=? "
@@ -266,13 +269,13 @@ async def test_update_sql_is_unchanged(catalog):
     ``update()`` statements as built before ``update_returning()``.
     """
     plain = Track.objects.filter(title="a").build_write_template(
-        kind="update", values={"position": 3}
+        kind=WriteKind.UPDATE, values={"position": 3}
     )
     expression = Track.objects.filter(title="a").build_write_template(
-        kind="update", values={"position": (F("album__rank") + 1)._node()}
+        kind=WriteKind.UPDATE, values={"position": (F("album__rank") + 1)._node()}
     )
     related = Release.objects.filter(album__name="x").build_write_template(
-        kind="update", values={"copies": 2}
+        kind=WriteKind.UPDATE, values={"copies": 2}
     )
     expected = {
         "sqlite": [
