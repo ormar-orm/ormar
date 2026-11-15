@@ -278,6 +278,25 @@ Things to know:
   `select_for_update().get_or_create()` of a missing row takes gap locks, so two racing
   calls can deadlock instead of one raising `IntegrityError`.
 
+## SQLAlchemy core statements in a transaction
+
+Statements run with `database.get_query_executor()` inside `database.transaction()` use
+the transaction's connection, so they are committed or rolled back together with
+ormar's queries:
+
+```python
+async with database.transaction():
+    async with database.get_query_executor() as executor:
+        balance = await executor.fetch_val(
+            sa.select(accounts.c.balance)
+            .where(accounts.c.id == account_id)
+            .with_for_update()
+        )
+    await Account.objects.filter(id=account_id).update(balance=balance - amount)
+```
+
+See [SQLAlchemy core statements](queries/sqlalchemy-core.md).
+
 ## Transaction Context Management
 
 Ormar manages transactions using context variables, which means:

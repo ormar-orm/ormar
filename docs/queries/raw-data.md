@@ -10,6 +10,10 @@ Following methods allow you to execute a query but instead of returning ormar mo
     * `QuerysetProxy.values(fields = None, exclude_through = False)` method
     * `QuerysetProxy.values_list(fields = None, exclude_through= False, flatten = False)` method
 
+!!!tip
+    To run your own SQLAlchemy core statements on ormar's connection see
+    [SQLAlchemy core statements](./sqlalchemy-core.md).
+
 !!!danger
     Note that `values` and `values_list` skips parsing the result to ormar models so skips also the validation of the result!
 
