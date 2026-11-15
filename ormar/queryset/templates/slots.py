@@ -47,6 +47,11 @@ OFFSET_SLOT = "ormar_offset"
 PK_SLOT = "ormar_pk"
 
 
+# slot name of the list of primary keys ``update_returning()`` updates and reads
+# back where the database has no ``UPDATE ... RETURNING``
+PKS_SLOT = "ormar_pks"
+
+
 # SQLAlchemy operators of ormar's filter operator methods, used to type bound
 # values exactly like a plain ``column <op> value`` comparison would.
 COMPARISON_OPERATORS = {

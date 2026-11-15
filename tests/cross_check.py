@@ -273,12 +273,15 @@ def checked_write_template(
     self: QuerySet, kind: str, values: dict
 ) -> StatementTemplate:
     """
-    ``QuerySet.build_write_template`` compared with the filtered update or
-    delete built with literal values.
+    ``QuerySet.build_write_template`` compared with the filtered update,
+    delete, update with ``RETURNING`` or row lock of ``update_returning()``
+    built with literal values. The update by locked primary keys binds the
+    keys only when it runs, so it is not compared.
 
     :param self: queryset
     :type self: QuerySet
-    :param kind: ``"update"`` or ``"delete"``
+    :param kind: ``"update"``, ``"delete"``, ``"update_returning"``, ``"lock"``
+        or ``"update_locked"``
     :type kind: str
     :param values: updated values by column name (empty for delete)
     :type values: dict
@@ -286,15 +289,19 @@ def checked_write_template(
     :rtype: StatementTemplate
     """
     template = ORIGINAL_WRITE_TEMPLATE(self, kind=kind, values=values)
-    if ENABLED:
+    if ENABLED and kind != "update_locked":
         table = self.table
-        expr: Any = (
-            table.update().values(
+        expr: Any
+        if kind == "delete":
+            expr = table.delete()
+        elif kind == "lock":
+            expr = sqlalchemy.select(*self.model_config.pk.columns()).with_for_update(
+                of=table
+            )
+        else:
+            expr = table.update().values(
                 literal_values(table=table, values=values, model=self.model)
             )
-            if kind == "update"
-            else table.delete()
-        )
         join_conditions: Dict[str, list] = {}
         for name in sorted(values):
             if isinstance(values[name], Expression):
@@ -314,6 +321,8 @@ def checked_write_template(
             expr = FilterQuery(filter_clauses=self.exclude_clauses, exclude=True).apply(
                 expr=expr
             )
+        if kind == "update_returning":
+            expr = expr.returning(*table.c)
         assert_same_write(model_cls=self.model, template=template, fresh=expr)
     return template
 

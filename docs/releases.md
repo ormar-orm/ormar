@@ -41,6 +41,16 @@
     )
     ```
 
+* **`update_returning()`: update rows and get them back**
+
+    `QuerySet.update_returning(each=False, **kwargs)` (and on `QuerysetProxy`) updates like `update()`, with the same filters and expressions, and returns the updated models as stored, with their own columns. PostgreSQL and SQLite (3.35+) run one `UPDATE ... RETURNING`; MySQL locks the rows with `SELECT ... FOR UPDATE`, updates them by primary key and reads them back in one transaction. `update()` is unchanged. See [update_returning](queries/update.md#update_returning).
+
+    ```python
+    expired = await Booking.objects.filter(status="waitlisted").update_returning(
+        status="expired"
+    )
+    ```
+
 * **Expressions on conflict with `update_values`**
 
     `create()` and `bulk_create()` with `on_conflict="update"` take `update_values`: values or column expressions set on the conflicting row in the same statement, e.g. an atomic counter or a "never go back" marker. `F("x")` is the existing row's column, the new `ormar.Inserted("x")` the value the insert tried to write (`excluded.x`, `VALUES(x)` on MySQL). With `update_values` the `update_fields` default to none; `on_update` fields not named in either still get their value. The rules of expressions in `update()` apply, the statement is cached per expression shape, and MySQL bulk upserts keep their single batch. See [expressions on conflict](queries/create.md#expressions-on-conflict).
