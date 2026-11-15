@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Optional, Union
 import sqlalchemy
 from pydantic_core import PydanticUndefined, PydanticUndefinedType
 from sqlalchemy.ext.asyncio import AsyncEngine
-from sqlalchemy.sql.schema import ColumnCollectionConstraint
+from sqlalchemy.sql.schema import ColumnCollectionConstraint, Index
 
 from ormar.databases.connection import DatabaseConnection
 from ormar.fields import BaseField, ForeignKeyField, ManyToManyField
@@ -11,6 +11,10 @@ from ormar.models.primary_key import PrimaryKey
 from ormar.models.utils import Extra
 from ormar.queryset.queryset import QuerySet
 from ormar.signals import SignalEmitter
+
+# IndexColumns subclasses sqlalchemy Index, which is not a
+# ColumnCollectionConstraint, but Table accepts both
+TableConstraint = Union[ColumnCollectionConstraint, Index]
 
 
 class OrmarConfig:
@@ -28,7 +32,7 @@ class OrmarConfig:
         proxy: bool
         emit_parent_signals: bool
         exclude_parent_fields: list[str]
-        constraints: list[ColumnCollectionConstraint]
+        constraints: list[TableConstraint]
         partial_updates: Optional[bool]
 
     def __init__(
@@ -45,7 +49,7 @@ class OrmarConfig:
         emit_parent_signals: bool = False,
         queryset_class: type[QuerySet] = QuerySet,
         extra: Extra = Extra.forbid,
-        constraints: Optional[list[ColumnCollectionConstraint]] = None,
+        constraints: Optional[list[TableConstraint]] = None,
         view: bool = False,
         partial_updates: Optional[bool] = None,
     ) -> None:
@@ -88,7 +92,7 @@ class OrmarConfig:
         emit_parent_signals: Optional[bool] = None,
         queryset_class: Optional[type[QuerySet]] = None,
         extra: Optional[Extra] = None,
-        constraints: Optional[list[ColumnCollectionConstraint]] = None,
+        constraints: Optional[list[TableConstraint]] = None,
         view: Optional[bool] = None,
         partial_updates: Union[bool, None, PydanticUndefinedType] = PydanticUndefined,
     ) -> "OrmarConfig":

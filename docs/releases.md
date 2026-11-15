@@ -41,8 +41,27 @@
     )
     ```
 
+* **Enums stored by value with `ormar.Enum(store_values=True)`**
+
+    An `int` enum gets an `INTEGER` column with a check constraint on its values instead of a string enum column, so the database holds `1`, `2` and compares them as numbers. Other enums store their values instead of member names.
+
+    ```python
+    class Country(IntEnum):
+        UK = 1
+        US = 2
+
+    country: Country = ormar.Enum(enum_class=Country, store_values=True)
+    # country INTEGER NOT NULL CHECK (country IN (1, 2))
+    ```
+
+* **Unsigned integers with `unsigned=True`** ([#1015](https://github.com/ormar-orm/ormar/issues/1015))
+
+    `Integer`, `BigInteger` and `SmallInteger` accept `unsigned=True`: the column is `UNSIGNED` on MySQL and MariaDB (foreign keys to it too), gets `CHECK (column >= 0)` on PostgreSQL and SQLite, and `minimum` defaults to `0`. Alembic autogenerate no longer recreates columns that were made unsigned by hand.
+
 ### 🐛 Fixes
 
+* `OrmarConfig(constraints=[...])` and `ormar_config.copy(constraints=[...])` accept `IndexColumns` for type checkers. The annotation was `list[ColumnCollectionConstraint]`, which `IndexColumns` (a subclass of `sqlalchemy.Index`) is not, so mypy rejected it although it worked at runtime. [#1982](https://github.com/ormar-orm/ormar/pull/1982)
+* `ormar.Enum` passes `sqlalchemy.Enum` options (`values_callable`, `native_enum`, `create_constraint`, `length`, `validate_strings`, `schema`, `metadata`, `inherit_schema`, `quote`) to the column type. They were accepted and silently dropped, so an `int` enum always stored member names (`"UK"`) instead of values. [#1385](https://github.com/ormar-orm/ormar/issues/1385)
 * `fetch_val(query, column=...)` of the query executor returned the first column for any `column` when the statement ran through SQLAlchemy (drivers without native execution, `native_execution=False`); it returns the requested column now.
 
 ### 📝 Docs
@@ -51,6 +70,9 @@
 
 ### ⚡ Performance
 
+* **Relation trees keep their size with densely related models** ([#1995](https://github.com/ormar-orm/ormar/issues/1995))
+
+    The default relation map of `model_dump()`, `save_related()` and `get_pydantic()` was built by spelling out every relation path of the model, and the number of paths grows exponentially with how densely models are related (self references, several relations to the same model, reverse relations). It was cached on each model class, so a class could keep tens of megabytes for the life of the process. The tree is now built directly and a repeated subtree is stored once: 7 models related to each other through foreign keys and many to many relations take 0.02 MB and 3 ms instead of 64 MB and 1.2 s per class. The tree has the same content; the flat list of paths is only built for `load_all(follow=True)` and `select_all(follow=True)`.
 * **Upserts reuse their compiled statement** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))
 
     SQLAlchemy gives no cache key to inserts with `ON CONFLICT` / `ON DUPLICATE KEY`, so `create(on_conflict=...)` and `bulk_create(on_conflict=...)` compiled their statement on every call and asyncpg prepared it again for a single row. Statements without a cache key now keep their plan per statement object (bounded like the other plans): a one-row upsert on PostgreSQL takes one round trip instead of up to three.
