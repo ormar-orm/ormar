@@ -571,6 +571,7 @@ class QuerysetProxy(Generic[T]):
         on_conflict: Literal["update"],
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> "T": ...
 
@@ -583,6 +584,7 @@ class QuerysetProxy(Generic[T]):
         on_conflict: Optional[Literal["ignore", "update"]] = None,
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Optional["T"]:
         """
@@ -602,8 +604,12 @@ class QuerysetProxy(Generic[T]):
         :param conflict_target: names of the fields of the unique key the row
             conflicts on, only with ``update``
         :type conflict_target: Optional[list[str]]
-        :param update_fields: names of the fields updated, only with ``update``
+        :param update_fields: names of the fields updated from the inserted
+            row, only with ``update``
         :type update_fields: Optional[list[str]]
+        :param update_values: values or expressions set on conflict by field
+            name, only with ``update`` (see ``QuerySet.create``)
+        :type update_values: Optional[dict[str, Any]]
         :param kwargs: fields names and proper value types
         :type kwargs: Any
         :return: created model, ``None`` when the row was skipped
@@ -619,12 +625,18 @@ class QuerysetProxy(Generic[T]):
             kwargs[self.related_field_name] = self._owner
             # a conflicting row of another owner moves to this one, so the
             # created model belongs to the relation it was created through
-            if update_fields and self.related_field_name not in update_fields:
-                update_fields = [*update_fields, self.related_field_name]
+            related = self.related_field_name
+            if (
+                (update_fields or update_values)
+                and related not in (update_fields or ())
+                and related not in (update_values or {})
+            ):
+                update_fields = [*(update_fields or ()), related]
         created = await self.queryset.create(
             on_conflict=on_conflict,
             conflict_target=conflict_target,
             update_fields=update_fields,
+            update_values=update_values,
             **kwargs,
         )
         if created is None:

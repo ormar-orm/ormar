@@ -80,6 +80,10 @@ await Product.objects.update(each=True, price=F("price") * 2 + F("shipping"))
   column it sets is fine.
 * The database computes the value, so pydantic validators of the field do not run.
 
+The same expressions update a conflicting row in
+[`create(on_conflict="update", update_values=...)`](create.md#expressions-on-conflict),
+where `ormar.Inserted("field")` reads the value the insert tried to write.
+
 #### Reading related models
 
 An expression can read fields of models reached through foreign keys, also
