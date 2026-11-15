@@ -109,29 +109,30 @@ verify from the docs how deep SQLAlchemy's `joinedload("*")` recurses.
 
 ### `model_dump()` and `save_related()`: walk the loaded instances
 
-The decision "follow this relation?" only needs the model classes on the current
-path, and the walk only descends where an instance is actually loaded. So instead
-of a cached tree the default `relation_map` becomes a `PathRelationMap(model,
-ancestors)` node: a read-only `Mapping` that answers `relation in node`,
-`node[relation]` and `bool(node)` from the classes on the path. A child node is
-created only when the dump descends into a loaded related instance.
+The decision "follow this relation?" only needs the current model class and the
+*set* of model classes above it on the path, and the walk only descends where an
+instance is actually loaded. So instead of a cached tree the default
+`relation_map` becomes a `PathRelationMap` node for (model, models above).
 
-- No tree is built; memory is O(depth) per row, transient, never accumulated.
 - The result is exactly the correct semantics (no shared-ancestry bug, no key
   collision).
-- The existing dump code, include/exclude, `flatten_fields`, `exclude_list`,
-  through models and the explicit `relation_map=` argument are unchanged, because
-  the node behaves like the old dict (a leaf is `...`).
-- The only per-class data is the list of relation targets (one dict entry per
-  relation), invalidated with `RelationGraph.version`.
+- A node depends only on that key, so nodes are shared between rows and dumps:
+  each class keeps at most `PATH_NODE_CACHE_SIZE = 256` of them in a plain dict
+  (oldest dropped first). A dump of a row creates no objects for the traversal,
+  only dict lookups.
+- The node is a `dict` subclass whose keys are the followed relations, so
+  `relation in node`, `bool(node)` and `len(node)` run at plain dict speed; only
+  `node[relation]` (once per descent) is Python code. A leaf is `...` like in the
+  old tree, so the existing dump code, include/exclude, `flatten_fields`,
+  `exclude_list`, through models and an explicit `relation_map=` are unchanged.
+- Memory is bounded: at most 256 nodes per class whatever the data, plus one
+  dict entry per relation for the relation targets. Nothing grows with rows or
+  with the number of distinct paths beyond the cap; a workload wider than the cap
+  rebuilds evicted nodes (correct, just slower).
+- Invalidated with `RelationGraph.version` like the old caches.
 
-`save_related(follow=True)` uses the same node, so it saves exactly what a dump
+`save_related(follow=True)` uses the same nodes, so it saves exactly what a dump
 would show.
-
-Optional variant `instance_cached`: each node keeps the children it created and
-the class keeps its root node, so the part of the correct tree that was actually
-walked is built once. Faster (see benchmarks), memory grows with the number of
-distinct paths that were dumped, never with the number of rows.
 
 ### `get_pydantic()`: named, recursive, reusable models
 
@@ -193,40 +194,49 @@ them go away, and with them the shared-ancestry bug and the key collision.
 ## Benchmarks (prototype)
 
 Python 3.11, pydantic 2.14, shared and busy machine, `nice`; numbers are the best of
-3 runs. `map` = today, `instance` = path nodes per dump, `instance_cached` = walked
-nodes kept on the class.
+3 runs. `map` = today; `map + correct tree` = today's dump code with the correct
+tree passed as an explicit `relation_map` (same output as `instance`, so the ratio
+is the pure traversal cost); `instance` = shared path nodes.
 
 `model_dump()` per row, instances built in memory:
 
-| case | depth loaded | map µs | instance µs | instance_cached µs | dicts map / new |
-|---|---|---|---|---|---|
-| chain Chapter→Book→Writer→Country | 1 | 15.0 | 18.1 | 15.6 | 2 / 2 |
-| | 2 | 22.6 | 27.3 | 24.1 | 3 / 3 |
-| | 3 | 28.7 | 34.4 | 30.0 | 4 / 4 |
-| dense 6-model graph (FK + M2M to every other) | 1 | 151 | 206 | 164 | 6 / 6 |
-| | 2 | 348 | 547 | 413 | 16 / 16 |
-| | 3 | 359 | 821 | 620 | 16 / 26 |
+| case | depth loaded | map µs | map + correct tree µs | instance µs | instance / map + correct | dicts map / new | µs per dict map / instance |
+|---|---|---|---|---|---|---|---|
+| chain Chapter→Book→Writer→Country | 1 | 14.9 | 13.9 | 14.9 | 1.07 | 2 / 2 | 7.5 / 7.5 |
+| | 2 | 22.4 | 22.2 | 22.9 | 1.03 | 3 / 3 | 7.5 / 7.6 |
+| | 3 | 29.1 | 28.3 | 28.8 | 1.02 | 4 / 4 | 7.3 / 7.2 |
+| dense 6-model graph (FK + M2M to every other) | 1 | 145 | 145 | 151 | 1.04 | 6 / 6 | 24.2 / 25.2 |
+| | 2 | 347 | 369 | 381 | 1.03 | 16 / 16 | 21.7 / 23.8 |
+| | 3 | 346 | 560 | 567 | 1.01 | 16 / 26 | 21.6 / 21.8 |
 
-At depth 3 on the dense graph the old map drops valid paths, so the new dump does
-more work (26 nested dicts instead of 16).
+On the dense graph the old map drops valid paths: at depth 2 it leaves out
+relation keys of the third level (same 16 dicts, fewer keys), at depth 3 whole
+nested dicts (16 instead of 26). That extra, correct output is the whole gap
+between `map` and `instance` there; per produced dict `instance` is within 1–10 %.
+
+An earlier version of the prototype (a new `Mapping` node per descent, an ABC
+`isinstance` in `skip_ellipsis`) was 15–20 % slower on the chain and up to 2.3×
+on the dense graph; profiling showed node allocation and the ABC check, both gone.
 
 1,000,000 rows dumped one by one (pool of 10,000 pre-built rows: Book + author +
 country + 3 chapters + 2 tags, 8 dicts per row), tracemalloc on:
 
-| | map | instance | instance_cached |
-|---|---|---|---|
-| transient peak per row | 3.6 KB | 4.6 KB | 3.7 KB |
-| retained growth from row 200k to 1M | 736 B | 736 B | 736 B |
-| wall time with tracemalloc | 280 s | 320 s | 296 s |
+| | map | instance |
+|---|---|---|
+| transient peak per row | 3.5 KB | 3.6 KB |
+| retained growth from row 200k to 1M | 736 B | 736 B |
+| wall time with tracemalloc | 265 s | 258 s |
 
-The 736 B is the list of samples; nothing grows with the row count in any mode.
+The 736 B is the list of samples; nothing grows with the row count.
 
 Per-class memory on the Shotris graph (73 models):
 
-| | map | instance | instance_cached |
-|---|---|---|---|
-| default dump map | `_relation_tree()` 1.84 MB, 233 ms | relation index 55 KB (one entry per relation) | as instance + walked nodes (217 KB after one depth-3 dump of the dense graph) |
-| `follow=True` paths | 807 MB, 11.6 s | nothing kept | nothing kept |
+| | map | instance |
+|---|---|---|
+| default dump map | `_relation_tree()` 1.84 MB, 233 ms | relation index 58 KiB + node caches |
+| node caches, every root walked 3 / 4 levels deep | | 2 463 / 8 485 nodes, 1.6 / 5.6 MiB |
+| node caches at the cap (every root walked 7 levels, 63 classes full) | | 16 138 nodes, 17.4 MiB, the hard upper bound for this graph |
+| `follow=True` paths | 807 MB, 11.6 s | nothing kept |
 
 `get_pydantic()` for all 73 Shotris models, then FastAPI `openapi()` with one route
 per model; every document validates with `openapi-spec-validator` (OpenAPI 3.1):
@@ -267,7 +277,7 @@ variant build slow.
 
 ## Compatibility flag and migration
 
-- Prototype switch: `ORMAR_RELATION_TRAVERSAL=map|instance|instance_cached`
+- Prototype switch: `ORMAR_RELATION_TRAVERSAL=map|instance`
   (env), or `ormar.models.traversal.set_relation_traversal(mode=...)`.
 - Proposal for releases:
     1. next minor: ship `instance` as opt-in, `map` stays the default; document the
@@ -287,6 +297,6 @@ variant build slow.
    on dense graphs) or one nested model per model (`omit_back_relations=False`,
    fastest, back-reference shown as optional)? Or back-relation variants with a
    default `max_depth`?
-3. `instance` vs `instance_cached`: is ~5–20 % dump speed worth memory that grows
-   with the distinct paths dumped?
+3. Node cache size per class: 256 caps the Shotris graph at ~17 MiB in the worst
+   case and ~1.6 MiB for 3-level dumps; is that the right trade-off?
 4. Should the switch be per model (`OrmarConfig`) instead of process-wide?

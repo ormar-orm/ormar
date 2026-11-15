@@ -419,7 +419,7 @@ def subtract_dict(current_dict: Any, updating_dict: Any) -> dict:  # noqa: CCR00
     :return: current_dict without the values of updating_dict
     :rtype: dict
     """
-    current_dict = dict(current_dict)
+    current_dict = dict(current_dict.items())
     for key, value in updating_dict.items():
         old_key = current_dict.get(key, {})
         new_value: Optional[Union[dict, set]] = None

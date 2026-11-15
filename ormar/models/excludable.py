@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union
 
 from ormar.exceptions import QueryDefinitionError
-from ormar.models.traversal import PathRelationMap
 from ormar.queryset.utils import (
     PathParts,
     build_flatten_map,
@@ -38,7 +37,7 @@ def skip_ellipsis(
     :return: nested value of the items
     :rtype: Union[set, dict, None]
     """
-    result = items.get(key, {}) if isinstance(items, (dict, PathRelationMap)) else items
+    result = items.get(key, {}) if isinstance(items, dict) else items
     return result if result is not Ellipsis else default
 
 

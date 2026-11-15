@@ -1,14 +1,13 @@
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Callable, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 from ormar import BaseField, ForeignKeyField
 from ormar.models.relation_graph import RelationGraph
 from ormar.models.traversal import (
     DEFAULT_FOLLOW_DEPTH,
+    NO_ANCESTORS,
     PathRelationMap,
     instance_traversal_enabled,
     relation_paths,
-    visited_paths_cached,
 )
 from ormar.models.traversible import NodeList
 
@@ -294,29 +293,19 @@ class RelationMixin:
         return tree
 
     @classmethod
-    def _default_relation_map(cls) -> Mapping[str, Any]:
+    def _default_relation_map(cls) -> Union[dict, PathRelationMap]:
         """
         Returns the default relation map of ``model_dump`` and ``save_related``:
         the cached ``_relation_tree()`` or, in ``instance`` traversal mode, a
-        ``PathRelationMap`` that decides from the path of the walk (kept on the
-        class in ``instance_cached`` mode)::
+        ``PathRelationMap`` that decides from the path of the walk::
 
-            Author._default_relation_map()  # -> PathRelationMap(author)
+            Author._default_relation_map()  # -> PathRelationMap(author below {})
 
         :return: relation map to follow
-        :rtype: Mapping[str, Any]
+        :rtype: Union[dict, PathRelationMap]
         """
         if instance_traversal_enabled():
-            if not visited_paths_cached():
-                return PathRelationMap(model=cls, ancestors=())
-            cached = cls.__dict__.get("_path_root")
-            if cached is None or cached[0] != RelationGraph.version:
-                cached = (
-                    RelationGraph.version,
-                    PathRelationMap(model=cls, ancestors=()),
-                )
-                cls._path_root = cached  # type: ignore[attr-defined]
-            return cached[1]
+            return PathRelationMap.for_path(model=cls, ancestors=NO_ANCESTORS)
         return cls._relation_tree()
 
     @classmethod

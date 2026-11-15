@@ -10,8 +10,10 @@ import pytest
 from fastapi import FastAPI
 
 import ormar
+from ormar.models import traversal
 from ormar.models.mixins.relation_mixin import build_relation_tree
 from ormar.models.traversal import (
+    NO_ANCESTORS,
     PathRelationMap,
     RelationTraversalSettings,
     relation_paths,
@@ -360,15 +362,33 @@ def test_include_exclude_unchanged(selector: dict) -> None:
 
 
 def test_path_relation_map_answers_like_the_tree() -> None:
-    node = PathRelationMap(model=Employee, ancestors=())
+    node = PathRelationMap.for_path(model=Employee, ancestors=NO_ANCESTORS)
     assert set(node) == {"coworker_of", "coworkers", "manager", "reports"}
+    assert set(node.keys()) == set(node)
     assert len(node) == 4
     assert node.get("missing") is None
     assert node["manager"] is Ellipsis
-    assert "manager" not in PathRelationMap(model=Employee, ancestors=(Employee,))
-    assert not PathRelationMap(model=Employee, ancestors=(Employee,))
+    assert dict(node.items())["reports"] is Ellipsis
+    assert list(node.values()) == [Ellipsis] * 4
+    assert node == node
+    assert node != dict(node.items())
+    below_self = PathRelationMap.for_path(
+        model=Employee, ancestors=frozenset({Employee})
+    )
+    assert "manager" not in below_self
+    assert not below_self
+    assert PathRelationMap.for_path(model=Employee, ancestors=NO_ANCESTORS) is node
     with pytest.raises(KeyError):
         node["name"]
+
+
+def test_node_cache_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(traversal, "PATH_NODE_CACHE_SIZE", 2)
+    nodes = traversal.relation_index(model=Label).nodes
+    nodes.clear()
+    for ancestors in (NO_ANCESTORS, frozenset({Writer}), frozenset({Manuscript})):
+        PathRelationMap.for_path(model=Label, ancestors=ancestors)
+    assert list(nodes) == [frozenset({Writer}), frozenset({Manuscript})]
 
 
 def test_relation_paths_respect_depth() -> None:
@@ -507,20 +527,6 @@ def test_recursive_pydantic_openapi(instance_mode: None) -> None:
 
 def test_recursive_pydantic_skips_unresolved_forward_refs(instance_mode: None) -> None:
     assert set(Pending.get_pydantic().model_fields) == {"id"}
-
-
-def test_cached_mode_keeps_walked_nodes() -> None:
-    previous = RelationTraversalSettings.mode
-    set_relation_traversal(mode="instance_cached")
-    try:
-        draft = manuscript()
-        first = draft.model_dump()
-        root_node = Manuscript._default_relation_map()
-        assert Manuscript._default_relation_map() is root_node
-        assert draft.model_dump() == first
-        assert set(root_node.children) == {"author", "editor", "labels"}
-    finally:
-        set_relation_traversal(mode=previous)
 
 
 def test_recursive_pydantic_without_back_relation_variants(instance_mode: None) -> None:

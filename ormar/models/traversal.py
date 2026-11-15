@@ -6,15 +6,13 @@ which relations to follow so the bidirectional relations of ormar do not loop.
 Instead of the cached ``_relation_tree()`` of the class they can use a
 ``PathRelationMap``: a view of one node of the relation tree that is computed
 from the models on the current path only, while the loaded instances are
-walked. Nothing is cached on the class and nothing outlives the walk.
+walked. Each class keeps a bounded number of shared nodes.
 
 The mode is selected with the ``ORMAR_RELATION_TRAVERSAL`` environment variable
-(``map``, the default, ``instance`` or ``instance_cached``) or with
-``set_relation_traversal``.
+(``map``, the default, or ``instance``) or with ``set_relation_traversal``.
 """
 
 import os
-from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -23,7 +21,7 @@ from ormar.models.relation_graph import RelationGraph
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.models.mixins.relation_mixin import RelationMixin
 
-RELATION_TRAVERSAL_MODES = ("map", "instance", "instance_cached")
+RELATION_TRAVERSAL_MODES = ("map", "instance")
 DEFAULT_FOLLOW_DEPTH = 3
 
 
@@ -45,8 +43,7 @@ def set_relation_traversal(mode: str) -> None:
         set_relation_traversal(mode="instance")
 
     :param mode: ``map`` for the cached relation tree, ``instance`` for the
-        path based traversal of the loaded instances, ``instance_cached`` for
-        the same traversal keeping the walked nodes on the class
+        path based traversal of the loaded instances
     :type mode: str
     :raises ValueError: on an unknown mode
     """
@@ -59,41 +56,34 @@ def instance_traversal_enabled() -> bool:
     """
     Checks if the path based instance traversal is enabled.
 
-    :return: True in ``instance`` and ``instance_cached`` mode
+    :return: True in ``instance`` mode
     :rtype: bool
     """
-    return RelationTraversalSettings.mode != "map"
+    return RelationTraversalSettings.mode == "instance"
 
 
-def visited_paths_cached() -> bool:
-    """
-    Checks if the nodes of the path based traversal are kept on the class
-    between dumps (``instance_cached`` mode): the part of the relation tree
-    that was actually walked is then built once, at the cost of memory that
-    grows with the number of distinct paths dumped.
-
-    :return: True in ``instance_cached`` mode
-    :rtype: bool
-    """
-    return RelationTraversalSettings.mode == "instance_cached"
+PATH_NODE_CACHE_SIZE = 256
+NO_ANCESTORS: frozenset = frozenset()
 
 
 @dataclass(frozen=True)
 class RelationIndex:
     """
     Followable relations of one model class: the target of every relation by
-    name (in name order) and the relation names by target model.
+    name (in name order), the relation names by target model, and the bounded
+    cache of the class's ``PathRelationMap`` nodes by the set of models above.
     """
 
     targets: dict[str, Any]
     names_by_target: dict[Any, tuple[str, ...]]
+    nodes: dict[frozenset, "PathRelationMap"]
 
 
 def relation_index(model: type["RelationMixin"]) -> RelationIndex:
     """
     Returns the followable relations of a model, leaving out relations to
-    unresolved forward references. Kept on the class (one entry per relation)
-    until the relation graph changes::
+    unresolved forward references. Kept on the class until the relation graph
+    changes::
 
         relation_index(model=Book).targets  # -> {"author": Author, "tags": Tag}
 
@@ -114,64 +104,94 @@ def relation_index(model: type["RelationMixin"]) -> RelationIndex:
     names_by_target: dict[Any, tuple[str, ...]] = {}
     for relation, target in targets.items():
         names_by_target[target] = (*names_by_target.get(target, ()), relation)
-    index = RelationIndex(targets=targets, names_by_target=names_by_target)
+    index = RelationIndex(targets=targets, names_by_target=names_by_target, nodes={})
     model._relation_index = (RelationGraph.version, index)  # type: ignore[attr-defined]
     return index
 
 
-class PathRelationMap(Mapping[str, Any]):
+class PathRelationMap(dict):
     """
-    One node of the relation tree of a model, computed from the model classes
-    on the current path: a relation is followed unless its target model is
-    already on the path above the model (a direct self relation is followed
-    once) or it points to an unresolved forward reference. It answers the
-    questions the dump and save code asks a relation map (``relation in
-    node``, ``node[relation]``, ``bool(node)``) without building the tree; a
-    child node is created only when the walk descends into a loaded related
-    instance, and a leaf is ``...`` like in the cached tree::
+    One node of the relation tree of a model, decided from the set of model
+    classes on the path above it: a relation is followed unless its target
+    model is in that set (a direct self relation is followed once) or it
+    points to an unresolved forward reference. It answers what the dump and
+    save code asks a relation map (``relation in node``, ``node[relation]``,
+    ``bool(node)``) without building the tree, and a leaf is ``...`` like in
+    the cached tree.
 
-        node = PathRelationMap(model=Author, ancestors=())
+    A node depends only on (model, models above), so nodes are shared: each
+    class keeps at most ``PATH_NODE_CACHE_SIZE`` of them (oldest dropped
+    first) and the dump of a row only looks them up::
+
+        node = PathRelationMap.for_path(model=Author, ancestors=NO_ANCESTORS)
         "books" in node  # -> True
-        node["books"]  # -> PathRelationMap(author->book), without "author"
+        node["books"]  # -> node of Book below Author, without "author"
     """
 
-    __slots__ = ("model", "ancestors", "followed", "children")
+    __slots__ = ("model", "ancestors", "child_ancestors")
 
-    def __init__(
-        self,
-        model: type["RelationMixin"],
-        ancestors: tuple[type["RelationMixin"], ...],
-    ) -> None:
+    def __init__(self, model: type["RelationMixin"], ancestors: frozenset) -> None:
+        # the dict maps a followed relation to the node cache of its target,
+        # so ``in``, ``bool`` and ``len`` run at plain dict speed
+        super().__init__(
+            (relation, relation_index(model=target).nodes)
+            for relation, target in relation_index(model=model).targets.items()
+            if target not in ancestors
+        )
         self.model = model
         self.ancestors = ancestors
-        index = relation_index(model=model)
-        blocked = [
-            relation
-            for ancestor in ancestors
-            for relation in index.names_by_target.get(ancestor, ())
-        ]
-        # the relations of the class are shared when nothing is cut off and
-        # never modified
-        followed = index.targets
-        if blocked:
-            followed = dict(followed)
-            for relation in blocked:
-                followed.pop(relation, None)
-        self.followed = followed
-        self.children: dict[str, Any] = {}
+        self.child_ancestors = ancestors | {model}
 
-    def __contains__(self, relation: object) -> bool:
-        return relation in self.followed
+    @classmethod
+    def for_path(
+        cls, model: type["RelationMixin"], ancestors: frozenset
+    ) -> "PathRelationMap":
+        """
+        Returns the shared node of a model below the given set of models.
+
+        :param model: model class of the node
+        :type model: type[RelationMixin]
+        :param ancestors: model classes on the path above the node
+        :type ancestors: frozenset
+        :return: node
+        :rtype: PathRelationMap
+        """
+        nodes = relation_index(model=model).nodes
+        node = nodes.get(ancestors)
+        if node is None:
+            node = cls.store(nodes=nodes, node=cls(model=model, ancestors=ancestors))
+        return node
+
+    @staticmethod
+    def store(
+        nodes: dict[frozenset, "PathRelationMap"], node: "PathRelationMap"
+    ) -> "PathRelationMap":
+        """
+        Puts a node into the bounded node cache of its class, dropping the
+        oldest one when the cache is full.
+
+        :param nodes: node cache of the class
+        :type nodes: dict[frozenset, PathRelationMap]
+        :param node: new node
+        :type node: PathRelationMap
+        :return: the node
+        :rtype: PathRelationMap
+        """
+        if len(nodes) >= PATH_NODE_CACHE_SIZE:
+            del nodes[next(iter(nodes))]
+        nodes[node.ancestors] = node
+        return node
 
     def __getitem__(self, relation: str) -> Any:
-        child = self.children.get(relation)
+        nodes = dict.__getitem__(self, relation)
+        child = nodes.get(self.child_ancestors)
         if child is None:
-            node = PathRelationMap(
-                model=self.followed[relation], ancestors=(*self.ancestors, self.model)
+            target = relation_index(model=self.model).targets[relation]
+            child = self.store(
+                nodes=nodes,
+                node=PathRelationMap(model=target, ancestors=self.child_ancestors),
             )
-            child = node if node.followed else Ellipsis
-            self.children[relation] = child
-        return child
+        return child if child else Ellipsis
 
     def get(self, relation: str, default: Any = None) -> Any:
         """
@@ -185,26 +205,37 @@ class PathRelationMap(Mapping[str, Any]):
         :return: child node or default
         :rtype: Any
         """
-        return self[relation] if relation in self.followed else default
+        return self[relation] if relation in self else default
 
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.followed)
+    def items(self) -> Any:
+        """
+        :return: followed relation names with their child nodes
+        :rtype: Iterator[tuple[str, Any]]
+        """
+        return ((relation, self[relation]) for relation in self)
 
-    def __len__(self) -> int:
-        return len(self.followed)
+    def values(self) -> Any:
+        """
+        :return: child nodes of the followed relations
+        :rtype: Iterator[Any]
+        """
+        return (self[relation] for relation in self)
 
-    def __bool__(self) -> bool:
-        return bool(self.followed)
+    def __eq__(self, other: object) -> bool:
+        # the values are node caches, comparing them would walk the caches
+        return self is other
+
+    __hash__ = None  # type: ignore[assignment]
 
     def __repr__(self) -> str:  # pragma: no cover
-        path = "->".join(model.get_name() for model in (*self.ancestors, self.model))
-        return f"PathRelationMap({path})"
+        above = ",".join(sorted(model.get_name() for model in self.ancestors))
+        return f"PathRelationMap({self.model.get_name()} below {{{above}}})"
 
 
 def relation_paths(
     model: type["RelationMixin"],
     max_depth: int,
-    ancestors: tuple[type["RelationMixin"], ...] = (),
+    ancestors: frozenset = NO_ANCESTORS,
 ) -> list[str]:
     """
     Returns the ``select_related`` paths of every relation reachable from a
@@ -219,18 +250,19 @@ def relation_paths(
     :param max_depth: number of relations to follow at most
     :type max_depth: int
     :param ancestors: model classes on the path above the model
-    :type ancestors: tuple[type[RelationMixin], ...]
+    :type ancestors: frozenset
     :return: relation paths in dunder notation
     :rtype: list[str]
     """
     paths: list[str] = []
     if max_depth <= 0:
         return paths
-    for relation, target in PathRelationMap(
-        model=model, ancestors=ancestors
-    ).followed.items():
+    targets = relation_index(model=model).targets
+    for relation in PathRelationMap.for_path(model=model, ancestors=ancestors):
         nested = relation_paths(
-            model=target, max_depth=max_depth - 1, ancestors=(*ancestors, model)
+            model=targets[relation],
+            max_depth=max_depth - 1,
+            ancestors=ancestors | {model},
         )
         paths.extend(f"{relation}__{path}" for path in nested)
         if not nested:
