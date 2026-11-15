@@ -39,7 +39,7 @@ def make_mutual_model(
     :rtype: type[ormar.Model]
     """
     attrs: dict[str, Any] = {
-        "ormar_config": base_ormar_config.copy(tablename=f"traversal_mutual_{index}"),
+        "ormar_config": base_ormar_config.copy(tablename=f"tm_{index}"),
         "__annotations__": {"id": int},
         "id": ormar.Integer(primary_key=True),
     }
@@ -91,7 +91,7 @@ class Label(ormar.Model):
 
 
 class ManuscriptLabel(ormar.Model):
-    ormar_config = base_ormar_config.copy(tablename="traversal_manuscript_labels")
+    ormar_config = base_ormar_config.copy(tablename="traversal_labelling")
 
     id: int = ormar.Integer(primary_key=True)
     weight: int = ormar.Integer(default=1)
