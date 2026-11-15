@@ -38,6 +38,11 @@ def build_prefixed_columns(
     return tuple(column.label(f"{alias}{column.name}") for column in all_columns)
 
 
+# bytes of the blake2s digest of a relation path in its alias: 10 hex digits,
+# so two paths of one statement practically never share a hash (the salted
+# fallback below still handles it); the alias prefixes table and column names,
+# which PostgreSQL truncates to 63 bytes consistently and MySQL allows up to 256
+ALIAS_DIGEST_SIZE = 5
 # relation path that owns each alias handed out in this process; a path whose
 # hash is owned by another path gets the next free salted hash instead
 ALIAS_OWNERS: dict[str, str] = {}
@@ -56,7 +61,9 @@ def path_hash(relation_path: str, attempt: int) -> str:
     :rtype: str
     """
     key = relation_path if not attempt else f"{relation_path}#{attempt}"
-    return "t" + hashlib.blake2s(key.encode(), digest_size=3).hexdigest()
+    return (
+        "t" + hashlib.blake2s(key.encode(), digest_size=ALIAS_DIGEST_SIZE).hexdigest()
+    )
 
 
 @lru_cache(maxsize=4096)

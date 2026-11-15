@@ -232,17 +232,39 @@ path prefix):
 
 Building the SQL for the worst root takes 4 ms for forward FK depth 5 and 85 ms
 for all relations at depth 3. At depth 4 one all-relations plan could not be built
-at all: `QueryDefinitionError: Alias ... of relation '<a three relation path>' collides
-with an already joined relation`. The alias of a path is a 3 byte blake2s hash (`alias_for`, since
-0.27.0), so two of the 2 036 paths of one statement share a hash with a
-probability of about 11 %. The bug is on master too, independent of the traversal:
-two foreign keys named `fid` and `fwc` on one model (same digest `b4b8c6`) fail
-with `select_related(["fid", "fwc"])`. Fixed in `alias_for`: each alias is owned
-by the first path that gets it (a process wide dict), a colliding path gets the
-next free hash salted with an attempt number. Every alias of a non-colliding path
-stays exactly the same, so SQL-asserting tests and cached plans are unaffected; a
-colliding path's alias depends on which of the two paths came first in the
-process.
+at all: `QueryDefinitionError: Alias ... of relation '<a three relation path>'
+collides with an already joined relation`. The alias of a path was a 3 byte
+blake2s hash (`alias_for`, since 0.27.0; 6 hex digits, the length of the random
+aliases before it), so two of the 2 036 paths of one statement shared a hash with
+a probability of about 11 %. The bug is on master too, independent of the
+traversal: two foreign keys named `fid` and `fwc` on one model (same 3 byte digest
+`b4b8c6`) fail with `select_related(["fid", "fwc"])`. Fixed in `alias_for` in two
+ways:
+
+- the digest is 5 bytes (10 hex digits), so every alias in generated SQL changes
+  once in 0.30.0. Probability that two paths of one statement share a hash:
+
+    | digest | 500 joins | 2 000 joins | alias prefix |
+    |---|---|---|---|
+    | 3 bytes | 0.74 % | 11 % | 8 chars (`t1b26c7_`) |
+    | 4 bytes | 0.003 % | 0.047 % | 10 chars |
+    | 5 bytes | 0.00001 % | 0.0002 % | 12 chars |
+
+  The prefix is put before table names (table aliases) and column names (column
+  labels), so the longest identifier is 12 + 63 = 75 bytes on PostgreSQL and
+  12 + 64 = 76 on MySQL (71 / 72 with 3 bytes). PostgreSQL truncates identifiers
+  over 63 bytes, which it already did with 3 bytes for table or column names over
+  55 characters: the truncation is the same everywhere in a statement, the hash
+  stays in front so table aliases stay distinct, and rows are read by position, so
+  two column labels that are equal after truncation are still read correctly
+  (checked on PostgreSQL 17 with 63 character table and column names and two
+  columns differing only in the last character). MySQL allows 256 characters for
+  table and column aliases (checked with a 64 character table name); SQLite has
+  no limit;
+- a remaining collision is resolved: each alias is owned by the first path that
+  gets it (a process wide dict), a colliding path gets the next free hash salted
+  with an attempt number. A colliding path's alias depends on which of the two
+  paths came first in the process.
 
 Rows: on a small graph (2 manuscripts, each with 2 FKs to the same writer and 3
 labels) the raw SQL returns 2 rows for the base query, 2 rows for

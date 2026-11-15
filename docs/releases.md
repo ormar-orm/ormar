@@ -19,6 +19,10 @@
     await chapter.load_all(follow=True, max_depth=2)
     ```
 
+* **Table aliases in generated SQL change** ([#1998](https://github.com/ormar-orm/ormar/pull/1998))
+
+    Joined tables and their column labels are prefixed with a 10 hex digit hash of the relation path instead of 6 (`t6bba8518ed_albums` instead of `t1b26c7_albums`), so two paths of one query practically never share an alias. Only code that matches on the raw SQL text (tests asserting SQL, query log filters) is affected.
+
 * **`get_pydantic()` generates one named nested model per model** ([#1998](https://github.com/ormar-orm/ormar/pull/1998))
 
     Nested relations point to a nested model of the related model (`Book_nested`), so cycles become recursive models (`$ref` in OpenAPI) instead of a fixed-depth copy of the tree. Relation fields of nested models are optional and include the relation back to the parent; the root model keeps its required/optional rules. Names no longer have a random suffix and do not depend on the order of calls (`Book`, `Book_nested`, `Book_depth2`, a hash suffix for `include`/`exclude`/`flatten_fields`), so the OpenAPI document is stable between runs. New parameters: `max_depth=` limits nesting, `omit_back_relations=True` leaves the relation back to the parent out of nested models (closer to the old shape, more models). Generated models validate an ormar instance through its `model_dump()`, so returning an instance from a FastAPI endpoint does not loop over its relations. This also fixes the cached nested model of a class being reused under every parent (`Author.get_pydantic()` followed by `Book.get_pydantic()` returned `Book` without `author`).
@@ -113,7 +117,7 @@
 * `OrmarConfig(constraints=[...])` and `ormar_config.copy(constraints=[...])` accept `IndexColumns` for type checkers. The annotation was `list[ColumnCollectionConstraint]`, which `IndexColumns` (a subclass of `sqlalchemy.Index`) is not, so mypy rejected it although it worked at runtime. [#1982](https://github.com/ormar-orm/ormar/pull/1982)
 * `ormar.Enum` passes `sqlalchemy.Enum` options (`values_callable`, `native_enum`, `create_constraint`, `length`, `validate_strings`, `schema`, `metadata`, `inherit_schema`, `quote`) to the column type. They were accepted and silently dropped, so an `int` enum always stored member names (`"UK"`) instead of values. [#1385](https://github.com/ormar-orm/ormar/issues/1385)
 * `fetch_val(query, column=...)` of the query executor returned the first column for any `column` when the statement ran through SQLAlchemy (drivers without native execution, `native_execution=False`); it returns the requested column now.
-* Two relation paths of one query whose table aliases had the same hash raised `QueryDefinitionError: Alias ... collides with an already joined relation` (since 0.27.0, aliases are a 24 bit hash of the relation path). Rare for one query, but likely with many joins (about 11 % for 2,000 joins). Every alias is now owned by the first path that gets it and a colliding path gets the next free salted hash; aliases of non-colliding paths are unchanged. [#1998](https://github.com/ormar-orm/ormar/pull/1998)
+* Two relation paths of one query whose table aliases had the same hash raised `QueryDefinitionError: Alias ... collides with an already joined relation` (since 0.27.0, aliases were a 24 bit hash of the relation path). Rare for one query, but likely with many joins (about 11 % for 2,000 joins). Aliases are now a 40 bit hash (0.0002 % for 2,000 joins), and a remaining collision is resolved: every alias is owned by the first path that gets it and a colliding path gets the next free salted hash. [#1998](https://github.com/ormar-orm/ormar/pull/1998)
 
 ### 📝 Docs
 
