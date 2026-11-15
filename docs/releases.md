@@ -2,6 +2,29 @@
 
 ## 0.30.0
 
+### ✨ Breaking changes
+
+* **Relations are traversed from the loaded instances, not from a precomputed relation map** ([#1998](https://github.com/ormar-orm/ormar/pull/1998))
+
+    `model_dump()`, `save_related()`, `get_pydantic()` and `select_all(follow=True)` / `load_all(follow=True)` decided which relations to follow from a relation tree cached on each model class. On densely related schemas (4+ models related to each other) that tree left out valid paths and contained paths with a model twice on them, and building it correctly grows exponentially. The default relation map is now decided per node from the set of models on the current path (a relation is followed unless its target is already on the path, a direct self relation once), and the nodes are shared and cached per class (at most 256 per class). Where the old tree was right the output is identical.
+
+    The old behaviour stays available for one release with `ORMAR_RELATION_TRAVERSAL=map` (environment variable) or `ormar.models.traversal.set_relation_traversal(mode="map")`. Selecting it emits a `DeprecationWarning`; the `map` mode and the relation tree are removed in 0.31.0.
+
+* **`follow=True` follows forward foreign keys, 5 levels deep** ([#1998](https://github.com/ormar-orm/ormar/pull/1998))
+
+    `select_all(follow=True)` and `load_all(follow=True)` followed every relation without a limit, which on dense schemas meant hundreds of thousands of joins and multiplied rows. They now follow foreign keys and one to one relations of the model (nullable ones too) up to `max_depth` levels (default 5), so the joins never multiply rows. Reverse foreign keys and many to many relations are loaded with `follow_reverse=N` (they are followed in the first N levels, `True` = 1) or by naming them in `select_related()`. Unlike Django's `select_related()` without arguments, nullable foreign keys are followed, as ormar foreign keys are nullable by default.
+
+    ```python
+    await Department.objects.select_all(follow=True, follow_reverse=2).get()
+    await chapter.load_all(follow=True, max_depth=2)
+    ```
+
+* **`get_pydantic()` generates one named nested model per model** ([#1998](https://github.com/ormar-orm/ormar/pull/1998))
+
+    Nested relations point to a nested model of the related model (`Book_nested`), so cycles become recursive models (`$ref` in OpenAPI) instead of a fixed-depth copy of the tree. Relation fields of nested models are optional and include the relation back to the parent; the root model keeps its required/optional rules. Names no longer have a random suffix and do not depend on the order of calls (`Book`, `Book_nested`, `Book_depth2`, a hash suffix for `include`/`exclude`/`flatten_fields`), so the OpenAPI document is stable between runs. New parameters: `max_depth=` limits nesting, `omit_back_relations=True` leaves the relation back to the parent out of nested models (closer to the old shape, more models). Generated models validate an ormar instance through its `model_dump()`, so returning an instance from a FastAPI endpoint does not loop over its relations. This also fixes the cached nested model of a class being reused under every parent (`Author.get_pydantic()` followed by `Book.get_pydantic()` returned `Book` without `author`).
+
+    Migration: if a response must keep exactly one level of nesting use `get_pydantic(max_depth=1)`; if `select_all(follow=True)` / `load_all(follow=True)` must load reverse or many to many relations pass `follow_reverse=N` or list them in `select_related()`; for deeper forward chains pass `max_depth=`.
+
 ### 🆕 Features
 
 * **`update()` and `delete()` with related models** ([#1967](https://github.com/ormar-orm/ormar/issues/1967))
@@ -90,6 +113,7 @@
 * `OrmarConfig(constraints=[...])` and `ormar_config.copy(constraints=[...])` accept `IndexColumns` for type checkers. The annotation was `list[ColumnCollectionConstraint]`, which `IndexColumns` (a subclass of `sqlalchemy.Index`) is not, so mypy rejected it although it worked at runtime. [#1982](https://github.com/ormar-orm/ormar/pull/1982)
 * `ormar.Enum` passes `sqlalchemy.Enum` options (`values_callable`, `native_enum`, `create_constraint`, `length`, `validate_strings`, `schema`, `metadata`, `inherit_schema`, `quote`) to the column type. They were accepted and silently dropped, so an `int` enum always stored member names (`"UK"`) instead of values. [#1385](https://github.com/ormar-orm/ormar/issues/1385)
 * `fetch_val(query, column=...)` of the query executor returned the first column for any `column` when the statement ran through SQLAlchemy (drivers without native execution, `native_execution=False`); it returns the requested column now.
+* Two relation paths of one query whose table aliases had the same hash raised `QueryDefinitionError: Alias ... collides with an already joined relation` (since 0.27.0, aliases are a 24 bit hash of the relation path). Rare for one query, but likely with many joins (about 11 % for 2,000 joins). Every alias is now owned by the first path that gets it and a colliding path gets the next free salted hash; aliases of non-colliding paths are unchanged. [#1998](https://github.com/ormar-orm/ormar/pull/1998)
 
 ### 📝 Docs
 

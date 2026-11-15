@@ -84,11 +84,9 @@ ItemSchema = Item.get_pydantic(flatten_fields="category")
 To read more visit [relations as primary keys](../models/methods.md#relations-as-primary-keys).
 
 !!!Warning
-    The `get_pydantic` method generates all models in a tree of nested models according to an algorithm that allows to avoid loops in models (same algorithm that is used in `model_dump()`, `select_all()` etc.)
+    The `get_pydantic` method generates one named nested model per related model, and relations point to it, so cyclic relations become recursive models (`$ref` in the OpenAPI schema). Relation fields of nested models are optional and include the relation back to the parent (pass `omit_back_relations=True` to leave it out, or `max_depth=N` to limit the nesting).
         
-    That means that nested models won't have reference to parent model (by default ormar relation is bidirectional).
-        
-    Note also that if given model exists in a tree more than once it will be doubled in pydantic models (each occurrence will have separate own model). That way you can exclude/include different fields on different leafs of the tree.
+    Names are stable (`Item`, `Item_nested`, a hash suffix for `include`/`exclude`), so the OpenAPI document does not change between runs. A model nested with different `include`/`exclude` gets its own model, so you can still select different fields on different branches.
 
 #### Mypy and type checking
 

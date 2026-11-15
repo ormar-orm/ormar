@@ -1,6 +1,8 @@
 # Relation traversal without a precomputed relation map
 
-Status: proposal, prototype on branch `proposal/instance-traversal`.
+Status: accepted for 0.30.0 ([#1998](https://github.com/ormar-orm/ormar/pull/1998)).
+`instance` is the default, `map` stays selectable (deprecated) for one release and is
+removed in 0.31.0 together with the relation tree code.
 
 ## Current state
 
@@ -15,8 +17,8 @@ which relations to follow without looping:
 | `get_pydantic()` | `_relation_tree()` |
 | `select_all(follow=True)`, `load_all(follow=True)` | `_iterate_related_models()` (list of `select_related` paths) |
 
-SQL aliases do not use any of this; the `AliasManager` keys aliases per
-(table, relation).
+SQL aliases do not use any of this; since 0.27.0 a table alias is a short hash of
+the relation path (`alias_for`).
 
 Both maps are computed per model class and cached on it (`__relation_tree__`,
 `__relation_map__`). The rule is "follow a relation unless its target model is
@@ -160,8 +162,11 @@ instead of one copy of the schema per path. The number of models grows with the
 (model, relation) pairs, not with the paths, and variants are cached and shared
 between `get_pydantic()` calls.
 
-- Names are readable and stable: `Book`, `Author_without_books`,
-  `Book_without_author_2` for a variant with another selector.
+- Names are readable and depend only on the variant, so the OpenAPI document
+  does not depend on the order of calls: `Book`, `Book_nested`, `Book_depth2`,
+  `Author_without_books`, and a 6 hex digit hash of the selector
+  (`Book_1a2b3c`). Only models with the same class name in different modules
+  get a number suffix, in the order they are first built.
 - The nested schema keeps today's rule that the back-reference to the parent is
   left out (switchable, see below).
 - A dump stops where a model is already on the path, while a recursive schema
@@ -170,15 +175,23 @@ between `get_pydantic()` calls.
 - `max_depth=` limits nesting (like Tortoise's `max_recursion`); with a limit the
   schema graph is acyclic.
 - `omit_back_relations=False` gives one nested model per model with every relation
-  optional, the cheapest form.
+  optional, the cheapest form. **This is the default** (decision 2 below);
+  `omit_back_relations=True` gives the back-relation variants.
 - Generated models live in one module (`ormar.generated_schemas`) with
-  `defer_build=True`, so their forward references resolve whenever pydantic builds
-  them.
+  `defer_build=True`, so their forward references resolve when pydantic builds
+  them. `get_pydantic()` builds the root and then every nested model it created,
+  with a raised recursion limit, so nested models can be introspected right away
+  and FastAPI never builds them lazily (a lazily built back-relation variant hit
+  the default recursion limit inside `openapi()`).
+- A generated model validates an ormar instance through its `model_dump()` (a
+  `mode="before"` model validator). Validating the loaded instances attribute by
+  attribute against a recursive schema follows `parent.children[0].parent` into
+  pydantic's cycle detection; the dump stops where a model is on the path.
 
 This also fixes the cache bug above, because the variant key contains the omitted
 relation and the selector.
 
-The OpenAPI cost of the variants is the open point (numbers below): with
+The OpenAPI cost of the variants decided the default (numbers below): with
 back-relation variants and no depth limit the schema graph of a dense application
 is one big strongly connected component, and pydantic's JSON-schema generation
 walks it depth first. On the Shotris graph that needs a recursion limit above
@@ -192,7 +205,7 @@ multiplies rows; a reverse FK or a many to many does. Today `follow=True` follow
 every relation, which on dense graphs is both exponential to plan and multiplies
 rows.
 
-Proposed default (prototype, instance mode): `follow=True` follows forward FKs
+Default (instance mode, and in map mode when `max_depth` or `follow_reverse` is passed): `follow=True` follows forward FKs
 (nullable ones too) up to `max_depth` (default `DEFAULT_FOLLOW_DEPTH = 5`, like
 Django). Reverse and many to many relations are loaded only by explicit
 `select_related` / `prefetch_related` or with `follow_reverse=N`, which also follows
@@ -218,10 +231,19 @@ path prefix):
 | all relations, today | 382 957 | 80 266 | 7 104 427 | 12.1 s, 207 MiB peak for one root |
 
 Building the SQL for the worst root takes 4 ms for forward FK depth 5 and 85 ms
-for all relations at depth 3. At depth 4 one all-relations plan cannot be built at
-all: the `AliasManager` raises an alias collision
-(`actor__training_invitations__training`), because aliases are per (table,
-relation) and the same relation appears on two paths.
+for all relations at depth 3. At depth 4 one all-relations plan could not be built
+at all: `QueryDefinitionError: Alias ... of relation
+'actor__training_invitations__training' collides with an already joined
+relation`. The alias of a path is a 3 byte blake2s hash (`alias_for`, since
+0.27.0), so two of the 2 036 paths of one statement share a hash with a
+probability of about 11 %. The bug is on master too, independent of the traversal:
+two foreign keys named `fid` and `fwc` on one model (same digest `b4b8c6`) fail
+with `select_related(["fid", "fwc"])`. Fixed in `alias_for`: each alias is owned
+by the first path that gets it (a process wide dict), a colliding path gets the
+next free hash salted with an attempt number. Every alias of a non-colliding path
+stays exactly the same, so SQL-asserting tests and cached plans are unaffected; a
+colliding path's alias depends on which of the two paths came first in the
+process.
 
 Rows: on a small graph (2 manuscripts, each with 2 FKs to the same writer and 3
 labels) the raw SQL returns 2 rows for the base query, 2 rows for
@@ -296,10 +318,12 @@ per model; every document validates with `openapi-spec-validator` (OpenAPI 3.1):
 | one nested model per model, `max_depth=2` | 0.54 s | 199 | 0.54 s | 199 | 228 KiB |
 | one nested model per model, `max_depth=3` | 1.22 s | 262 | 1.3 s | 262 | 304 KiB |
 
-Known prototype gaps: nested generated models are built lazily (`defer_build`), so
-introspecting one before use (e.g. `model_computed_fields`) shows it incomplete;
-each new root rebuilds the variants it reaches, which is what makes the unlimited
-variant build slow.
+The prototype built nested models lazily; they are now built right after the root
+(see above). On a complete graph of 20 models (380 foreign keys, one nested model
+per model) that takes 0.6–0.7 s for all 20 `get_pydantic()` calls either way, and
+`openapi()` drops from 1.4 s to 0.7 s because FastAPI finds the models built. With
+back-relation variants (12 models) the lazy build crashed in `openapi()` with a
+`RecursionError`, the eager one takes 2.4 s + 0.6 s.
 
 ## Behaviour changes
 
@@ -309,9 +333,10 @@ variant build slow.
    instance mode except 2 tests that assert the tree cache itself is built and the
    `get_pydantic()` shape tests below.
 2. **`get_pydantic()`.** Nested schemas are recursive instead of a fixed-depth copy,
-   nested relation fields are optional, and model names change (no random
-   suffix). Tests that introspect the exact nested schema shape change (5 in
-   `test_geting_pydantic_models.py`).
+   nested models keep the relation back to the parent as an optional field, nested
+   relation fields are optional, and model names change (stable, no random
+   suffix). The tests that introspect the old nested shape run in `map` mode
+   (`map_traversal` fixture) and have `instance` counterparts.
    The order-dependent cache bug is gone.
 3. **`follow=True`.** Loads forward FKs up to `max_depth` (default 5) instead of
    every relation without limit. Reverse and many to many relations are no longer
@@ -324,17 +349,18 @@ variant build slow.
 
 ## Compatibility flag and migration
 
-- Prototype switch: `ORMAR_RELATION_TRAVERSAL=map|instance`
-  (env), or `ormar.models.traversal.set_relation_traversal(mode=...)`.
-- Proposal for releases:
-    1. next minor: ship `instance` as opt-in, `map` stays the default; document the
-       differences; `max_depth=` and `follow_reverse=` available in both modes
-       (either one switches `follow=True` to the new rule). `follow=True` without
-       them in `map` mode warns that reverse and many to many relations will stop
-       being followed;
-    2. following minor: `instance` becomes the default, `map` still selectable and
-       deprecated (warning on use);
-    3. after that: remove `map` and the tree code.
+- Transitional switch: `ORMAR_RELATION_TRAVERSAL=map|instance` (env, read at
+  import), or `ormar.models.traversal.set_relation_traversal(mode=...)`.
+- Releases (decided):
+    1. 0.30.0: `instance` is the default. `map` is still selectable and emits an
+       `OrmarDeprecationWarning` (a `DeprecationWarning`) when selected. `max_depth=`
+       and `follow_reverse=` of `follow=True`, and `max_depth=` /
+       `omit_back_relations=` of `get_pydantic()`, use the new rules in both modes.
+       CI runs the whole suite once more on SQLite with `map`.
+    2. 0.31.0: remove `map`, `_relation_tree()`, `_iterate_related_models()`,
+       `build_relation_tree`, `__relation_tree__`, the old `get_pydantic()`
+       converter and its `__cache__`, the map-only tests (marked with the
+       `map_traversal` fixture) and the extra CI step.
 - Migration note for users: if a response relied on the old dump shape of a dense
   graph, pass an explicit `include=`/`exclude=` or `relation_map=`; if
   `select_all(follow=True)` / `load_all(follow=True)` must load reverse or many to
@@ -342,15 +368,16 @@ variant build slow.
   deeper forward chains pass `max_depth=`; if
   OpenAPI must show exactly one level of nesting, use `get_pydantic(max_depth=1)`.
 
-## Open questions
+## Decisions
 
-1. `follow=True` default: forward FKs depth 5 (recommended; 41 joins worst, 95 % of
-   the saturated plan) or depth 3 (26 joins)? Include nullable FKs (recommended,
-   ormar FKs are nullable by default) or only non-null like Django?
-2. `get_pydantic()` default: back-relation variants (closest to today, slow OpenAPI
-   on dense graphs) or one nested model per model (`omit_back_relations=False`,
-   fastest, back-reference shown as optional)? Or back-relation variants with a
-   default `max_depth`?
-3. Node cache size per class: 256 caps the Shotris graph at ~17 MiB in the worst
-   case and ~1.6 MiB for 3-level dumps; is that the right trade-off?
-4. Should the switch be per model (`OrmarConfig`) instead of process-wide?
+1. `follow=True` follows forward FKs including nullable ones, `DEFAULT_FOLLOW_DEPTH = 5`
+   (Django's `select_related()` stops at 5 too but skips nullable FKs; ormar FKs are
+   nullable by default). Reverse and many to many relations with `follow_reverse=N`.
+2. `get_pydantic()` generates one nested model per model (`omit_back_relations=False`),
+   recursive, with stable names; back-relation variants stay available with
+   `omit_back_relations=True`.
+3. `PATH_NODE_CACHE_SIZE = 256` per class.
+4. The switch stays process-wide and transitional (one release), `instance` is the
+   default, `map` is deprecated and removed in 0.31.0.
+5. The alias hash collision is fixed in `alias_for` (see above), as a bug fix
+   independent of the traversal.
