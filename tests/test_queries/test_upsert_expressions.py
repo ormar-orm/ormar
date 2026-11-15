@@ -1,3 +1,4 @@
+import re
 from typing import Any, Optional
 
 import pytest
@@ -315,6 +316,11 @@ def compiled(rules, dialect, update_values, update_variables=False) -> str:
     return str(statement.compile(dialect=dialect))
 
 
+def without_bind_casts(sql: str) -> str:
+    """SQLAlchemy 2.1 casts postgres bind parameters (``::INTEGER``), 2.0 does not."""
+    return re.sub(r"::[A-Z]+", "", sql)
+
+
 def test_expressions_compile_against_the_table_and_the_inserted_row():
     update_values = {
         "best_score": Greatest(F("best"), Inserted("best")),
@@ -325,11 +331,11 @@ def test_expressions_compile_against_the_table_and_the_inserted_row():
         PostgresRules(backend_name="postgresql"), postgresql.dialect(), update_values
     )
     assert (
-        "DO UPDATE SET completed = (upx_progress.completed + %(ormar_u1_0)s::INTEGER), "
+        "DO UPDATE SET completed = (upx_progress.completed + %(ormar_u1_0)s), "
         "best_score = greatest(upx_progress.best_score, excluded.best_score), "
-        "label = %(ormar_u2)s::VARCHAR, "
-        "revision = %(ormar_on_update_revision)s::INTEGER"
-    ) in sql
+        "label = %(ormar_u2)s, "
+        "revision = %(ormar_on_update_revision)s"
+    ) in without_bind_casts(sql)
     sql = compiled(SqliteRules(backend_name="sqlite"), sqlite.dialect(), update_values)
     assert "best_score = max(upx_progress.best_score, excluded.best_score)" in sql
     sql = compiled(MysqlRules(backend_name="mysql"), mysql.dialect(), update_values)
