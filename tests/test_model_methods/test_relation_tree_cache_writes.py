@@ -70,13 +70,13 @@ async def test_save_related_with_exclude_keeps_the_cached_tree():
 @pytest.mark.asyncio
 async def test_bulk_create_builds_the_tree_once(monkeypatch):
     calls = []
-    original = relation_mixin.translate_list_to_dict
+    original = relation_mixin.build_relation_tree
 
     def counting(*args, **kwargs):
         calls.append(args)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(relation_mixin, "translate_list_to_dict", counting)
+    monkeypatch.setattr(relation_mixin, "build_relation_tree", counting)
     RelationGraph.changed()
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
