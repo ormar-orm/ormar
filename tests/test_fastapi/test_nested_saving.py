@@ -83,7 +83,7 @@ async def create_department(department: Department):
 
 @app.get("/departments/{department_name}")
 async def get_department(department_name: str):
-    department = await Department.objects.select_all(follow=True).get(
+    department = await Department.objects.select_all(follow=True, follow_reverse=2).get(
         department_name=department_name
     )
     return department.model_dump(exclude=to_exclude)
@@ -91,7 +91,7 @@ async def get_department(department_name: str):
 
 @app.get("/departments/{department_name}/second")
 async def get_department_exclude(department_name: str):
-    department = await Department.objects.select_all(follow=True).get(
+    department = await Department.objects.select_all(follow=True, follow_reverse=2).get(
         department_name=department_name
     )
     return department.model_dump(exclude=to_exclude_ormar)
@@ -99,7 +99,7 @@ async def get_department_exclude(department_name: str):
 
 @app.get("/departments/{department_name}/exclude")
 async def get_department_exclude_all(department_name: str):
-    department = await Department.objects.select_all(follow=True).get(
+    department = await Department.objects.select_all(follow=True, follow_reverse=2).get(
         department_name=department_name
     )
     return department.model_dump(exclude=exclude_all)

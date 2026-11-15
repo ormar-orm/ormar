@@ -857,8 +857,9 @@ class Model(ModelRow):
         Nested relations of those kind need to be loaded manually.
 
         :param max_depth: number of relations to follow at most with
-            follow=True, by default every relation without limit (``map``
-            traversal) or forward foreign keys ``DEFAULT_FOLLOW_DEPTH`` deep
+            follow=True, forward foreign keys ``DEFAULT_FOLLOW_DEPTH`` (5) deep by
+            default (every relation without limit in the deprecated ``map``
+            traversal)
         :type max_depth: Optional[int]
         :param follow_reverse: number of first levels where follow=True also
             follows reverse and many to many relations, ``True`` = 1

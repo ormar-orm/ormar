@@ -86,7 +86,7 @@ async def test_load_all_multiple_instances_of_same_table_in_schema():
         math_class = await SchoolClass.objects.get(name="Math")
         assert math_class.name == "Math"
 
-        await math_class.load_all(follow=True)
+        await math_class.load_all(follow=True, follow_reverse=1)
         assert math_class.students[0].name == "Jane"
         assert len(math_class.model_dump().get("students")) == 2
         assert math_class.teachers[0].category.department.name == "Law Department"

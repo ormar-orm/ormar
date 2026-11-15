@@ -6,6 +6,7 @@ from pydantic_core import PydanticUndefined
 
 import ormar
 from tests.lifespan import init_tests
+from tests.schema_helpers import relation_schema
 from tests.settings import create_config
 
 base_ormar_config = create_config()
@@ -85,7 +86,7 @@ MutualA.update_forward_refs()
 create_test_database = init_tests(base_ormar_config)
 
 
-def test_getting_pydantic_model():
+def test_getting_pydantic_model(map_traversal):
     PydanticCategory = Category.get_pydantic()
     assert issubclass(PydanticCategory, pydantic.BaseModel)
     assert {*PydanticCategory.model_fields.keys()} == {"items", "id", "name"}
@@ -128,7 +129,7 @@ def test_getting_pydantic_model():
     assert "category" not in PydanticItem.model_fields
 
 
-def test_initializing_pydantic_model():
+def test_initializing_pydantic_model(map_traversal):
     data = {
         "id": 1,
         "name": "test",
@@ -155,9 +156,7 @@ def test_getting_pydantic_model_nested_include_set():
     PydanticCategory = Category.get_pydantic(include={"id", "items__id"})
     assert len(PydanticCategory.model_fields) == 2
     assert "name" not in PydanticCategory.model_fields
-    PydanticItem = PydanticCategory.__pydantic_core_schema__["schema"]["fields"][
-        "items"
-    ]["schema"]["schema"]["schema"]["items_schema"]["cls"]
+    PydanticItem = relation_schema(schema=PydanticCategory, field="items")
     assert len(PydanticItem.model_fields) == 1
     assert "id" in PydanticItem.model_fields
 
@@ -166,9 +165,7 @@ def test_getting_pydantic_model_nested_include_dict():
     PydanticCategory = Category.get_pydantic(include={"id": ..., "items": {"id"}})
     assert len(PydanticCategory.model_fields) == 2
     assert "name" not in PydanticCategory.model_fields
-    PydanticItem = PydanticCategory.__pydantic_core_schema__["schema"]["fields"][
-        "items"
-    ]["schema"]["schema"]["schema"]["items_schema"]["cls"]
+    PydanticItem = relation_schema(schema=PydanticCategory, field="items")
     assert len(PydanticItem.model_fields) == 1
     assert "id" in PydanticItem.model_fields
 
@@ -177,9 +174,7 @@ def test_getting_pydantic_model_nested_include_nested_dict():
     PydanticCategory = Category.get_pydantic(include={"id": ..., "items": {"id": ...}})
     assert len(PydanticCategory.model_fields) == 2
     assert "name" not in PydanticCategory.model_fields
-    PydanticItem = PydanticCategory.__pydantic_core_schema__["schema"]["fields"][
-        "items"
-    ]["schema"]["schema"]["schema"]["items_schema"]["cls"]
+    PydanticItem = relation_schema(schema=PydanticCategory, field="items")
     assert len(PydanticItem.model_fields) == 1
     assert "id" in PydanticItem.model_fields
 
@@ -190,14 +185,12 @@ def test_getting_pydantic_model_include_exclude():
     )
     assert len(PydanticCategory.model_fields) == 2
     assert "name" not in PydanticCategory.model_fields
-    PydanticItem = PydanticCategory.__pydantic_core_schema__["schema"]["fields"][
-        "items"
-    ]["schema"]["schema"]["schema"]["items_schema"]["cls"]
+    PydanticItem = relation_schema(schema=PydanticCategory, field="items")
     assert len(PydanticItem.model_fields) == 1
     assert "id" in PydanticItem.model_fields
 
 
-def test_getting_pydantic_model_exclude():
+def test_getting_pydantic_model_exclude(map_traversal):
     PydanticItem = Item.get_pydantic(exclude={"category__name"})
     assert len(PydanticItem.model_fields) == 3
     assert "category" in PydanticItem.model_fields
@@ -208,7 +201,7 @@ def test_getting_pydantic_model_exclude():
     assert "name" not in PydanticCategory.model_fields
 
 
-def test_getting_pydantic_model_exclude_dict():
+def test_getting_pydantic_model_exclude_dict(map_traversal):
     PydanticItem = Item.get_pydantic(exclude={"id": ..., "category": {"name"}})
     assert len(PydanticItem.model_fields) == 2
     assert "category" in PydanticItem.model_fields
@@ -220,7 +213,7 @@ def test_getting_pydantic_model_exclude_dict():
     assert "name" not in PydanticCategory.model_fields
 
 
-def test_getting_pydantic_model_self_ref():
+def test_getting_pydantic_model_self_ref(map_traversal):
     PydanticSelfRef = SelfRef.get_pydantic()
     assert len(PydanticSelfRef.model_fields) == 4
     assert set(PydanticSelfRef.model_fields.keys()) == {
@@ -256,7 +249,7 @@ def test_getting_pydantic_model_self_ref():
     assert set(InnerSelf2.model_fields.keys()) == {"id", "name"}
 
 
-def test_getting_pydantic_model_self_ref_exclude():
+def test_getting_pydantic_model_self_ref_exclude(map_traversal):
     PydanticSelfRef = SelfRef.get_pydantic(exclude={"children": {"name"}})
     assert len(PydanticSelfRef.model_fields) == 4
     assert set(PydanticSelfRef.model_fields.keys()) == {
@@ -282,7 +275,7 @@ def test_getting_pydantic_model_self_ref_exclude():
     assert InnerSelf != PydanticSelfRefChildren
 
 
-def test_getting_pydantic_model_mutual_rels():
+def test_getting_pydantic_model_mutual_rels(map_traversal):
     MutualAPydantic = MutualA.get_pydantic()
     assert len(MutualAPydantic.model_fields) == 3
     assert set(MutualAPydantic.model_fields.keys()) == {"id", "mutual_b", "mutuals_b"}
@@ -314,7 +307,7 @@ def test_getting_pydantic_model_mutual_rels():
     assert MutualB1 == MutualB2
 
 
-def test_getting_pydantic_model_mutual_rels_exclude():
+def test_getting_pydantic_model_mutual_rels_exclude(map_traversal):
     MutualAPydantic = MutualA.get_pydantic(exclude={"mutual_b": {"name"}})
     assert len(MutualAPydantic.model_fields) == 3
     assert set(MutualAPydantic.model_fields.keys()) == {"id", "mutual_b", "mutuals_b"}
@@ -362,9 +355,7 @@ def test_getting_pydantic_model_include_filters_computed_fields():
 
 def test_getting_pydantic_model_propagates_computed_fields_through_relations():
     PydanticComment = Comment.get_pydantic()
-    InnerTopic = PydanticComment.__pydantic_core_schema__["schema"]["fields"]["topic"][
-        "schema"
-    ]["schema"]["schema"]["cls"]
+    InnerTopic = relation_schema(schema=PydanticComment, field="topic")
     assert set(InnerTopic.model_computed_fields.keys()) == {"upper_name"}
     inner = InnerTopic(id=1, name="news")
     assert inner.model_dump()["upper_name"] == "NEWS"

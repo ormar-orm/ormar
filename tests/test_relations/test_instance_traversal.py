@@ -2,7 +2,7 @@
 import json
 import re
 import typing
-from collections.abc import Iterator
+import warnings
 from typing import Any, ForwardRef, Optional
 
 import pydantic
@@ -10,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 
 import ormar
-from ormar.models import traversal
+from ormar.models import recursive_schema, traversal
 from ormar.models.mixins.relation_mixin import build_relation_tree
 from ormar.models.traversal import (
     NO_ANCESTORS,
@@ -19,6 +19,7 @@ from ormar.models.traversal import (
     relation_paths,
     set_relation_traversal,
 )
+from ormar.warnings import OrmarDeprecationWarning
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -147,20 +148,23 @@ class Pending(ormar.Model):
 create_test_database = init_tests(base_ormar_config)
 
 
-@pytest.fixture
-def instance_mode() -> Iterator[None]:
-    previous = RelationTraversalSettings.mode
-    set_relation_traversal(mode="instance")
-    yield
-    set_relation_traversal(mode=previous)
+def dump_in_mode(root: ormar.Model, mode: str, **kwargs: Any) -> dict:
+    """
+    Dumps a model with the given relation traversal mode.
 
-
-@pytest.fixture
-def map_mode() -> Iterator[None]:
+    :param root: model to dump
+    :type root: ormar.Model
+    :param mode: ``map`` or ``instance``
+    :type mode: str
+    :return: dump of the model
+    :rtype: dict
+    """
     previous = RelationTraversalSettings.mode
-    set_relation_traversal(mode="map")
-    yield
-    set_relation_traversal(mode=previous)
+    RelationTraversalSettings.mode = mode
+    try:
+        return root.model_dump(**kwargs)
+    finally:
+        RelationTraversalSettings.mode = previous
 
 
 def expanded_tree(model: type[ormar.Model], ancestors: tuple = ()) -> dict:
@@ -276,7 +280,7 @@ def test_old_tree_is_wrong_on_mutual_graph() -> None:
 
 @pytest.mark.parametrize("root_index", range(MUTUAL_SIZE))
 def test_mutual_graph_dump_matches_expanded_tree(
-    root_index: int, instance_mode: None
+    root_index: int, instance_traversal: None
 ) -> None:
     instances = mutual_instances()
     root = instances[root_index]
@@ -285,7 +289,7 @@ def test_mutual_graph_dump_matches_expanded_tree(
     assert repeated_models(dump=dump, model=type(root)) == []
 
 
-def test_mutual_graph_old_dump_repeats_models(map_mode: None) -> None:
+def test_mutual_graph_old_dump_repeats_models(map_traversal: None) -> None:
     dumps = [(type(root), root.model_dump()) for root in mutual_instances()]
     repeated = [
         path
@@ -301,16 +305,12 @@ def test_mutual_graph_old_dump_repeats_models(map_mode: None) -> None:
 def test_dump_equals_old_dump_where_old_tree_is_right(factory: Any) -> None:
     root = factory()
     assert build_relation_tree(model=type(root)) == expanded_tree(model=type(root))
-    set_relation_traversal(mode="map")
-    old_dump = root.model_dump()
-    set_relation_traversal(mode="instance")
-    try:
-        assert root.model_dump() == old_dump
-    finally:
-        set_relation_traversal(mode="map")
+    assert dump_in_mode(root=root, mode="instance") == dump_in_mode(
+        root=root, mode="map"
+    )
 
 
-def test_self_relations(instance_mode: None) -> None:
+def test_self_relations(instance_traversal: None) -> None:
     dump = employees().model_dump()
     assert dump["manager"]["name"] == "boss"
     assert "manager" not in dump["manager"]
@@ -319,7 +319,7 @@ def test_self_relations(instance_mode: None) -> None:
     assert [coworker["name"] for coworker in dump["coworkers"]] == ["peer"]
 
 
-def test_two_fks_to_one_model_and_reverse(instance_mode: None) -> None:
+def test_two_fks_to_one_model_and_reverse(instance_traversal: None) -> None:
     draft = manuscript()
     dump = draft.model_dump()
     assert dump["author"] == {"id": 1, "name": "Ann"}
@@ -330,7 +330,7 @@ def test_two_fks_to_one_model_and_reverse(instance_mode: None) -> None:
     assert "editor" not in writer_dump["written"][0]
 
 
-def test_cycle_stops_at_repeated_model(instance_mode: None) -> None:
+def test_cycle_stops_at_repeated_model(instance_traversal: None) -> None:
     dump = ring().model_dump()
     ring_b = dump["ring_bs"][0]
     assert "ring_a" not in ring_b
@@ -352,13 +352,9 @@ def test_cycle_stops_at_repeated_model(instance_mode: None) -> None:
 )
 def test_include_exclude_unchanged(selector: dict) -> None:
     root = manuscript()
-    set_relation_traversal(mode="map")
-    old_dump = root.model_dump(**selector)
-    set_relation_traversal(mode="instance")
-    try:
-        assert root.model_dump(**selector) == old_dump
-    finally:
-        set_relation_traversal(mode="map")
+    assert dump_in_mode(root=root, mode="instance", **selector) == dump_in_mode(
+        root=root, mode="map", **selector
+    )
 
 
 def test_path_relation_map_answers_like_the_tree() -> None:
@@ -411,12 +407,46 @@ def test_relation_paths_respect_depth() -> None:
 
 
 def test_unknown_mode() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Unknown relation traversal mode"):
         set_relation_traversal(mode="tree")
 
 
+def test_instance_is_the_default_and_map_is_deprecated() -> None:
+    assert traversal.DEFAULT_RELATION_TRAVERSAL == "instance"
+    previous = RelationTraversalSettings.mode
+    try:
+        with pytest.warns(DeprecationWarning, match="'map' relation traversal"):
+            set_relation_traversal(mode="map")
+        assert RelationTraversalSettings.mode == "map"
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            set_relation_traversal(mode="instance")
+        assert traversal.instance_traversal_enabled()
+    finally:
+        RelationTraversalSettings.mode = previous
+
+
+@pytest.mark.parametrize(
+    "value, mode, deprecated",
+    [(None, "instance", False), ("instance", "instance", False), ("map", "map", True)],
+)
+def test_mode_from_environment(
+    monkeypatch: pytest.MonkeyPatch, value: Optional[str], mode: str, deprecated: bool
+) -> None:
+    if value is None:
+        monkeypatch.delenv(traversal.RELATION_TRAVERSAL_ENV, raising=False)
+    else:
+        monkeypatch.setenv(traversal.RELATION_TRAVERSAL_ENV, value)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert traversal.relation_traversal_from_environment() == mode
+    assert [item.category for item in caught] == (
+        [OrmarDeprecationWarning] if deprecated else []
+    )
+
+
 @pytest.mark.asyncio
-async def test_save_related_and_load_all(instance_mode: None) -> None:
+async def test_save_related_and_load_all(instance_traversal: None) -> None:
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
             draft = manuscript()
@@ -453,7 +483,7 @@ async def raw_row_count(queryset: Any) -> int:
 
 
 @pytest.mark.asyncio
-async def test_forward_follow_does_not_multiply_rows(instance_mode: None) -> None:
+async def test_forward_follow_does_not_multiply_rows(instance_traversal: None) -> None:
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
             author = await Writer.objects.create(name="Ann")
@@ -505,7 +535,7 @@ def schema_models(schema: Any) -> set:
 
 @pytest.mark.parametrize("root_index", range(MUTUAL_SIZE))
 def test_recursive_pydantic_accepts_the_dump(
-    root_index: int, instance_mode: None
+    root_index: int, instance_traversal: None
 ) -> None:
     instances = mutual_instances()
     root = instances[root_index]
@@ -516,8 +546,8 @@ def test_recursive_pydantic_accepts_the_dump(
     assert len(schema_models(schema=schema)) <= relation_count + 1
 
 
-def test_recursive_pydantic_omits_back_relation(instance_mode: None) -> None:
-    schema = Manuscript.get_pydantic()
+def test_recursive_pydantic_omits_back_relation(instance_traversal: None) -> None:
+    schema = Manuscript.get_pydantic(omit_back_relations=True)
     author = schema.model_fields["author"].annotation
     author_schema = typing.get_args(author)[0]
     assert author_schema.__name__.startswith("Writer_without_written")
@@ -530,7 +560,7 @@ def test_recursive_pydantic_omits_back_relation(instance_mode: None) -> None:
     }
 
 
-def test_recursive_pydantic_self_reference(instance_mode: None) -> None:
+def test_recursive_pydantic_self_reference(instance_traversal: None) -> None:
     schema = Employee.get_pydantic()
     middle = employees()
     assert schema.model_validate(middle.model_dump()).manager.name == "boss"
@@ -544,7 +574,7 @@ def test_recursive_pydantic_self_reference(instance_mode: None) -> None:
     assert nested.manager.manager.name == "c"
 
 
-def test_recursive_pydantic_selectors_and_depth(instance_mode: None) -> None:
+def test_recursive_pydantic_selectors_and_depth(instance_traversal: None) -> None:
     included = Manuscript.get_pydantic(include={"id": ..., "author": {"name"}})
     assert set(included.model_fields) == {"id", "author"}
     author_schema = typing.get_args(included.model_fields["author"].annotation)[0]
@@ -557,7 +587,7 @@ def test_recursive_pydantic_selectors_and_depth(instance_mode: None) -> None:
     assert flat.model_validate({"id": 1, "title": "x", "author": {"id": 5}}).author == 5
 
 
-def test_recursive_pydantic_openapi(instance_mode: None) -> None:
+def test_recursive_pydantic_openapi(instance_traversal: None) -> None:
     app = FastAPI()
     for model in (*MUTUAL, Employee, Manuscript, RingA):
         app.add_api_route(
@@ -574,13 +604,135 @@ def test_recursive_pydantic_openapi(instance_mode: None) -> None:
     assert len(components) < 100
 
 
-def test_recursive_pydantic_skips_unresolved_forward_refs(instance_mode: None) -> None:
+def test_recursive_pydantic_skips_unresolved_forward_refs(
+    instance_traversal: None,
+) -> None:
     assert set(Pending.get_pydantic().model_fields) == {"id"}
 
 
-def test_recursive_pydantic_without_back_relation_variants(instance_mode: None) -> None:
+def test_recursive_pydantic_without_back_relation_variants(
+    instance_traversal: None,
+) -> None:
     schema = Manuscript.get_pydantic(omit_back_relations=False)
     author_schema = typing.get_args(schema.model_fields["author"].annotation)[0]
     assert set(author_schema.model_fields) == {"id", "name", "written", "edited"}
     draft = manuscript()
     assert schema.model_validate(draft.model_dump()).author.name == "Ann"
+
+
+SameNameWriter = type(
+    "Writer",
+    (ormar.Model,),
+    {
+        "ormar_config": base_ormar_config.copy(tablename="traversal_other_writers"),
+        "__annotations__": {"id": int},
+        "id": ormar.Integer(primary_key=True),
+        "__module__": "tests.other_module",
+    },
+)
+
+
+def reset_generated_schemas() -> None:
+    """
+    Forgets every generated pydantic model, like a fresh process.
+    """
+    for name in recursive_schema.RecursiveSchemaBuilder.names.values():
+        if hasattr(recursive_schema.SCHEMA_MODULE, name):
+            delattr(recursive_schema.SCHEMA_MODULE, name)
+    recursive_schema.RecursiveSchemaBuilder.built.clear()
+    recursive_schema.RecursiveSchemaBuilder.names.clear()
+    recursive_schema.RecursiveSchemaBuilder.variants_by_name.clear()
+
+
+def openapi_document(models: list[type[ormar.Model]]) -> str:
+    """
+    Builds the OpenAPI document of one route per model.
+
+    :param models: models in the order their schemas are generated
+    :type models: list[type[ormar.Model]]
+    :return: OpenAPI document as sorted json
+    :rtype: str
+    """
+    app = FastAPI()
+    for model in models:
+        app.add_api_route(
+            path=f"/{model.get_name()}",
+            endpoint=lambda: None,
+            response_model=model.get_pydantic(),
+        )
+        app.add_api_route(
+            path=f"/{model.get_name()}/short",
+            endpoint=lambda: None,
+            response_model=model.get_pydantic(max_depth=1, exclude={"id"}),
+        )
+    return json.dumps(app.openapi(), sort_keys=True)
+
+
+def test_openapi_does_not_depend_on_the_order_of_calls(
+    instance_traversal: None,
+) -> None:
+    models: list[type[ormar.Model]] = [Manuscript, Writer, Label, Employee, *MUTUAL]
+    reset_generated_schemas()
+    forward = openapi_document(models=models)
+    reset_generated_schemas()
+    backward = openapi_document(models=list(reversed(models)))
+    assert forward == backward
+    assert "Writer_nested" in json.loads(forward)["components"]["schemas"]
+
+
+def test_generated_names(instance_traversal: None) -> None:
+    reset_generated_schemas()
+    assert Manuscript.get_pydantic().__name__ == "Manuscript"
+    assert Manuscript.get_pydantic() is Manuscript.get_pydantic()
+    author = typing.get_args(
+        Manuscript.get_pydantic().model_fields["author"].annotation
+    )[0]
+    assert author.__name__ == "Writer_nested"
+    assert Manuscript.get_pydantic(max_depth=2).__name__ == "Manuscript_depth2"
+    selected = Manuscript.get_pydantic(include={"title", "id"})
+    assert selected is Manuscript.get_pydantic(include={"id": ..., "title": ...})
+    assert re.fullmatch(r"Manuscript_[0-9a-f]{6}", selected.__name__)
+    assert Writer.get_pydantic().__name__ == "Writer"
+    assert SameNameWriter.get_pydantic().__name__ == "Writer_2"
+
+
+def test_variant_keeps_its_name_when_rebuilt(instance_traversal: None) -> None:
+    schema = Label.get_pydantic()
+    traversal.RelationGraph.changed()
+    rebuilt = Label.get_pydantic()
+    assert rebuilt is not schema
+    assert rebuilt.__name__ == schema.__name__
+
+
+def test_canonical_selector_ignores_order() -> None:
+    assert recursive_schema.canonical(
+        {"b": ..., "a": {"y", "x"}}
+    ) == recursive_schema.canonical({"a": {"x": ..., "y": ...}, "b": ...})
+    assert recursive_schema.canonical(["a", "b"]) == "{a:...,b:...}"
+
+
+def test_recursive_pydantic_validates_cyclic_instances(
+    instance_traversal: None,
+) -> None:
+    middle = employees()
+    validated = Employee.get_pydantic().model_validate(middle)
+    assert validated.manager.name == "boss"
+    assert validated.reports[0].name == "junior"
+    assert validated.model_dump(exclude_unset=True) == middle.model_dump()
+
+
+def test_recursive_pydantic_in_map_mode_with_new_parameters(
+    map_traversal: None,
+) -> None:
+    shallow = Manuscript.get_pydantic(max_depth=1)
+    assert shallow.__name__ == "Manuscript_depth1"
+    assert "author" in Manuscript.get_pydantic(omit_back_relations=False).model_fields
+
+
+def test_map_mode_keeps_the_old_follow_and_schema(map_traversal: None) -> None:
+    assert Manuscript._follow_relation_paths() == Manuscript._iterate_related_models()
+    assert "labels" in Manuscript._follow_relation_paths()
+    assert "labels" not in Manuscript._follow_relation_paths(max_depth=5)
+    flat = Manuscript.get_pydantic(flatten_fields="author")
+    assert flat is Manuscript.get_pydantic(flatten_fields="author")
+    assert flat.model_validate({"id": 1, "title": "x", "author": {"id": 5}}).author == 5

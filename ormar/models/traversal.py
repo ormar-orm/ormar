@@ -1,55 +1,110 @@
 """
-Prototype of relation traversal without a precomputed per-class relation map.
+Relation traversal without a precomputed per-class relation map.
 
 ``model_dump()``, ``save_related()`` and ``select_all(follow=True)`` need to know
 which relations to follow so the bidirectional relations of ormar do not loop.
-Instead of the cached ``_relation_tree()`` of the class they can use a
-``PathRelationMap``: a view of one node of the relation tree that is computed
-from the models on the current path only, while the loaded instances are
-walked. Each class keeps a bounded number of shared nodes.
+Instead of the cached ``_relation_tree()`` of the class they use a
+``PathRelationMap``: one node of the relation tree, computed from the models on
+the current path only, while the loaded instances are walked. Each class keeps a
+bounded number of shared nodes.
 
 The mode is selected with the ``ORMAR_RELATION_TRAVERSAL`` environment variable
-(``map``, the default, or ``instance``) or with ``set_relation_traversal``.
+(``instance``, the default, or the deprecated ``map``) or with
+``set_relation_traversal``. The ``map`` mode is removed in ormar 0.31.0.
 """
 
 import os
+import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ormar.models.relation_graph import RelationGraph
+from ormar.warnings import OrmarDeprecationWarning
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.models.mixins.relation_mixin import RelationMixin
 
+RELATION_TRAVERSAL_ENV = "ORMAR_RELATION_TRAVERSAL"
 RELATION_TRAVERSAL_MODES = ("map", "instance")
+DEFAULT_RELATION_TRAVERSAL = "instance"
 DEFAULT_FOLLOW_DEPTH = 5
+
+
+def validate_relation_traversal(mode: str, stacklevel: int) -> str:
+    """
+    Checks a relation traversal mode and warns when the deprecated ``map``
+    mode is selected::
+
+        validate_relation_traversal(mode="instance", stacklevel=2)  # -> "instance"
+
+    :param mode: ``map`` or ``instance``
+    :type mode: str
+    :param stacklevel: stack level of the warning, pointing at the caller
+    :type stacklevel: int
+    :return: the mode
+    :rtype: str
+    :raises ValueError: on an unknown mode
+    """
+    if mode not in RELATION_TRAVERSAL_MODES:
+        raise ValueError(
+            f"Unknown relation traversal mode: {mode}, "
+            f"use one of {', '.join(RELATION_TRAVERSAL_MODES)}"
+        )
+    if mode == "map":
+        warnings.warn(
+            OrmarDeprecationWarning(
+                "The 'map' relation traversal (precomputed relation tree) is "
+                "deprecated, the default 'instance' traversal follows the same "
+                "relations without it",
+                since=(0, 30),
+                expected_removal=(0, 31),
+            ),
+            stacklevel=stacklevel + 1,
+        )
+    return mode
+
+
+def relation_traversal_from_environment() -> str:
+    """
+    Returns the relation traversal mode set in the ``ORMAR_RELATION_TRAVERSAL``
+    environment variable, ``instance`` when it is not set.
+
+    :return: relation traversal mode
+    :rtype: str
+    :raises ValueError: on an unknown mode
+    """
+    return validate_relation_traversal(
+        mode=os.environ.get(RELATION_TRAVERSAL_ENV, DEFAULT_RELATION_TRAVERSAL),
+        stacklevel=2,
+    )
 
 
 class RelationTraversalSettings:
     """
     Holds the relation traversal mode of the process::
 
-        RelationTraversalSettings.mode  # -> "map"
+        RelationTraversalSettings.mode  # -> "instance"
     """
 
-    mode: str = os.environ.get("ORMAR_RELATION_TRAVERSAL", "map")
+    mode: str = relation_traversal_from_environment()
 
 
 def set_relation_traversal(mode: str) -> None:
     """
     Selects how relations are traversed by ``model_dump``, ``save_related``,
-    ``get_pydantic`` and ``select_all(follow=True)``::
+    ``get_pydantic`` and ``select_all(follow=True)``. The ``map`` mode is
+    deprecated and kept for one release as a transitional switch::
 
         set_relation_traversal(mode="instance")
 
-    :param mode: ``map`` for the cached relation tree, ``instance`` for the
-        path based traversal of the loaded instances
+    :param mode: ``instance`` for the path based traversal of the loaded
+        instances, ``map`` for the deprecated cached relation tree
     :type mode: str
     :raises ValueError: on an unknown mode
     """
-    if mode not in RELATION_TRAVERSAL_MODES:
-        raise ValueError(f"Unknown relation traversal mode: {mode}")
-    RelationTraversalSettings.mode = mode
+    RelationTraversalSettings.mode = validate_relation_traversal(
+        mode=mode, stacklevel=2
+    )
 
 
 def instance_traversal_enabled() -> bool:
