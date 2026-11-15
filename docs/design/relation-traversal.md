@@ -62,7 +62,14 @@ Checked against the sources and docs (versions pinned in the links).
 recipe keeps a `seen` set of instances
 ([faq/sessions](https://docs.sqlalchemy.org/en/20/faq/sessions.html#how-do-i-walk-all-objects-that-are-related-to-a-given-object)).
 Relationships are lazy by default; eager loading is opt-in per path
-(`selectinload`, `joinedload`, wildcard `"*"`). Eager loading configured on the
+(`selectinload`, `joinedload`, wildcard `"*"`). The wildcard is *not* one level:
+its loader key `relationship:_sa_default` is not path-qualified
+(`PropRegistry._default_path_loader_key` in `orm/path_registry.py`,
+`_get_context_loader` in `orm/interfaces.py`), so it applies to relationships at
+every depth. Checked on 2.0.55: `select(Chapter).options(joinedload("*"))` emits 3
+joins (Chapter→Book→Writer→Country) and stops at `Writer.books`, because Book is
+already on the path; `selectinload("*")` runs 4 statements. It follows reverse
+collections too. Eager loading configured on the
 relationship stops when the loader path already contains the target mapper, or
 at `join_depth` for self-referential relationships
 (`orm/strategies.py`, `JoinedLoader.setup_query`,
@@ -81,13 +88,20 @@ by a hash of the arguments
 **Peewee 3.17.** `playhouse.shortcuts.model_to_dict` walks the loaded instances.
 It cuts cycles per field, not per instance: `seen` is a set of `ForeignKeyField`s
 already followed, a backref child excludes the FK pointing back, and `max_depth`
-limits depth (unlimited by default)
+limits depth (unlimited by default). It does not follow back-references unless
+`backrefs=True` (default `False`), and many to many only with `manytomany=True`
+(default `False`)
 ([shortcuts.py](https://github.com/coleifer/peewee/blob/3.17.8/playhouse/shortcuts.py)).
 
 **Django + DRF.** Django has no nested serialization. `select_related()` without
-arguments follows only non-null forward FKs and stops at depth 5
-(`Query.max_depth`, "arbitrary limit … to prevent infinite recursion";
-[docs](https://docs.djangoproject.com/en/5.1/ref/models/querysets/#select-related)).
+arguments follows only non-null forward FKs (`select_related_descend`:
+`if not restricted: return not field.null`) and stops at depth 5
+(`Query.max_depth = 5`, "arbitrary limit … to prevent infinite recursion";
+`SQLCompiler.get_related_selections` bails when `cur_depth > max_depth`).
+Reverse relations are only walked when named explicitly, and only unique ones
+(reverse one-to-one); many to many never. `select_related` is "limited to
+single-valued relationships"
+([docs](https://docs.djangoproject.com/en/5.1/ref/models/querysets/#select-related)).
 DRF `ModelSerializer.Meta.depth` generates nested serializers for forward
 relations only (reverse relations must be listed explicitly), depth 0–10
 ([serializers](https://www.django-rest-framework.org/api-guide/serializers/#specifying-nested-serialization),
@@ -102,8 +116,10 @@ separate read models per direction (`HeroPublicWithTeam`, `TeamPublicWithHeroes`
 
 Common pattern: nobody precomputes a path tree per class. Instance walks keep a
 visited set or the current path; schema generators cut at a model type on the path
-and/or a depth limit; loaders follow explicit paths or a depth limit. I could not
-verify from the docs how deep SQLAlchemy's `joinedload("*")` recurses.
+and/or a depth limit; loaders follow explicit paths or a depth limit, and the "load everything"
+defaults of Django and Peewee stay on single-valued (forward) relations.
+SQLAlchemy's wildcard is the exception: every depth, every relationship, cut only
+at a mapper already on the path.
 
 ## Proposed design
 
@@ -169,21 +185,48 @@ walks it depth first. On the Shotris graph that needs a recursion limit above
 the default 1000 and takes ~50 s for 73 routes. Without back-relation variants, or
 with `max_depth`, it is 0.3–7 s and works with the default limit.
 
-### `follow=True`: a depth limit
+### `follow=True`: forward foreign keys with a depth limit
 
-`select_all(follow=True)` and `load_all(follow=True)` get `max_depth=`. In instance
-mode the default is `DEFAULT_FOLLOW_DEPTH = 3`, and the paths follow the same rule
-as the dump. On the Shotris graph:
+A forward FK (or one-to-one) has one parent per row, so joining it never
+multiplies rows; a reverse FK or a many to many does. Today `follow=True` follows
+every relation, which on dense graphs is both exponential to plan and multiplies
+rows.
 
-| depth | paths, worst model | paths, all 73 models |
-|---|---|---|
-| 1 | 40 | 216 |
-| 2 | 87 | 2 473 |
-| 3 | 565 | 9 206 |
-| 4 | 1 617 | 44 542 |
-| today (unlimited, buggy map) | 249 129 | 4 415 758 |
+Proposed default (prototype, instance mode): `follow=True` follows forward FKs
+(nullable ones too) up to `max_depth` (default `DEFAULT_FOLLOW_DEPTH = 5`, like
+Django). Reverse and many to many relations are loaded only by explicit
+`select_related` / `prefetch_related` or with `follow_reverse=N`, which also follows
+them in the first N levels (`True` = 1). The same path rule applies (no model twice
+above).
 
-Even depth 3 is a lot of joins for dense models, so 2 may be the better default.
+Joins per root on the Shotris graph (73 models; a join = one distinct relation
+path prefix):
+
+| rule | joins, worst model | median | total, 73 roots | plan build, all 73 |
+|---|---|---|---|---|
+| forward FK, depth 1 | 4 | 1 | 108 | 4 ms |
+| forward FK, depth 2 | 14 | 2 | 214 | 8 ms |
+| forward FK, depth 3 | 26 | 3 | 316 | 12 ms |
+| forward FK, depth 4 | 36 | 3 | 385 | 17 ms |
+| **forward FK, depth 5** | **41** | **3** | **420** | **20 ms** |
+| forward FK, depth 7 (saturated) | 44 | 3 | 431 | 22 ms |
+| forward non-null FK (Django), depth 1–5 | 4 / 8 / 10 / 12 / 13 | 1 / 2 / 3 / 3 / 3 | 84 / 146 / 178 / 189 / 192 | 3–12 ms |
+| forward FK depth 3 + reverse/M2M at level 1 | 115 | 4 | 666 | 20 ms |
+| forward FK depth 5 + reverse/M2M at level 1 | 169 | 4 | 937 | 35 ms |
+| forward FK depth 5 + reverse/M2M at levels 1–2 | 294 | 148 | 8 630 | 177 ms |
+| all relations, depth 1 / 2 / 3 / 4 | 40 / 117 / 639 / 2 036 | 2 / 40 / 143 / 728 | 216 / 2 668 / 11 350 / 53 280 | 4 / 26 / 112 / 510 ms |
+| all relations, today | 382 957 | 80 266 | 7 104 427 | 12.1 s, 207 MiB peak for one root |
+
+Building the SQL for the worst root takes 4 ms for forward FK depth 5 and 85 ms
+for all relations at depth 3. At depth 4 one all-relations plan cannot be built at
+all: the `AliasManager` raises an alias collision
+(`actor__training_invitations__training`), because aliases are per (table,
+relation) and the same relation appears on two paths.
+
+Rows: on a small graph (2 manuscripts, each with 2 FKs to the same writer and 3
+labels) the raw SQL returns 2 rows for the base query, 2 rows for
+`select_all(follow=True)` (forward FKs) and 6 with `follow_reverse=True`
+(`test_forward_follow_does_not_multiply_rows`).
 
 ### Result
 
@@ -270,8 +313,12 @@ variant build slow.
    suffix). Tests that introspect the exact nested schema shape change (5 in
    `test_geting_pydantic_models.py`).
    The order-dependent cache bug is gone.
-3. **`follow=True`.** Loads at most `max_depth` relations deep (default 3) instead
-   of the full (exponential) path list.
+3. **`follow=True`.** Loads forward FKs up to `max_depth` (default 5) instead of
+   every relation without limit. Reverse and many to many relations are no longer
+   loaded by `follow=True` alone; pass `follow_reverse=N` or name them in
+   `select_related`. In the ormar suite this changes 4 tests that load reverse
+   collections with `follow=True` (e.g. `Department.courses.students` needs
+   `follow_reverse=2`).
 4. **Private API.** `_relation_tree()`, `_iterate_related_models()` and the class
    attributes above are removed. `model_dump(relation_map=...)` stays.
 
@@ -281,18 +328,25 @@ variant build slow.
   (env), or `ormar.models.traversal.set_relation_traversal(mode=...)`.
 - Proposal for releases:
     1. next minor: ship `instance` as opt-in, `map` stays the default; document the
-       differences; `max_depth=` available in both modes;
+       differences; `max_depth=` and `follow_reverse=` available in both modes
+       (either one switches `follow=True` to the new rule). `follow=True` without
+       them in `map` mode warns that reverse and many to many relations will stop
+       being followed;
     2. following minor: `instance` becomes the default, `map` still selectable and
        deprecated (warning on use);
     3. after that: remove `map` and the tree code.
 - Migration note for users: if a response relied on the old dump shape of a dense
   graph, pass an explicit `include=`/`exclude=` or `relation_map=`; if
-  `load_all(follow=True)` must go deeper than the default, pass `max_depth=`; if
+  `select_all(follow=True)` / `load_all(follow=True)` must load reverse or many to
+  many relations, pass `follow_reverse=N` or list them in `select_related`; for
+  deeper forward chains pass `max_depth=`; if
   OpenAPI must show exactly one level of nesting, use `get_pydantic(max_depth=1)`.
 
 ## Open questions
 
-1. Default `max_depth` for `follow=True`: 2 or 3?
+1. `follow=True` default: forward FKs depth 5 (recommended; 41 joins worst, 95 % of
+   the saturated plan) or depth 3 (26 joins)? Include nullable FKs (recommended,
+   ormar FKs are nullable by default) or only non-null like Django?
 2. `get_pydantic()` default: back-relation variants (closest to today, slow OpenAPI
    on dense graphs) or one nested model per model (`omit_back_relations=False`,
    fastest, back-reference shown as optional)? Or back-relation variants with a

@@ -393,12 +393,17 @@ def test_node_cache_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_relation_paths_respect_depth() -> None:
     assert relation_paths(model=RingB, max_depth=0) == []
-    assert relation_paths(model=RingB, max_depth=1) == ["ring_a", "ring_cs"]
-    assert relation_paths(model=RingB, max_depth=2) == [
+    assert relation_paths(model=RingB, max_depth=5) == ["ring_a"]
+    assert relation_paths(model=RingB, max_depth=1, reverse_depth=1) == [
+        "ring_a",
+        "ring_cs",
+    ]
+    assert relation_paths(model=RingB, max_depth=2, reverse_depth=2) == [
         "ring_a__ring_cs",
         "ring_cs__ring_a",
     ]
-    assert relation_paths(model=Manuscript, max_depth=3) == [
+    assert relation_paths(model=RingC, max_depth=5) == ["ring_a", "ring_b__ring_a"]
+    assert relation_paths(model=Manuscript, max_depth=3, reverse_depth=3) == [
         "author",
         "editor",
         "labels",
@@ -421,11 +426,55 @@ async def test_save_related_and_load_all(instance_mode: None) -> None:
             count = await draft.save_related(follow=True, save_all=True)
             assert count == 4
             loaded = await Manuscript.objects.select_all(follow=True).get(id=1)
-            assert loaded.labels[0].name == "sci-fi"
             assert loaded.author.name == "Ann"
-            await loaded.load_all(follow=True, max_depth=1)
+            assert loaded.labels == []
+            loaded = await Manuscript.objects.select_all(
+                follow=True, follow_reverse=True
+            ).get(id=1)
+            assert loaded.labels[0].name == "sci-fi"
+            await loaded.load_all(follow=True, max_depth=1, follow_reverse=1)
             assert loaded.editor.name == "Ed"
             assert loaded.model_dump()["labels"][0]["manuscriptlabel"]["weight"] == 1
+
+
+async def raw_row_count(queryset: Any) -> int:
+    """
+    Counts the rows the database returns for a queryset, before ormar merges
+    them into instances.
+
+    :param queryset: queryset to run
+    :type queryset: Any
+    :return: number of raw rows
+    :rtype: int
+    """
+    async with base_ormar_config.database.connection() as connection:
+        result = await connection.execute(queryset.build_select_expression())
+        return len(result.fetchall())
+
+
+@pytest.mark.asyncio
+async def test_forward_follow_does_not_multiply_rows(instance_mode: None) -> None:
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            author = await Writer.objects.create(name="Ann")
+            labels = [
+                await Label.objects.create(name=f"l{index}") for index in range(3)
+            ]
+            for index in range(2):
+                draft = await Manuscript.objects.create(
+                    title=f"d{index}", author=author, editor=author
+                )
+                for label in labels:
+                    await draft.labels.add(label)
+            base = await raw_row_count(queryset=Manuscript.objects)
+            forward = await raw_row_count(
+                queryset=Manuscript.objects.select_all(follow=True)
+            )
+            with_reverse = await raw_row_count(
+                queryset=Manuscript.objects.select_all(follow=True, follow_reverse=True)
+            )
+            assert base == forward == 2
+            assert with_reverse == 6
 
 
 def schema_models(schema: Any) -> set:

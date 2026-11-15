@@ -22,7 +22,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from ormar.models.mixins.relation_mixin import RelationMixin
 
 RELATION_TRAVERSAL_MODES = ("map", "instance")
-DEFAULT_FOLLOW_DEPTH = 3
+DEFAULT_FOLLOW_DEPTH = 5
 
 
 class RelationTraversalSettings:
@@ -77,6 +77,7 @@ class RelationIndex:
     targets: dict[str, Any]
     names_by_target: dict[Any, tuple[str, ...]]
     nodes: dict[frozenset, "PathRelationMap"]
+    forward: frozenset[str]
 
 
 def relation_index(model: type["RelationMixin"]) -> RelationIndex:
@@ -104,7 +105,14 @@ def relation_index(model: type["RelationMixin"]) -> RelationIndex:
     names_by_target: dict[Any, tuple[str, ...]] = {}
     for relation, target in targets.items():
         names_by_target[target] = (*names_by_target.get(target, ()), relation)
-    index = RelationIndex(targets=targets, names_by_target=names_by_target, nodes={})
+    index = RelationIndex(
+        targets=targets,
+        names_by_target=names_by_target,
+        nodes={},
+        forward=frozenset(
+            relation for relation in targets if fields[relation].is_valid_uni_relation()
+        ),
+    )
     model._relation_index = (RelationGraph.version, index)  # type: ignore[attr-defined]
     return index
 
@@ -235,20 +243,27 @@ class PathRelationMap(dict):
 def relation_paths(
     model: type["RelationMixin"],
     max_depth: int,
+    reverse_depth: int = 0,
     ancestors: frozenset = NO_ANCESTORS,
 ) -> list[str]:
     """
-    Returns the ``select_related`` paths of every relation reachable from a
-    model, at most ``max_depth`` relations deep, with the same rule as
-    ``PathRelationMap``. Only the deepest paths are listed, as
+    Returns the ``select_related`` paths reachable from a model, at most
+    ``max_depth`` relations deep, with the same rule as ``PathRelationMap``.
+    Forward foreign keys (one parent per row) are followed at every level,
+    reverse and many to many relations (which multiply rows) only in the
+    first ``reverse_depth`` levels. Only the deepest paths are listed, as
     ``select_related`` loads the models along a path anyway::
 
-        relation_paths(model=Book, max_depth=2)  # -> ["author__country", "tags"]
+        relation_paths(model=Chapter, max_depth=5)  # -> ["book__author__country"]
+        relation_paths(model=Book, max_depth=1, reverse_depth=1)  # + "tags"
 
     :param model: model class to start from
     :type model: type[RelationMixin]
     :param max_depth: number of relations to follow at most
     :type max_depth: int
+    :param reverse_depth: number of first levels that follow reverse and many
+        to many relations too
+    :type reverse_depth: int
     :param ancestors: model classes on the path above the model
     :type ancestors: frozenset
     :return: relation paths in dunder notation
@@ -257,11 +272,14 @@ def relation_paths(
     paths: list[str] = []
     if max_depth <= 0:
         return paths
-    targets = relation_index(model=model).targets
+    index = relation_index(model=model)
     for relation in PathRelationMap.for_path(model=model, ancestors=ancestors):
+        if reverse_depth <= 0 and relation not in index.forward:
+            continue
         nested = relation_paths(
-            model=targets[relation],
+            model=index.targets[relation],
             max_depth=max_depth - 1,
+            reverse_depth=reverse_depth - 1,
             ancestors=ancestors | {model},
         )
         paths.extend(f"{relation}__{path}" for path in nested)

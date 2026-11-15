@@ -309,25 +309,38 @@ class RelationMixin:
         return cls._relation_tree()
 
     @classmethod
-    def _follow_relation_paths(cls, max_depth: Optional[int] = None) -> list[str]:
+    def _follow_relation_paths(
+        cls, max_depth: Optional[int] = None, follow_reverse: Union[bool, int] = 0
+    ) -> list[str]:
         """
         Returns the relation paths loaded by ``select_all(follow=True)`` and
-        ``load_all(follow=True)``. Without ``max_depth`` the cached
-        ``_iterate_related_models()`` paths are used, or in ``instance``
-        traversal mode the paths up to ``DEFAULT_FOLLOW_DEPTH`` relations deep::
+        ``load_all(follow=True)``. In ``map`` traversal mode without arguments
+        the cached ``_iterate_related_models()`` paths (every relation) are
+        used. Otherwise forward foreign keys are followed up to ``max_depth``
+        (``DEFAULT_FOLLOW_DEPTH``) relations deep, and reverse and many to many
+        relations only in the first ``follow_reverse`` levels (``True`` = 1)::
 
-            Book._follow_relation_paths(max_depth=1)  # -> ["author", "tags"]
+            Chapter._follow_relation_paths()  # -> ["book__author__country"]
+            Book._follow_relation_paths(follow_reverse=True)  # + "tags"
 
         :param max_depth: number of relations to follow at most
         :type max_depth: Optional[int]
+        :param follow_reverse: number of first levels that follow reverse and
+            many to many relations too
+        :type follow_reverse: Union[bool, int]
         :return: relation paths in dunder notation
         :rtype: list[str]
         """
-        if max_depth is None and not instance_traversal_enabled():
+        if (
+            max_depth is None
+            and not follow_reverse
+            and not instance_traversal_enabled()
+        ):
             return cls._iterate_related_models()
         return relation_paths(
             model=cls,
             max_depth=max_depth if max_depth is not None else DEFAULT_FOLLOW_DEPTH,
+            reverse_depth=int(follow_reverse),
         )
 
     @classmethod
