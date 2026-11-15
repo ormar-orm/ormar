@@ -1,8 +1,6 @@
 site_name: ormar
 site_url: 'https://ormar-orm.github.io/ormar/'
 site_description: A simple async ORM with fastapi in mind and pydantic validation.
-not_in_nav: |
-  /design/
 nav:
   - Overview: index.md
   - Installation: install.md
