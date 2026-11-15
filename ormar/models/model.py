@@ -12,14 +12,14 @@ from ormar.models import NewBaseModel  # noqa I100
 from ormar.models.model_row import ModelRow
 from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.expressions import Expression, F, expression_leaves
-from ormar.queryset.templates import (
-    delete_template,
-    insert_template,
-    pk_select_template,
-    update_template,
-    update_values_params,
-)
+from ormar.queryset.templates import insert_template, update_values_params
 from ormar.queryset.utils import subtract_dict, translate_list_to_dict
+from ormar.queryset.write_statements import (
+    DeleteWrite,
+    RowSelectWrite,
+    UpdateWrite,
+    row_template,
+)
 
 T = TypeVar("T", bound="Model")
 
@@ -122,7 +122,9 @@ class Model(ModelRow):
             return await self.update(**kwargs)
         if self.pk is None:
             return await self.save()
-        template = pk_select_template(model_cls=type(self), pk=self.pk)
+        template = row_template(
+            statement=RowSelectWrite, model_cls=type(self), pk=self.pk
+        )
         row = await self._execute_query(
             expr=template.statement, is_select=True, params=template.params
         )
@@ -656,7 +658,8 @@ class Model(ModelRow):
         )
         if self_fields:
             self_fields = self.translate_columns_to_aliases(self_fields)
-            template = update_template(
+            template = row_template(
+                statement=UpdateWrite,
                 model_cls=type(self),
                 values=self_fields,
                 pk=self.persisted_key,
@@ -762,7 +765,9 @@ class Model(ModelRow):
         """
         self.verify_writable()
         await self._emit_signal("pre_delete", instance=self)
-        template = delete_template(model_cls=type(self), pk=self.persisted_key)
+        template = row_template(
+            statement=DeleteWrite, model_cls=type(self), pk=self.persisted_key
+        )
         result = await self._execute_query(
             expr=template.statement, params=template.params
         )
@@ -809,7 +814,9 @@ class Model(ModelRow):
                 "loaded from the database"
             )
         else:
-            template = pk_select_template(model_cls=type(self), pk=self.persisted_key)
+            template = row_template(
+                statement=RowSelectWrite, model_cls=type(self), pk=self.persisted_key
+            )
             row = await self._execute_query(
                 expr=template.statement, is_select=True, params=template.params
             )

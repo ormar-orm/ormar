@@ -26,7 +26,7 @@ from ormar.exceptions import (
     QueryDefinitionError,
 )
 from ormar.models.row_registry import RowRegistry
-from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
+from ormar.queryset import FieldAccessor, SelectAction
 from ormar.queryset.actions.order_action import (
     OrderAction,
     RandomOrder,
@@ -37,7 +37,6 @@ from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.expressions import (
     Expression,
     Random,
-    expression_clause,
     expression_key,
     expression_params,
 )
@@ -49,7 +48,6 @@ from ormar.queryset.templates import (
     SlotBinder,
     StatementTemplate,
     aggregate_statement,
-    build_bulk_update,
     build_update_assignment,
     cached_statement,
     canonical_actions,
@@ -60,12 +58,10 @@ from ormar.queryset.templates import (
     insert_statement,
     order_cache_key,
     release_values,
-    rows_select_template,
     template_cache_for,
     template_params,
     update_values_key,
     update_values_params,
-    value_binds,
     value_params,
 )
 from ormar.queryset.utils import (
@@ -75,7 +71,18 @@ from ormar.queryset.utils import (
     normalize_slice,
 )
 from ormar.queryset.values_columns import extract_values, values_column_map
-from ormar.relations.aliases import alias_for, prefixed_table
+from ormar.queryset.write_statements import (
+    BulkUpdateWrite,
+    DeleteWrite,
+    LockWrite,
+    RowsLockWrite,
+    UpdateLockedWrite,
+    UpdateReturningWrite,
+    UpdateWrite,
+    WriteStatement,
+    forward_join_conditions,
+    row_template,
+)
 
 # rows built between yields to the event loop when materializing flat rows
 FLAT_ROWS_CHUNK = 500
@@ -101,7 +108,7 @@ def dump_for_save(obj: "Model") -> dict:
 
 
 if TYPE_CHECKING:  # pragma no cover
-    from ormar import ForeignKeyField, Model
+    from ormar import Model
     from ormar.models import T
     from ormar.models.excludable import ExcludableItems, Slot
     from ormar.models.ormar_config import OrmarConfig
@@ -535,30 +542,30 @@ class QuerySet(Generic[T]):
         release_values(statement=statement)
         return statement
 
-    def build_write_template(self, kind: str, values: dict) -> StatementTemplate:
+    def build_write_template(
+        self, statement: type[WriteStatement], values: dict
+    ) -> StatementTemplate:
         """
-        Return the filtered update (``kind="update"``) or delete of this
-        queryset, or a statement of ``update_returning()`` (see
-        ``build_write_statement``), from the model's template cache, with the
-        values to bind::
+        Return the filtered update or delete of this queryset, or a statement
+        of ``update_returning()`` (see ``write_statements``), from the model's
+        template cache, with the values to bind::
 
             Author.objects.filter(score__lt=5).build_write_template(
-                kind="update", values={"name": "x"}
+                statement=UpdateWrite, values={"name": "x"}
             )
             # -> UPDATE authors SET name=:ormar_v0 WHERE authors.score < :ormar_p0
             #    {"ormar_p0": 5, "ormar_v0": "x"}
 
-        The cache key is the kind, the filter and exclude clauses (see
-        ``templates.clauses_cache_key``), the joined relations (filters on
-        related models select the matched primary keys through them) and the
-        updated column names. Updates and deletes take no ordering or limit, so
-        nothing else changes their SQL. Filter values are named by
+        The cache key is the statement class, the filter and exclude clauses
+        (see ``templates.clauses_cache_key``), the joined relations (filters
+        on related models select the matched primary keys through them) and
+        the updated column names. Updates and deletes take no ordering or
+        limit, so nothing else changes their SQL. Filter values are named by
         ``SlotBinder`` like in reads, updated values like in single-row writes
         (``ormar_v{i}``).
 
-        :param kind: ``"update"``, ``"delete"``, ``"update_returning"``,
-            ``"lock"`` or ``"update_locked"``
-        :type kind: str
+        :param statement: statement class
+        :type statement: type[WriteStatement]
         :param values: updated values by column name (empty for delete)
         :type values: dict
         :return: statement and values to bind
@@ -572,7 +579,7 @@ class QuerySet(Generic[T]):
         for index, name in enumerate(names):
             params.update(expression_params(value=values[name], slot=f"ormar_v{index}"))
         key = (
-            kind,
+            statement,
             clauses_cache_key(clauses=self.filter_clauses),
             clauses_cache_key(clauses=self.exclude_clauses),
             tuple(self._select_related),
@@ -584,86 +591,17 @@ class QuerySet(Generic[T]):
             ),
         )
         cache = template_cache_for(model_cls=self.model)
-        statement = cache.get(key)
-        if statement is None:
-            statement = self.build_write_statement(
-                kind=kind, values=values, binder=SlotBinder(actions=actions)
+        cached = cache.get(key)
+        if cached is None:
+            cached = statement.make(
+                model=self.model,
+                queryset=self,
+                values=values,
+                binder=SlotBinder(actions=actions),
             )
-            release_values(statement=statement)
-            cache.put(key=key, statement=statement)
-        return StatementTemplate(statement=statement, params=params)
-
-    def build_write_statement(self, kind: str, values: dict, binder: SlotBinder) -> Any:
-        """
-        Build the filtered update or delete with named slots for the updated
-        values and the filter values.
-
-        Filters on related models restrict the rows to the primary keys the
-        same queryset selects (see ``matched_rows_clause``), so the statement
-        touches the rows the filters select in ``all()``. Expressions reading related
-        models join those tables in the statement (``UPDATE ... FROM`` or a
-        multi-table ``UPDATE`` on MySQL, as SQLAlchemy renders it).
-
-        ``update_returning()`` uses three more kinds:
-
-        * ``"update_returning"`` - the update with ``RETURNING`` all columns of
-          the table
-        * ``"lock"`` - without ``RETURNING`` (MySQL), ``SELECT <pk> ... FOR
-          UPDATE`` of the rows the update would touch: same tables, joins and
-          filters
-        * ``"update_locked"`` - the update of the locked rows, by primary key
-          (``PKS_SLOT``) instead of the filters
-
-        :param kind: ``"update"``, ``"delete"``, ``"update_returning"``,
-            ``"lock"`` or ``"update_locked"``
-        :type kind: str
-        :param values: updated values by column name (empty for delete)
-        :type values: dict
-        :param binder: names filter values for templates
-        :type binder: SlotBinder
-        :return: statement to execute
-        :rtype: Any
-        """
-        table = self.table
-        primary_key = self.model_config.pk
-        names = tuple(sorted(values))
-        binds = value_binds(table=table, names=names)
-        join_conditions: dict[str, list] = {}
-        for index, name in enumerate(names):
-            if isinstance(values[name], Expression):
-                columns = expression_columns(node=values[name], model=self.model)
-                binds[table.c[name]] = expression_clause(
-                    node=values[name], columns=columns, slot=f"ormar_v{index}"
-                )
-                for column in columns.values():
-                    join_conditions.update(
-                        forward_join_conditions(
-                            model=self.model, path=column.related_parts
-                        )
-                    )
-        expr: Any
-        if kind == "delete":
-            expr = table.delete()
-        elif kind == "lock":
-            expr = sqlalchemy.select(*primary_key.columns()).with_for_update(of=table)
-        else:
-            expr = table.update().values(binds)
-        for conditions in join_conditions.values():
-            expr = expr.where(*conditions)
-        if kind == "update_locked":
-            return expr.where(primary_key.in_clause(slot=PKS_SLOT))
-        if self._filters_read_related():
-            expr = expr.where(self.matched_rows_clause(binder=binder))
-        else:
-            expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
-                expr=expr
-            )
-            expr = FilterQuery(
-                filter_clauses=self.exclude_clauses, exclude=True, binder=binder
-            ).apply(expr=expr)
-        if kind == "update_returning":
-            return expr.returning(*table.c)
-        return expr
+            release_values(statement=cached)
+            cache.put(key=key, statement=cached)
+        return StatementTemplate(statement=cached, params=params)
 
     def matched_rows_clause(self, binder: Optional[SlotBinder]) -> Any:
         """
@@ -1403,7 +1341,7 @@ class QuerySet(Generic[T]):
         :rtype: int
         """
         updates = self.update_values(each=each, values=kwargs)
-        template = self.build_write_template(kind="update", values=updates)
+        template = self.build_write_template(statement=UpdateWrite, values=updates)
         async with self.model_config.database.get_query_executor() as executor:
             return await executor.execute(template.statement, template.params)
 
@@ -1438,7 +1376,7 @@ class QuerySet(Generic[T]):
         database = self.model_config.database
         if database.rules.update_returning:
             template = self.build_write_template(
-                kind="update_returning", values=updates
+                statement=UpdateReturningWrite, values=updates
             )
             async with database.get_query_executor() as executor:
                 rows = await executor.fetch_all(template.statement, template.params)
@@ -1465,8 +1403,8 @@ class QuerySet(Generic[T]):
         :return: rows of the updated models
         :rtype: list
         """
-        lock = self.build_write_template(kind="lock", values=updates)
-        update = self.build_write_template(kind="update_locked", values=updates)
+        lock = self.build_write_template(statement=LockWrite, values=updates)
+        update = self.build_write_template(statement=UpdateLockedWrite, values=updates)
         aliases = self.model_config.pk.column_aliases()
         async with self.model_config.database.get_query_executor(
             transactional=True
@@ -1478,7 +1416,7 @@ class QuerySet(Generic[T]):
             if len(aliases) == 1:
                 keys = [key[0] for key in keys]
             await executor.execute(update.statement, {**update.params, PKS_SLOT: keys})
-            rows = rows_select_template(model_cls=self.model, keys=keys)
+            rows = row_template(statement=RowsLockWrite, model_cls=self.model, pk=keys)
             return await executor.fetch_all(rows.statement, rows.params)
 
     def update_values(self, each: bool, values: dict) -> dict:
@@ -1578,7 +1516,7 @@ class QuerySet(Generic[T]):
                 "You cannot delete without filtering the queryset first. "
                 "If you want to delete all rows use delete(each=True)"
             )
-        template = self.build_write_template(kind="delete", values={})
+        template = self.build_write_template(statement=DeleteWrite, values={})
         async with self.model_config.database.get_query_executor() as executor:
             return await executor.execute(template.statement, template.params)
 
@@ -2361,9 +2299,8 @@ class QuerySet(Generic[T]):
         expr = cached_statement(
             model_cls=self.model,
             key=("bulk_update", updated, where_prefix),
-            builder=build_bulk_update,
-            table=self.table,
-            primary_key=key,
+            builder=BulkUpdateWrite.make,
+            model=self.model,
             columns=updated,
             where_prefix=where_prefix,
         )
@@ -2421,43 +2358,3 @@ class QuerySet(Generic[T]):
             order_bys=order_bys,
             reverse_result=bounds.reverse,
         )
-
-
-def forward_join_conditions(model: type["Model"], path: list[str]) -> dict[str, list]:
-    """
-    Return the join conditions of the tables an update expression reads from,
-    by table alias, following a path of foreign keys from ``model``::
-
-        forward_join_conditions(model=Track, path=["album"])
-        # -> {"t1b26c7": [t1b26c7_albums.id == tracks.album]}
-
-    Every table is aliased like in selects, so the conditions join the aliased
-    columns the expression reads.
-
-    :param model: updated model
-    :type model: type[Model]
-    :param path: relation names leading to the read model
-    :type path: list[str]
-    :raises QueryDefinitionError: if the path follows a reverse, many to many or
-        through relation, which can match many rows
-    :return: join conditions by table alias
-    :rtype: dict[str, list]
-    """
-    conditions: dict[str, list] = {}
-    source_table: Any = model.ormar_config.table
-    for index, relation in enumerate(path):
-        field = cast("ForeignKeyField", model.ormar_config.model_fields[relation])
-        if field.is_multi or field.virtual or field.is_through:
-            raise QueryDefinitionError(
-                f"update() expressions read related models only through foreign "
-                f"keys, '{'__'.join(path)}' follows the reverse or many to many "
-                f"relation '{relation}', which can match many rows."
-            )
-        alias = alias_for("__".join(path[: index + 1]))
-        target_table = prefixed_table(alias=alias, table=field.to.ormar_config.table)
-        conditions[alias] = [
-            target_table.c[pair.target_column] == source_table.c[pair.source_column]
-            for pair in field.link.pairs
-        ]
-        model, source_table = field.to, target_table
-    return conditions
