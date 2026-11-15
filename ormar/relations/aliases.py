@@ -38,15 +38,39 @@ def build_prefixed_columns(
     return tuple(column.label(f"{alias}{column.name}") for column in all_columns)
 
 
+# relation path that owns each alias handed out in this process; a path whose
+# hash is owned by another path gets the next free salted hash instead
+ALIAS_OWNERS: dict[str, str] = {}
+
+
+def path_hash(relation_path: str, attempt: int) -> str:
+    """
+    Returns a candidate alias of a relation path, the plain hash of the path on
+    the first attempt and a hash salted with the attempt number afterwards.
+
+    :param relation_path: dunder separated relation path
+    :type relation_path: str
+    :param attempt: number of the candidate, 0 for the plain hash
+    :type attempt: int
+    :return: candidate alias
+    :rtype: str
+    """
+    key = relation_path if not attempt else f"{relation_path}#{attempt}"
+    return "t" + hashlib.blake2s(key.encode(), digest_size=3).hexdigest()
+
+
 @lru_cache(maxsize=4096)
 def alias_for(relation_path: str) -> str:
     """
     Returns the table alias for a relation path.
 
     The path is the dunder separated chain of relation names from the root model
-    of a single sql statement, so the alias is unique within that statement and
-    stable between queries and processes. Through tables of many to many
-    relations use the relation path followed by the through model name.
+    of a single sql statement. The alias is a short hash of the path, stable
+    between queries and processes. Two paths with the same hash would share an
+    alias in one statement, so each alias is owned by the first path that gets
+    it and a colliding path gets a salted hash (an alias that is unique in the
+    process, but depends on which path came first). Through tables of many to
+    many relations use the relation path followed by the through model name.
 
     :param relation_path: dunder separated relation path, empty for the root model
     :type relation_path: str
@@ -55,7 +79,12 @@ def alias_for(relation_path: str) -> str:
     """
     if not relation_path:
         return ""
-    return "t" + hashlib.blake2s(relation_path.encode(), digest_size=3).hexdigest()
+    attempt = 0
+    alias = path_hash(relation_path=relation_path, attempt=attempt)
+    while ALIAS_OWNERS.setdefault(alias, relation_path) != relation_path:
+        attempt += 1
+        alias = path_hash(relation_path=relation_path, attempt=attempt)
+    return alias
 
 
 def prefixed_columns(
