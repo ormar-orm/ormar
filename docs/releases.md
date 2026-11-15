@@ -65,6 +65,9 @@
 
 ### ⚡ Performance
 
+* **Relation trees keep their size with densely related models** ([#1995](https://github.com/ormar-orm/ormar/issues/1995))
+
+    The default relation map of `model_dump()`, `save_related()` and `get_pydantic()` was built by spelling out every relation path of the model, and the number of paths grows exponentially with how densely models are related (self references, several relations to the same model, reverse relations). It was cached on each model class, so a class could keep tens of megabytes for the life of the process. The tree is now built directly and a repeated subtree is stored once: 7 models related to each other through foreign keys and many to many relations take 0.02 MB and 3 ms instead of 64 MB and 1.2 s per class. The tree has the same content; the flat list of paths is only built for `load_all(follow=True)` and `select_all(follow=True)`.
 * **Upserts reuse their compiled statement** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))
 
     SQLAlchemy gives no cache key to inserts with `ON CONFLICT` / `ON DUPLICATE KEY`, so `create(on_conflict=...)` and `bulk_create(on_conflict=...)` compiled their statement on every call and asyncpg prepared it again for a single row. Statements without a cache key now keep their plan per statement object (bounded like the other plans): a one-row upsert on PostgreSQL takes one round trip instead of up to three.
