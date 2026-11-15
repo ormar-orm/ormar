@@ -42,7 +42,7 @@ everywhere. `Author.get_pydantic()` followed by `Book.get_pydantic()` returns a
 
 The correct semantics depend on the whole ancestry, so the subtree of
 `(model, relation)` cannot be shared between ancestries. Measured on a real
-73-model application graph (Shotris):
+73-model graph of a private production app:
 
 | | value |
 |---|---|
@@ -194,8 +194,8 @@ relation and the selector.
 The OpenAPI cost of the variants decided the default (numbers below): with
 back-relation variants and no depth limit the schema graph of a dense application
 is one big strongly connected component, and pydantic's JSON-schema generation
-walks it depth first. On the Shotris graph that needs a recursion limit above
-the default 1000 and takes ~50 s for 73 routes. Without back-relation variants, or
+walks it depth first. On the 73-model graph of a private production app that
+needs a recursion limit above the default 1000 and takes ~50 s for 73 routes. Without back-relation variants, or
 with `max_depth`, it is 0.3–7 s and works with the default limit.
 
 ### `follow=True`: forward foreign keys with a depth limit
@@ -212,7 +212,7 @@ Django). Reverse and many to many relations are loaded only by explicit
 them in the first N levels (`True` = 1). The same path rule applies (no model twice
 above).
 
-Joins per root on the Shotris graph (73 models; a join = one distinct relation
+Joins per root on a private production app (73 models; a join = one distinct relation
 path prefix):
 
 | rule | joins, worst model | median | total, 73 roots | plan build, all 73 |
@@ -232,9 +232,8 @@ path prefix):
 
 Building the SQL for the worst root takes 4 ms for forward FK depth 5 and 85 ms
 for all relations at depth 3. At depth 4 one all-relations plan could not be built
-at all: `QueryDefinitionError: Alias ... of relation
-'actor__training_invitations__training' collides with an already joined
-relation`. The alias of a path is a 3 byte blake2s hash (`alias_for`, since
+at all: `QueryDefinitionError: Alias ... of relation '<a three relation path>' collides
+with an already joined relation`. The alias of a path is a 3 byte blake2s hash (`alias_for`, since
 0.27.0), so two of the 2 036 paths of one statement share a hash with a
 probability of about 11 %. The bug is on master too, independent of the traversal:
 two foreign keys named `fid` and `fwc` on one model (same digest `b4b8c6`) fail
@@ -294,7 +293,7 @@ country + 3 chapters + 2 tags, 8 dicts per row), tracemalloc on:
 
 The 736 B is the list of samples; nothing grows with the row count.
 
-Per-class memory on the Shotris graph (73 models):
+Per-class memory on a private production app (73 models):
 
 | | map | instance |
 |---|---|---|
@@ -303,8 +302,8 @@ Per-class memory on the Shotris graph (73 models):
 | node caches at the cap (every root walked 7 levels, 63 classes full) | | 16 138 nodes, 17.4 MiB, the hard upper bound for this graph |
 | `follow=True` paths | 807 MB, 11.6 s | nothing kept |
 
-`get_pydantic()` for all 73 Shotris models, then FastAPI `openapi()` with one route
-per model; every document validates with `openapi-spec-validator` (OpenAPI 3.1):
+`get_pydantic()` for all 73 models of a private production app, then FastAPI
+`openapi()` with one route per model; every document validates with `openapi-spec-validator` (OpenAPI 3.1):
 
 | variant | build | models | `openapi()` | components | size |
 |---|---|---|---|---|---|
