@@ -1,6 +1,7 @@
 """
-Write templates of a model: single-row insert, update, delete and the select
-by primary key, plus the statements of ``bulk_create`` and ``bulk_update``.
+Insert templates of a model: the single-row insert, the statements of
+``bulk_create`` and upserts. Updates, deletes and selects by primary key are
+built by ``write_statements``.
 
 Each runs one cached statement per model and set of written columns::
 
@@ -9,7 +10,6 @@ Each runs one cached statement per model and set of written columns::
     #    {"ormar_v0": "a", "ormar_v1": 1}
 """
 
-import enum
 import functools
 from typing import (
     TYPE_CHECKING,
@@ -36,31 +36,10 @@ from ormar.queryset.expressions import (
 )
 from ormar.queryset.templates.cache import StatementTemplate, cached_statement
 from ormar.queryset.templates.reads import release_values
-from ormar.queryset.templates.slots import PKS_SLOT, value_binds, value_params
+from ormar.queryset.templates.slots import value_binds, value_params
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.databases.dialects import DialectRules
-    from ormar.models.primary_key import PrimaryKey
-
-
-class WriteKind(str, enum.Enum):
-    """
-    Statements of ``QuerySet.build_write_statement``: filtered update and
-    delete, and the statements of ``update_returning()``.
-    """
-
-    #: ``UPDATE ... WHERE <filters>``
-    UPDATE = "update"
-    #: ``DELETE ... WHERE <filters>``
-    DELETE = "delete"
-    #: ``UPDATE ... WHERE <filters> RETURNING <all columns>``
-    UPDATE_RETURNING = "update_returning"
-    #: ``SELECT <pk> ... WHERE <filters> FOR UPDATE``: the rows the update
-    #: would touch, locked (``update_returning()`` without ``RETURNING``)
-    LOCK = "lock"
-    #: ``UPDATE ... WHERE <pk> IN (<locked keys>)``: the update of the locked
-    #: rows, by primary key (``PKS_SLOT``) instead of the filters
-    UPDATE_LOCKED = "update_locked"
 
 
 def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:
@@ -269,103 +248,6 @@ def build_conflict_insert(
     return statement
 
 
-def build_update(
-    table: sqlalchemy.Table, names: Tuple[str, ...], primary_key: "PrimaryKey"
-) -> Executable:
-    """
-    Build an update of the given columns of one row, by primary key::
-
-        UPDATE authors SET name=:ormar_v0, score=:ormar_v1
-        WHERE authors.id = :ormar_pk
-
-    :param table: written table
-    :type table: sqlalchemy.Table
-    :param names: updated column names, sorted
-    :type names: Tuple[str, ...]
-    :param primary_key: primary key of the written model
-    :type primary_key: PrimaryKey
-    :return: update statement
-    :rtype: Executable
-    """
-    return (
-        table.update()
-        .values(value_binds(table=table, names=names))
-        .where(primary_key.where_clause(slots=primary_key.bind_slots()))
-    )
-
-
-def build_delete(table: sqlalchemy.Table, primary_key: "PrimaryKey") -> Executable:
-    """
-    Build a delete of one row, by primary key::
-
-        DELETE FROM authors WHERE authors.id = :ormar_pk
-
-    :param table: written table
-    :type table: sqlalchemy.Table
-    :param primary_key: primary key of the written model
-    :type primary_key: PrimaryKey
-    :return: delete statement
-    :rtype: Executable
-    """
-    return table.delete().where(
-        primary_key.where_clause(slots=primary_key.bind_slots())
-    )
-
-
-def build_pk_select(table: sqlalchemy.Table, primary_key: "PrimaryKey") -> Executable:
-    """
-    Build a select of all columns of one row, by primary key::
-
-        SELECT authors.id, authors.name, ... FROM authors
-        WHERE authors.id = :ormar_pk
-
-    :param table: queried table
-    :type table: sqlalchemy.Table
-    :param primary_key: primary key of the queried model
-    :type primary_key: PrimaryKey
-    :return: select statement
-    :rtype: Executable
-    """
-    return table.select().where(
-        primary_key.where_clause(slots=primary_key.bind_slots())
-    )
-
-
-def build_bulk_update(
-    table: sqlalchemy.Table,
-    primary_key: "PrimaryKey",
-    columns: Tuple[str, ...],
-    where_prefix: str = "new_",
-) -> Executable:
-    """
-    Build the per-row update used by ``bulk_update``: values and the primary
-    key come from ``new_<column>`` parameters of each row, and the driver's
-    ``executemany`` runs it once per row::
-
-        UPDATE authors SET name=:new_name WHERE authors.id = :new_id
-        # rows: [{"new_id": 1, "new_name": "a"}, {"new_id": 2, "new_name": "b"}]
-
-    :param table: updated table
-    :type table: sqlalchemy.Table
-    :param primary_key: primary key of the updated model
-    :type primary_key: PrimaryKey
-    :param columns: updated column names
-    :type columns: Tuple[str, ...]
-    :param where_prefix: prefix of the key parameters matching each row:
-        ``new_`` for the current key, ``old_`` for the persisted key when a
-        key in the batch was changed (the key columns are then also updated)
-    :type where_prefix: str
-    :return: update statement
-    :rtype: Executable
-    """
-    slots = tuple(where_prefix + alias for alias in primary_key.column_aliases())
-    return (
-        table.update()
-        .where(primary_key.where_clause(slots=slots, typed=False))
-        .values({name: sqlalchemy.bindparam(key="new_" + name) for name in columns})
-    )
-
-
 def insert_statement(
     model_cls: Type[Any],
     names: Tuple[str, ...],
@@ -504,146 +386,3 @@ def insert_template(
     statement = insert_statement(model_cls=model_cls, names=names, **statement_kwargs)
     params = value_params(names=names, values=values)
     return StatementTemplate(statement=statement, params=params)
-
-
-def update_template(
-    model_cls: Type[Any], values: Mapping[str, Any], pk: Any
-) -> StatementTemplate:
-    """
-    Return the update of one row of a model for the given column values, used
-    by ``Model.update()``::
-
-        update_template(model_cls=Author, values={"name": "b"}, pk=1)
-        # -> UPDATE authors SET name=:ormar_v0 WHERE authors.id = :ormar_pk
-        #    {"ormar_v0": "b", "ormar_pk": 1}
-
-    :param model_cls: updated model
-    :type model_cls: Type[Any]
-    :param values: values by column name
-    :type values: Mapping[str, Any]
-    :param pk: primary key of the row
-    :type pk: Any
-    :return: statement and values to bind
-    :rtype: StatementTemplate
-    """
-    names = tuple(sorted(values))
-    table = model_cls.ormar_config.table
-    primary_key = model_cls.ormar_config.pk
-    statement = cached_statement(
-        model_cls=model_cls,
-        key=("update", names),
-        builder=build_update,
-        table=table,
-        names=names,
-        primary_key=primary_key,
-    )
-    params = {
-        **value_params(names=names, values=values),
-        **primary_key.bind_params(value=pk),
-    }
-    return StatementTemplate(statement=statement, params=params)
-
-
-def delete_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
-    """
-    Return the delete of one row of a model, used by ``Model.delete()``::
-
-        delete_template(model_cls=Author, pk=1)
-        # -> DELETE FROM authors WHERE authors.id = :ormar_pk, {"ormar_pk": 1}
-
-    :param model_cls: model
-    :type model_cls: Type[Any]
-    :param pk: primary key of the row
-    :type pk: Any
-    :return: statement and values to bind
-    :rtype: StatementTemplate
-    """
-    table = model_cls.ormar_config.table
-    primary_key = model_cls.ormar_config.pk
-    statement = cached_statement(
-        model_cls=model_cls,
-        key=("delete",),
-        builder=build_delete,
-        table=table,
-        primary_key=primary_key,
-    )
-    params = primary_key.bind_params(value=pk)
-    return StatementTemplate(statement=statement, params=params)
-
-
-def pk_select_template(model_cls: Type[Any], pk: Any) -> StatementTemplate:
-    """
-    Return the select of one row of a model by primary key, used by
-    ``Model.load()`` and the existence check of ``upsert(force_save=True)``::
-
-        pk_select_template(model_cls=Author, pk=1)
-        # -> SELECT ... FROM authors WHERE authors.id = :ormar_pk, {"ormar_pk": 1}
-
-    :param model_cls: model
-    :type model_cls: Type[Any]
-    :param pk: primary key of the row
-    :type pk: Any
-    :return: statement and values to bind
-    :rtype: StatementTemplate
-    """
-    table = model_cls.ormar_config.table
-    primary_key = model_cls.ormar_config.pk
-    statement = cached_statement(
-        model_cls=model_cls,
-        key=("select_pk",),
-        builder=build_pk_select,
-        table=table,
-        primary_key=primary_key,
-    )
-    params = primary_key.bind_params(value=pk)
-    return StatementTemplate(statement=statement, params=params)
-
-
-def build_rows_select(table: sqlalchemy.Table, primary_key: "PrimaryKey") -> Executable:
-    """
-    Build a locking select of all columns of the rows of a list of primary
-    keys::
-
-        SELECT authors.id, authors.name, ... FROM authors
-        WHERE authors.id IN (:ormar_pks) FOR UPDATE
-
-    A locking read sees the latest committed row versions; a plain read in a
-    MySQL REPEATABLE READ transaction would see its snapshot, which misses
-    changes committed by others to rows this update left unchanged. The rows
-    are already locked by the update, so the lock costs nothing.
-
-    :param table: queried table
-    :type table: sqlalchemy.Table
-    :param primary_key: primary key of the queried model
-    :type primary_key: PrimaryKey
-    :return: select statement
-    :rtype: Executable
-    """
-    return table.select().where(primary_key.in_clause(slot=PKS_SLOT)).with_for_update()
-
-
-def rows_select_template(model_cls: Type[Any], keys: list) -> StatementTemplate:
-    """
-    Return the select of the rows of a model with the given primary keys, used
-    by ``update_returning()`` to read the updated rows back where the database
-    has no ``UPDATE ... RETURNING``::
-
-        rows_select_template(model_cls=Author, keys=[1, 2])
-        # -> SELECT ... FROM authors WHERE authors.id IN (:ormar_pks)
-        #    {"ormar_pks": [1, 2]}
-
-    :param model_cls: model
-    :type model_cls: Type[Any]
-    :param keys: primary key values, tuples of column values for a composite key
-    :type keys: list
-    :return: statement and values to bind
-    :rtype: StatementTemplate
-    """
-    statement = cached_statement(
-        model_cls=model_cls,
-        key=("select_pks",),
-        builder=build_rows_select,
-        table=model_cls.ormar_config.table,
-        primary_key=model_cls.ormar_config.pk,
-    )
-    return StatementTemplate(statement=statement, params={PKS_SLOT: keys})

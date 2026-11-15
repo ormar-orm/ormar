@@ -44,7 +44,8 @@ The package is split by role:
 - ``cache_keys`` - what makes two querysets share a statement
 - ``slots`` - named bind parameters and the values collected per call
 - ``reads`` - statements wrapped around a select, clean-up of templates
-- ``writes`` - single-row write templates and bulk statements
+- ``writes`` - insert and upsert templates (updates, deletes and selects by
+  primary key: ``ormar.queryset.write_statements``)
 """
 
 from ormar.queryset.templates.cache import (
@@ -79,19 +80,10 @@ from ormar.queryset.templates.slots import (
     value_params,
 )
 from ormar.queryset.templates.writes import (
-    WriteKind,
-    build_bulk_update,
-    build_delete,
     build_insert,
-    build_pk_select,
-    build_update,
     build_update_assignment,
-    delete_template,
     insert_statement,
     insert_template,
-    pk_select_template,
-    rows_select_template,
-    update_template,
     update_values_key,
     update_values_params,
 )
@@ -103,33 +95,24 @@ __all__ = [
     "PKS_SLOT",
     "SlotBinder",
     "StatementTemplate",
-    "WriteKind",
     "TemplateCache",
     "action_cache_key",
     "aggregate_statement",
-    "build_bulk_update",
-    "build_delete",
     "build_insert",
-    "build_pk_select",
-    "build_update",
     "build_update_assignment",
     "cached_statement",
     "canonical_actions",
     "clauses_cache_key",
     "count_statement",
-    "delete_template",
     "excludable_cache_key",
     "exists_statement",
     "insert_statement",
     "insert_template",
     "iter_actions",
     "order_cache_key",
-    "pk_select_template",
     "release_values",
-    "rows_select_template",
     "template_cache_for",
     "template_params",
-    "update_template",
     "update_values_key",
     "update_values_params",
     "value_binds",

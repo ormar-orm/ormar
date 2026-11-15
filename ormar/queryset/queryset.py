@@ -47,9 +47,7 @@ from ormar.queryset.templates import (
     PKS_SLOT,
     SlotBinder,
     StatementTemplate,
-    WriteKind,
     aggregate_statement,
-    build_bulk_update,
     build_update_assignment,
     cached_statement,
     canonical_actions,
@@ -60,7 +58,6 @@ from ormar.queryset.templates import (
     insert_statement,
     order_cache_key,
     release_values,
-    rows_select_template,
     template_cache_for,
     template_params,
     update_values_key,
@@ -74,7 +71,18 @@ from ormar.queryset.utils import (
     normalize_slice,
 )
 from ormar.queryset.values_columns import extract_values, values_column_map
-from ormar.queryset.write_statements import WRITE_STATEMENTS, forward_join_conditions
+from ormar.queryset.write_statements import (
+    BulkUpdateWrite,
+    DeleteWrite,
+    LockWrite,
+    RowsLockWrite,
+    UpdateLockedWrite,
+    UpdateReturningWrite,
+    UpdateWrite,
+    WriteStatement,
+    forward_join_conditions,
+    row_template,
+)
 
 # rows built between yields to the event loop when materializing flat rows
 FLAT_ROWS_CHUNK = 500
@@ -534,29 +542,30 @@ class QuerySet(Generic[T]):
         release_values(statement=statement)
         return statement
 
-    def build_write_template(self, kind: WriteKind, values: dict) -> StatementTemplate:
+    def build_write_template(
+        self, statement: type[WriteStatement], values: dict
+    ) -> StatementTemplate:
         """
-        Return the filtered update (``WriteKind.UPDATE``) or delete of this
-        queryset, or a statement of ``update_returning()`` (see
-        ``build_write_statement``), from the model's template cache, with the
-        values to bind::
+        Return the filtered update or delete of this queryset, or a statement
+        of ``update_returning()`` (see ``write_statements``), from the model's
+        template cache, with the values to bind::
 
             Author.objects.filter(score__lt=5).build_write_template(
-                kind=WriteKind.UPDATE, values={"name": "x"}
+                statement=UpdateWrite, values={"name": "x"}
             )
             # -> UPDATE authors SET name=:ormar_v0 WHERE authors.score < :ormar_p0
             #    {"ormar_p0": 5, "ormar_v0": "x"}
 
-        The cache key is the kind, the filter and exclude clauses (see
-        ``templates.clauses_cache_key``), the joined relations (filters on
-        related models select the matched primary keys through them) and the
-        updated column names. Updates and deletes take no ordering or limit, so
-        nothing else changes their SQL. Filter values are named by
+        The cache key is the statement class, the filter and exclude clauses
+        (see ``templates.clauses_cache_key``), the joined relations (filters
+        on related models select the matched primary keys through them) and
+        the updated column names. Updates and deletes take no ordering or
+        limit, so nothing else changes their SQL. Filter values are named by
         ``SlotBinder`` like in reads, updated values like in single-row writes
         (``ormar_v{i}``).
 
-        :param kind: statement to build
-        :type kind: WriteKind
+        :param statement: statement class
+        :type statement: type[WriteStatement]
         :param values: updated values by column name (empty for delete)
         :type values: dict
         :return: statement and values to bind
@@ -570,7 +579,7 @@ class QuerySet(Generic[T]):
         for index, name in enumerate(names):
             params.update(expression_params(value=values[name], slot=f"ormar_v{index}"))
         key = (
-            kind,
+            statement,
             clauses_cache_key(clauses=self.filter_clauses),
             clauses_cache_key(clauses=self.exclude_clauses),
             tuple(self._select_related),
@@ -582,40 +591,17 @@ class QuerySet(Generic[T]):
             ),
         )
         cache = template_cache_for(model_cls=self.model)
-        statement = cache.get(key)
-        if statement is None:
-            statement = self.build_write_statement(
-                kind=kind, values=values, binder=SlotBinder(actions=actions)
+        cached = cache.get(key)
+        if cached is None:
+            cached = statement.make(
+                model=self.model,
+                queryset=self,
+                values=values,
+                binder=SlotBinder(actions=actions),
             )
-            release_values(statement=statement)
-            cache.put(key=key, statement=statement)
-        return StatementTemplate(statement=statement, params=params)
-
-    def build_write_statement(
-        self, kind: WriteKind, values: dict, binder: SlotBinder
-    ) -> Any:
-        """
-        Build the update, delete or row lock of this queryset with named slots
-        for the updated values and the filter values, by the statement class
-        of the kind (see ``write_statements``)::
-
-            WriteKind.UPDATE            -> UpdateWrite
-            WriteKind.DELETE            -> DeleteWrite
-            WriteKind.UPDATE_RETURNING  -> UpdateReturningWrite
-            WriteKind.LOCK              -> LockWrite
-            WriteKind.UPDATE_LOCKED     -> UpdateLockedWrite
-
-        :param kind: statement to build
-        :type kind: WriteKind
-        :param values: updated values by column name (empty for delete)
-        :type values: dict
-        :param binder: names filter values for templates
-        :type binder: SlotBinder
-        :return: statement to execute
-        :rtype: Any
-        """
-        statement_cls = WRITE_STATEMENTS[kind]
-        return statement_cls(queryset=self, values=values, binder=binder).build()
+            release_values(statement=cached)
+            cache.put(key=key, statement=cached)
+        return StatementTemplate(statement=cached, params=params)
 
     def matched_rows_clause(self, binder: Optional[SlotBinder]) -> Any:
         """
@@ -1355,7 +1341,7 @@ class QuerySet(Generic[T]):
         :rtype: int
         """
         updates = self.update_values(each=each, values=kwargs)
-        template = self.build_write_template(kind=WriteKind.UPDATE, values=updates)
+        template = self.build_write_template(statement=UpdateWrite, values=updates)
         async with self.model_config.database.get_query_executor() as executor:
             return await executor.execute(template.statement, template.params)
 
@@ -1390,7 +1376,7 @@ class QuerySet(Generic[T]):
         database = self.model_config.database
         if database.rules.update_returning:
             template = self.build_write_template(
-                kind=WriteKind.UPDATE_RETURNING, values=updates
+                statement=UpdateReturningWrite, values=updates
             )
             async with database.get_query_executor() as executor:
                 rows = await executor.fetch_all(template.statement, template.params)
@@ -1417,8 +1403,8 @@ class QuerySet(Generic[T]):
         :return: rows of the updated models
         :rtype: list
         """
-        lock = self.build_write_template(kind=WriteKind.LOCK, values=updates)
-        update = self.build_write_template(kind=WriteKind.UPDATE_LOCKED, values=updates)
+        lock = self.build_write_template(statement=LockWrite, values=updates)
+        update = self.build_write_template(statement=UpdateLockedWrite, values=updates)
         aliases = self.model_config.pk.column_aliases()
         async with self.model_config.database.get_query_executor(
             transactional=True
@@ -1430,7 +1416,7 @@ class QuerySet(Generic[T]):
             if len(aliases) == 1:
                 keys = [key[0] for key in keys]
             await executor.execute(update.statement, {**update.params, PKS_SLOT: keys})
-            rows = rows_select_template(model_cls=self.model, keys=keys)
+            rows = row_template(statement=RowsLockWrite, model_cls=self.model, pk=keys)
             return await executor.fetch_all(rows.statement, rows.params)
 
     def update_values(self, each: bool, values: dict) -> dict:
@@ -1530,7 +1516,7 @@ class QuerySet(Generic[T]):
                 "You cannot delete without filtering the queryset first. "
                 "If you want to delete all rows use delete(each=True)"
             )
-        template = self.build_write_template(kind=WriteKind.DELETE, values={})
+        template = self.build_write_template(statement=DeleteWrite, values={})
         async with self.model_config.database.get_query_executor() as executor:
             return await executor.execute(template.statement, template.params)
 
@@ -2313,9 +2299,8 @@ class QuerySet(Generic[T]):
         expr = cached_statement(
             model_cls=self.model,
             key=("bulk_update", updated, where_prefix),
-            builder=build_bulk_update,
-            table=self.table,
-            primary_key=key,
+            builder=BulkUpdateWrite.make,
+            model=self.model,
             columns=updated,
             where_prefix=where_prefix,
         )

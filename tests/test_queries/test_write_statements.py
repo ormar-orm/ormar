@@ -7,7 +7,17 @@ from sqlalchemy.dialects import mysql, postgresql, sqlite
 import ormar
 from ormar import F
 from ormar.queryset.queryset import QuerySet
-from ormar.queryset.templates import WriteKind
+from ormar.queryset.write_statements import (
+    BulkUpdateWrite,
+    DeleteWrite,
+    LockWrite,
+    RowSelectWrite,
+    RowsLockWrite,
+    UpdateLockedWrite,
+    UpdateReturningWrite,
+    UpdateWrite,
+    WriteStatement,
+)
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -42,7 +52,13 @@ class Release(ormar.Model):
 
 create_test_database = init_tests(base_ormar_config)
 
-KINDS = tuple(WriteKind)
+KINDS: dict[str, type[WriteStatement]] = {
+    "update": UpdateWrite,
+    "delete": DeleteWrite,
+    "update_returning": UpdateReturningWrite,
+    "lock": LockWrite,
+    "update_locked": UpdateLockedWrite,
+}
 DIALECTS = (sqlite.dialect(), postgresql.dialect(), mysql.dialect())
 
 # name -> (queryset, updated values); the delete ignores the values
@@ -71,7 +87,7 @@ CASES: dict[str, Callable[[], tuple[QuerySet, dict]]] = {
 }
 
 
-# SQL of each case, kind and dialect as built before WriteKind
+# SQL of each case, statement and dialect as built before the statement classes
 EXPECTED = {
     "all_rows": {
         "update": {
@@ -702,11 +718,7 @@ EXPECTED = {
 }
 
 
-def rendered(queryset: QuerySet, kind: WriteKind, values: dict, dialect: Any) -> str:
-    template = queryset.build_write_template(
-        kind=kind, values={} if kind is WriteKind.DELETE else values
-    )
-    statement: Any = template.statement
+def compiled(statement: Any, dialect: Any) -> str:
     sql = " ".join(str(statement.compile(dialect=dialect)).split())
     # SQLAlchemy 2.1 casts postgres bind parameters (``::INTEGER``), 2.0 does not
     return re.sub(r"::[A-Z]+", "", sql)
@@ -716,12 +728,13 @@ def all_rendered() -> dict:
     result: dict = {}
     for case, factory in CASES.items():
         queryset, values = factory()
-        for kind in KINDS:
+        for kind, statement in KINDS.items():
+            template = queryset.build_write_template(
+                statement=statement, values={} if statement is DeleteWrite else values
+            )
             for dialect in DIALECTS:
-                result.setdefault(case, {}).setdefault(kind.value, {})[dialect.name] = (
-                    rendered(
-                        queryset=queryset, kind=kind, values=values, dialect=dialect
-                    )
+                result.setdefault(case, {}).setdefault(kind, {})[dialect.name] = (
+                    compiled(statement=template.statement, dialect=dialect)
                 )
     return result
 
@@ -729,9 +742,218 @@ def all_rendered() -> dict:
 @pytest.mark.asyncio
 async def test_write_statements_are_unchanged():
     """
-    Every kind of build_write_statement for each way of restricting the
+    Every filtered statement class for each way of restricting the
     rows (all rows, filters, matched rows of related filters, composite key)
     with plain values and expressions reading related models, on each dialect.
     """
     async with base_ormar_config.database:
         assert all_rendered() == EXPECTED
+
+
+# SQL of the statements by primary key of each model as built before the
+# statement classes: single-row writes, the locked read back of
+# update_returning() and the per-row update of bulk_update (by the current
+# key, or by the persisted one when a key moved)
+EXPECTED_ROWS = {
+    "Track": {
+        "update": {
+            "sqlite": "UPDATE wst_tracks SET title=?, position=? "
+            "WHERE wst_tracks.id = ?",
+            "postgresql": "UPDATE wst_tracks SET title=%(ormar_v1)s, "
+            "position=%(ormar_v0)s WHERE wst_tracks.id "
+            "= %(ormar_pk)s",
+            "mysql": "UPDATE wst_tracks SET title=%s, position=%s "
+            "WHERE wst_tracks.id = %s",
+        },
+        "delete": {
+            "sqlite": "DELETE FROM wst_tracks WHERE wst_tracks.id = ?",
+            "postgresql": "DELETE FROM wst_tracks WHERE wst_tracks.id = %(ormar_pk)s",
+            "mysql": "DELETE FROM wst_tracks WHERE wst_tracks.id = %s",
+        },
+        "select_pk": {
+            "sqlite": "SELECT wst_tracks.id, wst_tracks.title, "
+            "wst_tracks.position, wst_tracks.album FROM "
+            "wst_tracks WHERE wst_tracks.id = ?",
+            "postgresql": "SELECT wst_tracks.id, "
+            "wst_tracks.title, wst_tracks.position, "
+            "wst_tracks.album FROM wst_tracks WHERE "
+            "wst_tracks.id = %(ormar_pk)s",
+            "mysql": "SELECT wst_tracks.id, wst_tracks.title, "
+            "wst_tracks.position, wst_tracks.album FROM "
+            "wst_tracks WHERE wst_tracks.id = %s",
+        },
+        "select_pks": {
+            "sqlite": "SELECT wst_tracks.id, wst_tracks.title, "
+            "wst_tracks.position, wst_tracks.album "
+            "FROM wst_tracks WHERE wst_tracks.id IN "
+            "(__[POSTCOMPILE_ormar_pks])",
+            "postgresql": "SELECT wst_tracks.id, "
+            "wst_tracks.title, "
+            "wst_tracks.position, wst_tracks.album "
+            "FROM wst_tracks WHERE wst_tracks.id "
+            "IN (__[POSTCOMPILE_ormar_pks]) FOR "
+            "UPDATE",
+            "mysql": "SELECT wst_tracks.id, wst_tracks.title, "
+            "wst_tracks.position, wst_tracks.album FROM "
+            "wst_tracks WHERE wst_tracks.id IN "
+            "(__[POSTCOMPILE_ormar_pks]) FOR UPDATE",
+        },
+        "bulk_new": {
+            "sqlite": "UPDATE wst_tracks SET title=?, position=? "
+            "WHERE wst_tracks.id = ?",
+            "postgresql": "UPDATE wst_tracks SET "
+            "title=%(new_title)s, "
+            "position=%(new_position)s WHERE "
+            "wst_tracks.id = %(new_id)s",
+            "mysql": "UPDATE wst_tracks SET title=%s, position=%s "
+            "WHERE wst_tracks.id = %s",
+        },
+        "bulk_old": {
+            "sqlite": "UPDATE wst_tracks SET id=?, title=?, "
+            "position=? WHERE wst_tracks.id = ?",
+            "postgresql": "UPDATE wst_tracks SET id=%(new_id)s, "
+            "title=%(new_title)s, "
+            "position=%(new_position)s WHERE "
+            "wst_tracks.id = %(old_id)s",
+            "mysql": "UPDATE wst_tracks SET id=%s, title=%s, "
+            "position=%s WHERE wst_tracks.id = %s",
+        },
+    },
+    "Release": {
+        "update": {
+            "sqlite": "UPDATE wst_releases SET copies=? WHERE "
+            "wst_releases.region = ? AND "
+            "wst_releases.number = ?",
+            "postgresql": "UPDATE wst_releases SET "
+            "copies=%(ormar_v0)s WHERE "
+            "wst_releases.region = %(ormar_pk_0)s "
+            "AND wst_releases.number = "
+            "%(ormar_pk_1)s",
+            "mysql": "UPDATE wst_releases SET copies=%s WHERE "
+            "wst_releases.region = %s AND "
+            "wst_releases.number = %s",
+        },
+        "delete": {
+            "sqlite": "DELETE FROM wst_releases WHERE "
+            "wst_releases.region = ? AND "
+            "wst_releases.number = ?",
+            "postgresql": "DELETE FROM wst_releases WHERE "
+            "wst_releases.region = %(ormar_pk_0)s "
+            "AND wst_releases.number = "
+            "%(ormar_pk_1)s",
+            "mysql": "DELETE FROM wst_releases WHERE "
+            "wst_releases.region = %s AND "
+            "wst_releases.number = %s",
+        },
+        "select_pk": {
+            "sqlite": "SELECT wst_releases.region, "
+            "wst_releases.number, "
+            "wst_releases.copies, wst_releases.album "
+            "FROM wst_releases WHERE "
+            "wst_releases.region = ? AND "
+            "wst_releases.number = ?",
+            "postgresql": "SELECT wst_releases.region, "
+            "wst_releases.number, "
+            "wst_releases.copies, "
+            "wst_releases.album FROM wst_releases "
+            "WHERE wst_releases.region = "
+            "%(ormar_pk_0)s AND "
+            "wst_releases.number = %(ormar_pk_1)s",
+            "mysql": "SELECT wst_releases.region, "
+            "wst_releases.number, wst_releases.copies, "
+            "wst_releases.album FROM wst_releases "
+            "WHERE wst_releases.region = %s AND "
+            "wst_releases.number = %s",
+        },
+        "select_pks": {
+            "sqlite": "SELECT wst_releases.region, "
+            "wst_releases.number, "
+            "wst_releases.copies, wst_releases.album "
+            "FROM wst_releases WHERE "
+            "(wst_releases.region, "
+            "wst_releases.number) IN "
+            "(__[POSTCOMPILE_ormar_pks])",
+            "postgresql": "SELECT wst_releases.region, "
+            "wst_releases.number, "
+            "wst_releases.copies, "
+            "wst_releases.album FROM "
+            "wst_releases WHERE "
+            "(wst_releases.region, "
+            "wst_releases.number) IN "
+            "(__[POSTCOMPILE_ormar_pks]) FOR "
+            "UPDATE",
+            "mysql": "SELECT wst_releases.region, "
+            "wst_releases.number, "
+            "wst_releases.copies, wst_releases.album "
+            "FROM wst_releases WHERE "
+            "(wst_releases.region, "
+            "wst_releases.number) IN "
+            "(__[POSTCOMPILE_ormar_pks]) FOR UPDATE",
+        },
+        "bulk_new": {
+            "sqlite": "UPDATE wst_releases SET copies=? WHERE "
+            "wst_releases.region = ? AND "
+            "wst_releases.number = ?",
+            "postgresql": "UPDATE wst_releases SET "
+            "copies=%(new_copies)s WHERE "
+            "wst_releases.region = %(new_region)s "
+            "AND wst_releases.number = "
+            "%(new_number)s",
+            "mysql": "UPDATE wst_releases SET copies=%s WHERE "
+            "wst_releases.region = %s AND "
+            "wst_releases.number = %s",
+        },
+        "bulk_old": {
+            "sqlite": "UPDATE wst_releases SET region=?, "
+            "number=?, copies=? WHERE "
+            "wst_releases.region = ? AND "
+            "wst_releases.number = ?",
+            "postgresql": "UPDATE wst_releases SET "
+            "region=%(new_region)s, "
+            "number=%(new_number)s, "
+            "copies=%(new_copies)s WHERE "
+            "wst_releases.region = %(old_region)s "
+            "AND wst_releases.number = "
+            "%(old_number)s",
+            "mysql": "UPDATE wst_releases SET region=%s, "
+            "number=%s, copies=%s WHERE "
+            "wst_releases.region = %s AND "
+            "wst_releases.number = %s",
+        },
+    },
+}
+
+
+def row_statement(model: Any, kind: str) -> Any:
+    updated = ("position", "title") if model is Track else ("copies",)
+    key_columns = model.ormar_config.pk.column_aliases()
+    statements: dict[str, Callable[[], Any]] = {
+        "update": lambda: UpdateWrite.make(
+            model=model, values=dict.fromkeys(updated, 1)
+        ),
+        "delete": lambda: DeleteWrite.make(model=model),
+        "select_pk": lambda: RowSelectWrite.make(model=model),
+        "select_pks": lambda: RowsLockWrite.make(model=model),
+        "bulk_new": lambda: BulkUpdateWrite.make(
+            model=model, columns=updated, where_prefix="new_"
+        ),
+        "bulk_old": lambda: BulkUpdateWrite.make(
+            model=model, columns=updated + key_columns, where_prefix="old_"
+        ),
+    }
+    return statements[kind]()
+
+
+def test_row_statements_are_unchanged():
+    """
+    Every statement by primary key for a single and a composite key, on each
+    dialect.
+    """
+    result: dict = {}
+    for model in (Track, Release):
+        for kind in EXPECTED_ROWS[model.__name__]:
+            for dialect in DIALECTS:
+                result.setdefault(model.__name__, {}).setdefault(kind, {})[
+                    dialect.name
+                ] = compiled(statement=row_statement(model, kind), dialect=dialect)
+    assert result == EXPECTED_ROWS
