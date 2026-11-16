@@ -345,6 +345,7 @@ class ExcludableItems:
         self.items: dict[str, Excludable] = dict()
         self._flatten_paths: set[PathParts] = set()
         self._flatten_map_cache: Optional[FlattenMap] = None
+        self._included_relation_paths: set[PathParts] = set()
 
     @classmethod
     def from_excludable(cls, other: "ExcludableItems") -> "ExcludableItems":
@@ -360,6 +361,7 @@ class ExcludableItems:
         for key, value in other.items.items():
             new_excludable.items[key] = value.get_copy()
         new_excludable._flatten_paths = set(other._flatten_paths)
+        new_excludable._included_relation_paths = set(other._included_relation_paths)
         return new_excludable
 
     def include_entry_count(self) -> int:
@@ -370,6 +372,17 @@ class ExcludableItems:
         for key in self.items.keys():
             count += len(self.items[key].include)
         return count
+
+    def included_relation_paths(self) -> set[str]:
+        """
+        Returns the relation paths that fields included with ``fields()``
+        are nested in, e.g. ``{"category__created_by"}`` for
+        ``fields(["category__created_by__name"])``.
+
+        :return: dunder relation paths of the included nested fields
+        :rtype: set[str]
+        """
+        return {"__".join(path_parts) for path_parts in self._included_relation_paths}
 
     def flatten_map(self) -> Optional[FlattenMap]:
         """
@@ -603,6 +616,8 @@ class ExcludableItems:
             for item in items:
                 self._flatten_paths.add(path_parts + (item,))
             self._flatten_map_cache = None
+        elif slot == "include" and path_parts:
+            self._included_relation_paths.add(path_parts)
 
         key = self._make_key(model_cls, alias)
         excludable = self.items.setdefault(key, Excludable())

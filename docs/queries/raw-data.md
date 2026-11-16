@@ -33,6 +33,19 @@ You can select a subset of fields with fields parameter, that accepts the same s
 
 Note that passing fields to `values(fields)` is actually a shortcut for calling `fields(fields).values()`.
 
+Related fields in `fields` (like `category__name`) join their relations automatically, so
+you do not need to call `select_related()` for them. The same applies to related fields
+selected earlier with `fields()`. A field naming the relation itself (like `category`) is
+still the foreign key value, unless the relation is joined with `select_related()`.
+
+```python
+await Post.objects.values(["name", "category__name"])
+```
+
+!!!warning
+    Joining a reverse or many-to-many relation (like `posts__name` from `Category`) returns
+    one row per related model, just like `select_related()` does.
+
 !!!tip
     To read more about what you can pass to fields and how to select nested models fields read [selecting columns](./select-columns.md#fields) docs
 
@@ -210,6 +223,19 @@ Return a list of tuples representing the values of the columns coming from the d
 You can select a subset of fields with fields parameter, that accepts the same set of parameters as `fields()` method.
 
 Note that passing fields to `values_list(fields)` is actually a shortcut for calling `fields(fields).values_list()`.
+
+Related fields in `fields` (like `category__name`) join their relations automatically, so
+you do not need to call `select_related()` for them. The same applies to related fields
+selected earlier with `fields()`. A field naming the relation itself (like `category`) is
+still the foreign key value, unless the relation is joined with `select_related()`.
+
+```python
+await Post.objects.values_list(["name", "category__name"])
+```
+
+!!!warning
+    Joining a reverse or many-to-many relation (like `posts__name` from `Category`) returns
+    one row per related model, just like `select_related()` does.
 
 !!!tip
     To read more about what you can pass to fields and how to select nested models fields read [selecting columns](./select-columns.md#fields) docs

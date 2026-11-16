@@ -1119,6 +1119,13 @@ class QuerySet(Generic[T]):
             return await self.fields(columns=fields).values(
                 _as_dict=_as_dict, _flatten=_flatten, exclude_through=exclude_through
             )
+        missing_joins = self._excludable.included_relation_paths().difference(
+            self._select_related
+        )
+        if missing_joins:
+            return await self.select_related(related=sorted(missing_joins)).values(
+                _as_dict=_as_dict, _flatten=_flatten, exclude_through=exclude_through
+            )
         excludable = self._excludable.with_projection_exclusions(
             source_model=self.model,
             select_related=self._select_related,
