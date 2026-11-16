@@ -755,3 +755,18 @@ async def test_values_m2m_relation_field_returns_row_per_related_model():
             {"name": "Anonymous", "roles__name": "admin"},
             {"name": "Anonymous", "roles__name": "editor"},
         ]
+
+
+@pytest.mark.asyncio
+async def test_values_relation_name_without_join_returns_foreign_key():
+    async with base_ormar_config.database:
+        posts = await Post.objects.values(["name", "category"])
+        assert posts == [{"name": post_name, "category": 1} for post_name in POST_NAMES]
+
+
+@pytest.mark.asyncio
+async def test_querysetproxy_values_related_field_joins_relation_automatically():
+    async with base_ormar_config.database:
+        category = await Category.objects.get(name="News")
+        posts = await category.posts.values_list(["name", "category__sort_order"])
+        assert posts == [(post_name, 0) for post_name in POST_NAMES]

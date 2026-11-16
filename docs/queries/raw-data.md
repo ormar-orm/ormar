@@ -35,8 +35,8 @@ Note that passing fields to `values(fields)` is actually a shortcut for calling 
 
 Related fields in `fields` (like `category__name`) join their relations automatically, so
 you do not need to call `select_related()` for them. The same applies to related fields
-selected earlier with `fields()`. A field naming the relation itself (like `category`) is
-still the foreign key value, unless the relation is joined with `select_related()`.
+selected earlier with `fields()`, while `exclude_fields()` never joins. A field naming
+only the relation (like `category`) stays the foreign key value.
 
 ```python
 await Post.objects.values(["name", "category__name"])
@@ -226,8 +226,8 @@ Note that passing fields to `values_list(fields)` is actually a shortcut for cal
 
 Related fields in `fields` (like `category__name`) join their relations automatically, so
 you do not need to call `select_related()` for them. The same applies to related fields
-selected earlier with `fields()`. A field naming the relation itself (like `category`) is
-still the foreign key value, unless the relation is joined with `select_related()`.
+selected earlier with `fields()`, while `exclude_fields()` never joins. A field naming
+only the relation (like `category`) stays the foreign key value.
 
 ```python
 await Post.objects.values_list(["name", "category__name"])
