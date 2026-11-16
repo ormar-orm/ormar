@@ -2,10 +2,11 @@ import pytest
 import pytest_asyncio
 
 import ormar
-from ormar.queryset.templates import (
-    delete_template,
-    pk_select_template,
-    update_template,
+from ormar.queryset.write_statements import (
+    DeleteWrite,
+    RowSelectWrite,
+    UpdateWrite,
+    row_template,
 )
 from tests.lifespan import init_tests
 from tests.settings import create_config
@@ -31,12 +32,12 @@ async def connected():
 
 @pytest.mark.asyncio
 async def test_aliased_pk_write_templates(connected):
-    update = update_template(model_cls=Gadget, values={"name": "b"}, pk=1)
+    update = row_template(UpdateWrite, model_cls=Gadget, pk=1, values={"name": "b"})
     assert "WHERE kw_gadgets.gadget_id = :ormar_pk" in str(update.statement)
     assert update.params["ormar_pk"] == 1
-    delete = delete_template(model_cls=Gadget, pk=1)
+    delete = row_template(DeleteWrite, model_cls=Gadget, pk=1)
     assert "WHERE kw_gadgets.gadget_id = :ormar_pk" in str(delete.statement)
-    select = pk_select_template(model_cls=Gadget, pk=1)
+    select = row_template(RowSelectWrite, model_cls=Gadget, pk=1)
     assert "WHERE kw_gadgets.gadget_id = :ormar_pk" in str(select.statement)
 
 

@@ -10,6 +10,10 @@ Following methods allow you to execute a query but instead of returning ormar mo
     * `QuerysetProxy.values(fields = None, exclude_through = False)` method
     * `QuerysetProxy.values_list(fields = None, exclude_through= False, flatten = False)` method
 
+!!!tip
+    To run your own SQLAlchemy core statements on ormar's connection see
+    [SQLAlchemy core statements](./sqlalchemy-core.md).
+
 !!!danger
     Note that `values` and `values_list` skips parsing the result to ormar models so skips also the validation of the result!
 
@@ -28,6 +32,19 @@ Return a list of dictionaries representing the values of the columns coming from
 You can select a subset of fields with fields parameter, that accepts the same set of parameters as `fields()` method.
 
 Note that passing fields to `values(fields)` is actually a shortcut for calling `fields(fields).values()`.
+
+Related fields in `fields` (like `category__name`) join their relations automatically, so
+you do not need to call `select_related()` for them. The same applies to related fields
+selected earlier with `fields()`, while `exclude_fields()` never joins. A field naming
+only the relation (like `category`) stays the foreign key value.
+
+```python
+await Post.objects.values(["name", "category__name"])
+```
+
+!!!warning
+    Joining a reverse or many-to-many relation (like `posts__name` from `Category`) returns
+    one row per related model, just like `select_related()` does.
 
 !!!tip
     To read more about what you can pass to fields and how to select nested models fields read [selecting columns](./select-columns.md#fields) docs
@@ -206,6 +223,19 @@ Return a list of tuples representing the values of the columns coming from the d
 You can select a subset of fields with fields parameter, that accepts the same set of parameters as `fields()` method.
 
 Note that passing fields to `values_list(fields)` is actually a shortcut for calling `fields(fields).values_list()`.
+
+Related fields in `fields` (like `category__name`) join their relations automatically, so
+you do not need to call `select_related()` for them. The same applies to related fields
+selected earlier with `fields()`, while `exclude_fields()` never joins. A field naming
+only the relation (like `category`) stays the foreign key value.
+
+```python
+await Post.objects.values_list(["name", "category__name"])
+```
+
+!!!warning
+    Joining a reverse or many-to-many relation (like `posts__name` from `Category`) returns
+    one row per related model, just like `select_related()` does.
 
 !!!tip
     To read more about what you can pass to fields and how to select nested models fields read [selecting columns](./select-columns.md#fields) docs

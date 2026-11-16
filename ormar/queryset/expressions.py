@@ -7,6 +7,18 @@ database, used as filter values and as values of ``QuerySet.update()``::
     Member.objects.filter(id=1).update(read_id=Greatest(F("read_id"), 10))
     Player.objects.update(each=True, score=Random())
 
+and in ``update_values`` of upserts, where ``Inserted("path")`` is the value
+the insert tried to write::
+
+    Level.objects.create(
+        ...,
+        on_conflict="update",
+        update_values={
+            "completed": F("completed") + 1,
+            "read_id": Greatest(F("read_id"), Inserted("read_id")),
+        },
+    )
+
 ``Model.field`` accessors are expressions themselves, ``F("path")`` names a
 field by its path. Expression classes define only dunders and underscored
 names, so they never shadow a field reached through a ``FieldAccessor``.
@@ -80,6 +92,22 @@ class F(Expression):
     def __init__(self, path: str) -> None:
         """
         :param path: field name, prefixed by its relation path if any
+        :type path: str
+        """
+        self._path = path
+
+
+class Inserted(Expression):
+    """
+    Value a conflicting insert tried to write into a field, only in
+    ``update_values`` of ``create()`` / ``bulk_create()`` with
+    ``on_conflict="update"``: ``excluded.<column>`` on PostgreSQL and SQLite,
+    ``VALUES(<column>)`` on MySQL. ``F()`` there is the existing row's column.
+    """
+
+    def __init__(self, path: str) -> None:
+        """
+        :param path: name of a non-relation field of the inserted model
         :type path: str
         """
         self._path = path
@@ -245,8 +273,8 @@ SQL_FUNCTIONS: dict[str, Callable[..., Any]] = {
 
 def expression_leaves(node: Any) -> Iterator[Any]:
     """
-    Yield the fields (``F``) and literals of an expression, left to right;
-    ``Random()`` is neither.
+    Yield the fields (``F``, ``Inserted``) and literals of an expression, left
+    to right; ``Random()`` is neither.
 
     :param node: expression node
     :type node: Any
@@ -271,6 +299,7 @@ def expression_key(node: Any) -> Any:
         F("a") + 1  # -> (operator.add, ("f", "a"), int)
         Greatest(F("a"), 0)  # -> ("greatest", (("f", "a"), int))
         Random()  # -> ("random",)
+        Inserted("a")  # -> ("inserted", "a")
 
     :param node: expression node
     :type node: Any
@@ -290,6 +319,8 @@ def expression_key(node: Any) -> Any:
         )
     if isinstance(node, Random):
         return ("random",)
+    if isinstance(node, Inserted):
+        return ("inserted", node._path)
     return ("f", node._path) if isinstance(node, F) else type(node)
 
 
@@ -308,7 +339,9 @@ def expression_params(value: Any, slot: str) -> dict[str, Any]:
     if not isinstance(value, Expression):
         return {slot: value}
     literals = [
-        leaf for leaf in expression_leaves(node=value) if not isinstance(leaf, F)
+        leaf
+        for leaf in expression_leaves(node=value)
+        if not isinstance(leaf, (F, Inserted))
     ]
     return {f"{slot}_{index}": literal for index, literal in enumerate(literals)}
 
@@ -318,6 +351,7 @@ def expression_clause(
     columns: Mapping[str, "QueryAction"],
     slot: Optional[str],
     index: Optional[Iterator[int]] = None,
+    inserted: Any = None,
 ) -> Any:
     """
     Build the SQL of an expression, reading each field from the aliased column
@@ -325,6 +359,10 @@ def expression_clause(
     parameters named ``{slot}_{k}`` and typed from the left operand and the
     literal (``release_values`` drops the literal afterwards), without one
     they stay plain values.
+
+    ``Inserted`` fields are read from ``inserted``, the row a conflicting
+    insert tried to write (only upserts resolve them, see
+    ``expression_columns``).
 
     :param node: expression node
     :type node: Any
@@ -335,20 +373,31 @@ def expression_clause(
     :type slot: Optional[str]
     :param index: counter of the literals already named
     :type index: Optional[Iterator[int]]
+    :param inserted: columns of the inserted row (``excluded`` or MySQL
+        ``inserted``) of an upsert
+    :type inserted: Any
     :return: SQL expression
     :rtype: Any
     """
     if isinstance(node, F):
         return columns[node._path].aliased_column
+    if isinstance(node, Inserted):
+        return inserted[columns[node._path].column.name]
     if isinstance(node, Random):
         return RandomFloat()
     index = index or itertools.count()
     if isinstance(node, Function):
-        return function_clause(node=node, columns=columns, slot=slot, index=index)
-    left = expression_clause(node=node._left, columns=columns, slot=slot, index=index)
+        return function_clause(
+            node=node, columns=columns, slot=slot, index=index, inserted=inserted
+        )
+    left = expression_clause(
+        node=node._left, columns=columns, slot=slot, index=index, inserted=inserted
+    )
     right = node._right
     if isinstance(right, Expression):
-        right = expression_clause(node=right, columns=columns, slot=slot, index=index)
+        right = expression_clause(
+            node=right, columns=columns, slot=slot, index=index, inserted=inserted
+        )
     elif slot is not None:
         right = BindParameter(
             key=f"{slot}_{next(index)}",
@@ -364,6 +413,7 @@ def function_clause(
     columns: Mapping[str, "QueryAction"],
     slot: Optional[str],
     index: Iterator[int],
+    inserted: Any = None,
 ) -> Any:
     """
     Build the SQL of a function. Literal arguments are bound like the literals
@@ -379,6 +429,8 @@ def function_clause(
     :type slot: Optional[str]
     :param index: counter of the literals already named
     :type index: Iterator[int]
+    :param inserted: columns of the inserted row of an upsert
+    :type inserted: Any
     :return: SQL function call
     :rtype: Any
     """
@@ -389,7 +441,11 @@ def function_clause(
     for position, argument in enumerate(node._arguments):
         if isinstance(argument, Expression):
             expression_clauses[position] = expression_clause(
-                node=argument, columns=columns, slot=slot, index=index
+                node=argument,
+                columns=columns,
+                slot=slot,
+                index=index,
+                inserted=inserted,
             )
         else:
             literal_keys[position] = f"{slot}_{next(index)}" if slot else None

@@ -7,7 +7,7 @@ import pytest
 import ormar
 import ormar.models.model
 from ormar import pre_update
-from ormar.queryset.templates import update_template
+from ormar.queryset.write_statements import UpdateWrite, row_template
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -86,11 +86,12 @@ def written_columns(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     """Records the column names of every ``Model.update()`` statement."""
     calls: list[list[str]] = []
 
-    def spy(model_cls: Any, values: Any, pk: Any) -> Any:
-        calls.append(sorted(values))
-        return update_template(model_cls=model_cls, values=values, pk=pk)
+    def spy(statement: Any, model_cls: Any, pk: Any, values: Any = None) -> Any:
+        if statement is UpdateWrite:
+            calls.append(sorted(values))
+        return row_template(statement, model_cls=model_cls, pk=pk, values=values)
 
-    monkeypatch.setattr(ormar.models.model, "update_template", spy)
+    monkeypatch.setattr(ormar.models.model, "row_template", spy)
     return calls
 
 

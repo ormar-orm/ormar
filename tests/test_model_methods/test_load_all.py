@@ -168,7 +168,7 @@ async def test_loading_nested():
             await hq.nicks.add(nick2)
 
             hq = await HQ.objects.get(name="Main")
-            await hq.load_all(follow=True)
+            await hq.load_all(follow=True, follow_reverse=1)
 
             assert hq.nicks[0] == nick1
             assert hq.nicks[0].name == "BazingaO"
@@ -180,7 +180,9 @@ async def test_loading_nested():
             assert hq.nicks[1].level.name == "Low"
             assert hq.nicks[1].level.language.name == "English"
 
-            hq2 = await HQ.objects.select_all(follow=True).get(name="Main")
+            hq2 = await HQ.objects.select_all(follow=True, follow_reverse=1).get(
+                name="Main"
+            )
             assert hq2.nicks[0] == nick1
             assert hq2.nicks[0].name == "BazingaO"
             assert hq2.nicks[0].level.name == "High"
@@ -203,13 +205,15 @@ async def test_loading_nested():
             assert hq5.nicks[1].level.name == "Low"
             assert hq5.nicks[1].level.language.name == "English"
 
-            await hq.load_all(follow=True, exclude="nicks__level__language")
+            await hq.load_all(
+                follow=True, follow_reverse=1, exclude="nicks__level__language"
+            )
             assert len(hq.nicks) == 2
             assert hq.nicks[0].level.language is None
             assert hq.nicks[1].level.language is None
 
             hq3 = (
-                await HQ.objects.select_all(follow=True)
+                await HQ.objects.select_all(follow=True, follow_reverse=1)
                 .exclude_fields("nicks__level__language")
                 .get(name="Main")
             )
@@ -217,17 +221,19 @@ async def test_loading_nested():
             assert hq3.nicks[0].level.language is None
             assert hq3.nicks[1].level.language is None
 
-            await hq.load_all(follow=True, exclude="nicks__level__language__level")
+            await hq.load_all(
+                follow=True, follow_reverse=1, exclude="nicks__level__language__level"
+            )
             assert len(hq.nicks) == 2
             assert hq.nicks[0].level.language is not None
             assert hq.nicks[0].level.language.level is None
             assert hq.nicks[1].level.language is not None
             assert hq.nicks[1].level.language.level is None
 
-            await hq.load_all(follow=True, exclude="nicks__level")
+            await hq.load_all(follow=True, follow_reverse=1, exclude="nicks__level")
             assert len(hq.nicks) == 2
             assert hq.nicks[0].level is None
             assert hq.nicks[1].level is None
 
-            await hq.load_all(follow=True, exclude="nicks")
+            await hq.load_all(follow=True, follow_reverse=1, exclude="nicks")
             assert len(hq.nicks) == 0

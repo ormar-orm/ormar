@@ -284,11 +284,11 @@ Of course the end result is a string with json representation and not a dictiona
 
 ## get_pydantic()
 
-`get_pydantic(include: Union[set, dict] = None, exclude: Union[set, dict] = None, flatten_fields: Union[set, list, str, tuple, dict, FieldAccessor] = None, flatten_all: bool = False)`
+`get_pydantic(include: Union[set, dict] = None, exclude: Union[set, dict] = None, flatten_fields: Union[set, list, str, tuple, dict, FieldAccessor] = None, flatten_all: bool = False, max_depth: Optional[int] = None, omit_back_relations: Optional[bool] = None)`
 
 This method allows you to generate `pydantic` models from your ormar models without you needing to retype all the fields.
 
-Note that if you have nested models, it **will generate whole tree of pydantic models for you!** but in a way that prevents cyclic references issues.
+Note that if you have nested models, it **will generate the nested pydantic models for you!** Each related model is generated once as a named nested model and relations point to it, so cyclic relations become recursive models (`$ref` in OpenAPI) instead of an endless tree.
 
 Moreover, you can pass `exclude` and/or `include` parameters to keep only the fields that you want to, including in nested models.
 
@@ -335,9 +335,12 @@ class Category(BaseModel):
     name: Optional[str] = "test"
 ```
 
-!!!warning
-    Note that it's not a good practice to have several classes with same name in one module, as well as it would break `fastapi` docs.
-    Thats's why ormar adds random 3 uppercase letters to the class name. In example above it means that in reality class would be named i.e. `Category_XIP(BaseModel)`.
+!!!note
+    Generated models have stable names, so the OpenAPI document does not change between runs or with the order
+    of `get_pydantic()` calls: `Category` for the model itself, `Category_nested` for the model nested in another one,
+    `Category_depth2` / `Item_nested_depth1` with `max_depth`, and a short hash of the selector appended when
+    `include`, `exclude` or `flatten_fields` are passed (e.g. `Category_3f9a1c`). Models with the same class name in
+    different modules get a number suffix. Generated models are cached, so equal calls return the same class.
 
 To exclude or include nested fields you can use dict or double underscores.
 
@@ -357,9 +360,52 @@ class Category(BaseModel):
     items: Optional[list[Item]]
 ```
 
-Of course, you can use also deeply nested structures and ormar will generate it's pydantic equivalent for you (in a way that exclude loops).
+Without `include`/`exclude` the nested model keeps its relations, also the one back to the parent, as optional fields
+pointing to the nested models of the related models:
 
-Note how `Item` model above does not have a reference to `Category` although in ormar the relation is bidirectional (and `ormar.Item` has `categories` field).
+```python
+PydanticCategory = Category.get_pydantic()
+# equivalent of:
+class Category_nested(BaseModel):
+    id: Optional[int] = None
+    name: str
+    items: Optional[list["Item_nested"]] = None
+
+class Item_nested(BaseModel):
+    id: Optional[int] = None
+    name: Optional[str] = "test"
+    category: Optional[Category_nested] = None
+
+class Category(BaseModel):
+    id: Optional[int] = None
+    name: str
+    items: Optional[list[Item_nested]] = None
+```
+
+Relation fields of nested models are always optional, as `model_dump()` stops where a model is already on the path
+(the `items` of a category nested in an item are not dumped). The root model keeps the required/optional rules of its own fields.
+
+Two parameters change the nesting:
+
+* `max_depth=N` nests at most N levels of relations, deeper relations are left out (and the schema is not recursive).
+  `max_depth=1` gives one level of nested models without their relations.
+* `omit_back_relations=True` leaves the relation back to the parent out of nested models, so `Item` nested in
+  `Category.items` has no `category` field. This generates one nested model per (model, relation) pair
+  (`Item_without_category_nested`, the root is `Category_without_back_relations`), more models and a slower OpenAPI generation on densely related schemas.
+
+```python
+Category.get_pydantic(max_depth=1)  # items without their relations
+Category.get_pydantic(omit_back_relations=True)  # items without category
+```
+
+A generated model validates an ormar instance through its `model_dump()`, so you can return ormar models from
+a `fastapi` endpoint with a `get_pydantic()` response model even when the loaded relations point back to each other.
+
+!!!note
+    Until 0.30.0 nested models were a fixed-depth copy of the relation tree without the relation back to the parent,
+    and with random names. The deprecated `ORMAR_RELATION_TRAVERSAL=map` switch keeps that shape for one release
+    (unless `max_depth` or `omit_back_relations` is passed); it is removed in 0.31.0. Use `max_depth=1` or
+    `omit_back_relations=True` to keep a response close to the old shape.
 
 !!!warning
     Note that the generated pydantic model will inherit all **field** validators from the original `ormar` model, that includes the ormar choices validator as well as validators defined with `pydantic.validator` decorator.
@@ -437,23 +483,31 @@ track.album.name # will return 'Malibu'
 
 ## load_all()
 
-`load_all(follow: bool = False, exclude: Union[list, str, set, dict] = None) -> Model`
+`load_all(follow: bool = False, exclude: Union[list, str, set, dict] = None, order_by: Union[list, str] = None, max_depth: Optional[int] = None, follow_reverse: Union[bool, int] = 0) -> Model`
 
 Method works like `load()` but also goes through all relations of the `Model` on which the method is called, 
 and reloads them from database.
 
 By default, the `load_all` method loads only models that are directly related (one step away) to the model on which the method is called.
 
-But you can specify the `follow=True` parameter to traverse through nested models and load all of them in the relation tree.
+But you can specify the `follow=True` parameter to traverse through nested models. Like
+[`select_all(follow=True)`](../queries/joins-and-subqueries.md#select_all) it follows foreign keys
+(nullable ones too) up to `max_depth` levels (default 5), and reverse foreign keys and many to many relations
+only in the first `follow_reverse` levels (`True` = 1, default 0).
+
+```python
+await department.load_all(follow=True, follow_reverse=2)  # courses and their students
+await chapter.load_all(follow=True, max_depth=2)  # book and its author
+```
 
 !!!warning
-    To avoid circular updates with `follow=True` set, `load_all` keeps a set of already visited Models, 
-    and won't perform nested `loads` on Models that were already visited.
+    To avoid circular loads with `follow=True` set, a relation is not followed when its target model is
+    already on the path above (a direct self relation is followed once).
     
     So if you have a diamond or circular relations types you need to perform the loads in a manual way.
     
     ```python
-    # in example like this the second Street (coming from City) won't be load_all, so ZipCode won't be reloaded
+    # in example like this the second Street (coming from City) won't be followed, so ZipCode won't be reloaded
     Street -> District -> City -> Street -> ZipCode
     ```
 

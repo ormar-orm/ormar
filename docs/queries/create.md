@@ -2,10 +2,10 @@
 
 Following methods allow you to insert data into the database.
 
-* `create(on_conflict=None, conflict_target=None, update_fields=None, **kwargs) -> Optional[Model]`
+* `create(on_conflict=None, conflict_target=None, update_fields=None, update_values=None, **kwargs) -> Optional[Model]`
 * `get_or_create(_defaults: Optional[dict[str, Any]] = None, **kwargs) -> tuple[Model, bool]`
 * `update_or_create(**kwargs) -> Model`
-* `bulk_create(objects: list[Model], on_conflict=None, conflict_target=None, update_fields=None) -> None`
+* `bulk_create(objects: list[Model], on_conflict=None, conflict_target=None, update_fields=None, update_values=None) -> None`
 
 
 * `Model`
@@ -210,11 +210,14 @@ await Tag.objects.bulk_create(
 * `conflict_target` - fields of the unique key the rows conflict on: the primary key
   by default. A foreign key stored in several columns stands for all of its columns.
 * `update_fields` - fields set from the inserted row: by default all inserted fields
-  except the target and the primary key.
-* Fields with `on_update` that are not in `update_fields` get their `on_update`
-  value, as in `bulk_update()`.
+  except the target and the primary key, none when `update_values` are given.
+* `update_values` - values or column expressions set on conflict, see
+  [below](#expressions-on-conflict).
+* Fields with `on_update` that are in neither `update_fields` nor `update_values` get
+  their `on_update` value, as in `bulk_update()`.
 
-`conflict_target` and `update_fields` are only allowed with `on_conflict="update"`.
+`conflict_target`, `update_fields` and `update_values` are only allowed with
+`on_conflict="update"`.
 When several objects of one call conflict on the same key, the last one wins.
 
 `create(on_conflict="update")` inserts or updates the row in one statement and returns
@@ -226,6 +229,73 @@ inserted or updated.
 `bulk_create()` sends no signals, sets no primary keys and marks all passed objects as
 saved, the skipped ones too.
 
+### Expressions on conflict
+
+`update_values` sets fields of the conflicting row to a value or to a
+[column expression](update.md#column-expressions) computed by the database, in the same
+statement as the insert, so concurrent calls never lose an update. In it `F("field")`
+(or `Model.field`) is the column of the **existing** row and `ormar.Inserted("field")`
+the value the insert tried to write:
+
+```python
+from ormar import Coalesce, F, Greatest, Inserted
+
+# count the completions: 1 for a new row, then 2, 3, ...
+level = await TrackLevel.objects.create(
+    track=track,
+    level=3,
+    completed=1,
+    on_conflict="update",
+    conflict_target=["track", "level"],
+    update_values={"completed": F("completed") + 1},
+)
+
+# never move the read marker back, keep the first join date
+member = await Member.objects.create(
+    chat=chat,
+    user=user,
+    read_id=message_id,
+    joined=today,
+    on_conflict="update",
+    conflict_target=["chat", "user"],
+    update_values={
+        "read_id": Greatest(F("read_id"), Inserted("read_id")),
+        "joined": Coalesce(F("joined"), Inserted("joined")),
+    },
+)
+
+# the same expressions for every conflicting row of a bulk insert
+await Score.objects.bulk_create(
+    scores,
+    on_conflict="update",
+    conflict_target=["player"],
+    update_values={"points": F("points") + Inserted("points"), "source": "merge"},
+)
+```
+
+| | PostgreSQL, SQLite | MySQL |
+|---|---|---|
+| `F("x")` | `table.x` (the existing row) | `table.x` (the existing row) |
+| `Inserted("x")` | `excluded.x` | `VALUES(x)` |
+
+* When `update_values` are given, `update_fields` default to **none**: otherwise the
+  inserted `completed=1` would be stored instead of the incremented value. List
+  fields that should take the inserted value in `update_fields` next to
+  `update_values`; a field in both is rejected.
+* The rules of [expressions in `update()`](update.md#column-expressions) apply: an
+  expression reads non-relation fields of the inserted model only (an upsert joins no
+  tables, so no relation paths), sets no relation and reads no field set by the same
+  upsert (`update_fields`, other `update_values`, fields with `on_update`); reading the
+  field it sets is fine, and `Inserted()` can read any field. The literal goes on the
+  right side. Plain values (`"source": "merge"`) are validated like `update()` values.
+* `Inserted()` is only accepted in `update_values`; in filters and `update()` it
+  raises `QueryDefinitionError`, as do unknown fields.
+* The statement is cached per shape of the expressions: `F("completed") + 1` and
+  `F("completed") + 5` run the same SQL with a different bound value.
+* On MySQL a multi-row `bulk_create()` stores the literals of `update_values` in
+  session user variables (`@ormar_u<n>_<k>`) together with the `on_update` values,
+  see the warning below.
+
 ### Backends
 
 | | PostgreSQL, SQLite | MySQL |
@@ -233,7 +303,7 @@ saved, the skipped ones too.
 | `create(on_conflict="ignore")` | `INSERT ... ON CONFLICT DO NOTHING RETURNING` | plain `INSERT`, a duplicate key error is caught |
 | `create(on_conflict="update")` | `INSERT ... ON CONFLICT (target) DO UPDATE ... RETURNING` | `ON DUPLICATE KEY UPDATE`, then a select by the target values |
 | `bulk_create(on_conflict="ignore")` | `ON CONFLICT DO NOTHING` | `ON DUPLICATE KEY UPDATE` of the primary key to itself |
-| `bulk_create(on_conflict="update")` | `ON CONFLICT (target) DO UPDATE` | `ON DUPLICATE KEY UPDATE`; `on_update` values are set once in user variables (`SET @ormar_on_update_<n>`) and read by all rows |
+| `bulk_create(on_conflict="update")` | `ON CONFLICT (target) DO UPDATE` | `ON DUPLICATE KEY UPDATE`; `on_update` values and `update_values` literals are set once in user variables (`SET @ormar_on_update_<n>`, `@ormar_u<n>`) and read by all rows |
 
 !!!warning
     MySQL has no conflict target: `ON DUPLICATE KEY UPDATE` reacts to a conflict on
@@ -247,8 +317,8 @@ saved, the skipped ones too.
 
 !!!warning
     On MySQL a multi-row `bulk_create(on_conflict="update")` of a model with `on_update`
-    fields stores the `on_update` values in session user variables
-    (`@ormar_on_update_<n>`) right before the insert. Do not run such calls concurrently
+    fields or with literals in `update_values` stores those values in session user
+    variables (`@ormar_on_update_<n>`, `@ormar_u<n>`) right before the insert. Do not run such calls concurrently
     on one connection (e.g. with `asyncio.gather()` inside one `transaction()`): one
     call can overwrite the values of the other. Separate connections are not affected.
 
@@ -256,8 +326,8 @@ saved, the skipped ones too.
     SQLite supports `ON CONFLICT` with `RETURNING` from version 3.35.
 
 !!!note
-    `on_conflict`, `conflict_target` and `update_fields` are reserved keyword arguments
-    of `create()`. To create a model with a field of such a name use
+    `on_conflict`, `conflict_target`, `update_fields` and `update_values` are reserved
+    keyword arguments of `create()`. To create a model with a field of such a name use
     `Model(on_conflict=...).save()`.
 
 `QuerysetProxy.create()` accepts `on_conflict` too, except for many to many

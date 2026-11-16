@@ -121,15 +121,15 @@ def test_dumping_does_not_modify_the_cached_tree():
         assert model._relation_tree() == tree
 
 
-def test_tree_is_built_once_per_class_across_dumps(monkeypatch):
+def test_tree_is_built_once_per_class_across_dumps(monkeypatch, map_traversal):
     calls = []
-    original = relation_mixin.translate_list_to_dict
+    original = relation_mixin.build_relation_tree
 
     def counting(*args, **kwargs):
         calls.append(args)
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(relation_mixin, "translate_list_to_dict", counting)
+    monkeypatch.setattr(relation_mixin, "build_relation_tree", counting)
     RelationGraph.changed()
     comment = build_comment()
     for _ in range(20):

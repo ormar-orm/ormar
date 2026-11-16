@@ -20,14 +20,13 @@ import sqlalchemy
 
 import ormar  # noqa I100
 from ormar import MultipleMatches, NoMatch
-from ormar.databases.dialects import on_update_assignment
 from ormar.exceptions import (
     ModelListEmptyError,
     ModelPersistenceError,
     QueryDefinitionError,
 )
 from ormar.models.row_registry import RowRegistry
-from ormar.queryset import FieldAccessor, FilterQuery, SelectAction
+from ormar.queryset import FieldAccessor, SelectAction
 from ormar.queryset.actions.order_action import (
     OrderAction,
     RandomOrder,
@@ -38,7 +37,6 @@ from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.expressions import (
     Expression,
     Random,
-    expression_clause,
     expression_key,
     expression_params,
 )
@@ -46,10 +44,11 @@ from ormar.queryset.prefetch import Prefetch
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
 from ormar.queryset.templates import (
+    PKS_SLOT,
     SlotBinder,
     StatementTemplate,
     aggregate_statement,
-    build_bulk_update,
+    build_update_assignment,
     cached_statement,
     canonical_actions,
     clauses_cache_key,
@@ -61,7 +60,8 @@ from ormar.queryset.templates import (
     release_values,
     template_cache_for,
     template_params,
-    value_binds,
+    update_values_key,
+    update_values_params,
     value_params,
 )
 from ormar.queryset.utils import (
@@ -71,7 +71,18 @@ from ormar.queryset.utils import (
     normalize_slice,
 )
 from ormar.queryset.values_columns import extract_values, values_column_map
-from ormar.relations.aliases import alias_for, prefixed_table
+from ormar.queryset.write_statements import (
+    BulkUpdateWrite,
+    DeleteWrite,
+    LockWrite,
+    RowsLockWrite,
+    UpdateLockedWrite,
+    UpdateReturningWrite,
+    UpdateWrite,
+    WriteStatement,
+    forward_join_conditions,
+    row_template,
+)
 
 # rows built between yields to the event loop when materializing flat rows
 FLAT_ROWS_CHUNK = 500
@@ -97,7 +108,7 @@ def dump_for_save(obj: "Model") -> dict:
 
 
 if TYPE_CHECKING:  # pragma no cover
-    from ormar import ForeignKeyField, Model
+    from ormar import Model
     from ormar.models import T
     from ormar.models.excludable import ExcludableItems, Slot
     from ormar.models.ormar_config import OrmarConfig
@@ -531,27 +542,30 @@ class QuerySet(Generic[T]):
         release_values(statement=statement)
         return statement
 
-    def build_write_template(self, kind: str, values: dict) -> StatementTemplate:
+    def build_write_template(
+        self, statement: type[WriteStatement], values: dict
+    ) -> StatementTemplate:
         """
-        Return the filtered update (``kind="update"``) or delete of this
-        queryset from the model's template cache, with the values to bind::
+        Return the filtered update or delete of this queryset, or a statement
+        of ``update_returning()`` (see ``write_statements``), from the model's
+        template cache, with the values to bind::
 
             Author.objects.filter(score__lt=5).build_write_template(
-                kind="update", values={"name": "x"}
+                statement=UpdateWrite, values={"name": "x"}
             )
             # -> UPDATE authors SET name=:ormar_v0 WHERE authors.score < :ormar_p0
             #    {"ormar_p0": 5, "ormar_v0": "x"}
 
-        The cache key is the kind, the filter and exclude clauses (see
-        ``templates.clauses_cache_key``), the joined relations (filters on
-        related models select the matched primary keys through them) and the
-        updated column names. Updates and deletes take no ordering or limit, so
-        nothing else changes their SQL. Filter values are named by
+        The cache key is the statement class, the filter and exclude clauses
+        (see ``templates.clauses_cache_key``), the joined relations (filters
+        on related models select the matched primary keys through them) and
+        the updated column names. Updates and deletes take no ordering or
+        limit, so nothing else changes their SQL. Filter values are named by
         ``SlotBinder`` like in reads, updated values like in single-row writes
         (``ormar_v{i}``).
 
-        :param kind: ``"update"`` or ``"delete"``
-        :type kind: str
+        :param statement: statement class
+        :type statement: type[WriteStatement]
         :param values: updated values by column name (empty for delete)
         :type values: dict
         :return: statement and values to bind
@@ -565,7 +579,7 @@ class QuerySet(Generic[T]):
         for index, name in enumerate(names):
             params.update(expression_params(value=values[name], slot=f"ormar_v{index}"))
         key = (
-            kind,
+            statement,
             clauses_cache_key(clauses=self.filter_clauses),
             clauses_cache_key(clauses=self.exclude_clauses),
             tuple(self._select_related),
@@ -577,66 +591,17 @@ class QuerySet(Generic[T]):
             ),
         )
         cache = template_cache_for(model_cls=self.model)
-        statement = cache.get(key)
-        if statement is None:
-            statement = self.build_write_statement(
-                kind=kind, values=values, binder=SlotBinder(actions=actions)
+        cached = cache.get(key)
+        if cached is None:
+            cached = statement.make(
+                model=self.model,
+                queryset=self,
+                values=values,
+                binder=SlotBinder(actions=actions),
             )
-            release_values(statement=statement)
-            cache.put(key=key, statement=statement)
-        return StatementTemplate(statement=statement, params=params)
-
-    def build_write_statement(self, kind: str, values: dict, binder: SlotBinder) -> Any:
-        """
-        Build the filtered update or delete with named slots for the updated
-        values and the filter values.
-
-        Filters on related models restrict the rows to the primary keys the
-        same queryset selects (see ``matched_rows_clause``), so the statement
-        touches the rows the filters select in ``all()``. Expressions reading related
-        models join those tables in the statement (``UPDATE ... FROM`` or a
-        multi-table ``UPDATE`` on MySQL, as SQLAlchemy renders it).
-
-        :param kind: ``"update"`` or ``"delete"``
-        :type kind: str
-        :param values: updated values by column name (empty for delete)
-        :type values: dict
-        :param binder: names filter values for templates
-        :type binder: SlotBinder
-        :return: statement to execute
-        :rtype: Any
-        """
-        table = self.table
-        expr: Any
-        if kind == "update":
-            names = tuple(sorted(values))
-            binds = value_binds(table=table, names=names)
-            join_conditions: dict[str, list] = {}
-            for index, name in enumerate(names):
-                if isinstance(values[name], Expression):
-                    columns = expression_columns(node=values[name], model=self.model)
-                    binds[table.c[name]] = expression_clause(
-                        node=values[name], columns=columns, slot=f"ormar_v{index}"
-                    )
-                    for column in columns.values():
-                        join_conditions.update(
-                            forward_join_conditions(
-                                model=self.model, path=column.related_parts
-                            )
-                        )
-            expr = table.update().values(binds)
-            for conditions in join_conditions.values():
-                expr = expr.where(*conditions)
-        else:
-            expr = table.delete()
-        if self._filters_read_related():
-            return expr.where(self.matched_rows_clause(binder=binder))
-        expr = FilterQuery(filter_clauses=self.filter_clauses, binder=binder).apply(
-            expr=expr
-        )
-        return FilterQuery(
-            filter_clauses=self.exclude_clauses, exclude=True, binder=binder
-        ).apply(expr=expr)
+            release_values(statement=cached)
+            cache.put(key=key, statement=cached)
+        return StatementTemplate(statement=cached, params=params)
 
     def matched_rows_clause(self, binder: Optional[SlotBinder]) -> Any:
         """
@@ -674,13 +639,7 @@ class QuerySet(Generic[T]):
             .build_primary_key_select()
             .subquery("ormar_matched")
         )
-        pk_columns = [
-            self.table.c[alias] for alias in self.model_config.pk.column_aliases()
-        ]
-        target = (
-            pk_columns[0] if len(pk_columns) == 1 else sqlalchemy.tuple_(*pk_columns)
-        )
-        return target.in_(sqlalchemy.select(*matched.c))
+        return self.model_config.pk.row_value().in_(sqlalchemy.select(*matched.c))
 
     def limit_cache_key(self, limit: Optional[int]) -> tuple:
         """
@@ -855,7 +814,12 @@ class QuerySet(Generic[T]):
         related = sorted(list(set(list(self._select_related) + related)))
         return self.rebuild_self(select_related=related)
 
-    def select_all(self, follow: bool = False) -> "QuerySet[T]":
+    def select_all(
+        self,
+        follow: bool = False,
+        max_depth: Optional[int] = None,
+        follow_reverse: Union[bool, int] = 0,
+    ) -> "QuerySet[T]":
         """
         By default adds only directly related models.
 
@@ -873,12 +837,22 @@ class QuerySet(Generic[T]):
         by default only directly related models are saved
         with follow=True also related models of related models are saved
         :type follow: bool
+        :param max_depth: number of relations to follow at most with
+            follow=True, forward foreign keys ``DEFAULT_FOLLOW_DEPTH`` (5) deep by
+            default (every relation without limit in the deprecated ``map``
+            traversal)
+        :type max_depth: Optional[int]
+        :param follow_reverse: number of first levels where follow=True also
+            follows reverse and many to many relations, ``True`` = 1
+        :type follow_reverse: Union[bool, int]
         :return: reloaded Model
         :rtype: Model
         """
         relations = list(self.model.extract_related_names())
         if follow:
-            relations = self.model._iterate_related_models()
+            relations = self.model._follow_relation_paths(
+                max_depth=max_depth, follow_reverse=follow_reverse
+            )
         return self.rebuild_self(select_related=relations)
 
     def prefetch_related(
@@ -1160,6 +1134,13 @@ class QuerySet(Generic[T]):
             return await self.fields(columns=fields).values(
                 _as_dict=_as_dict, _flatten=_flatten, exclude_through=exclude_through
             )
+        missing_joins = self._excludable.included_relation_paths().difference(
+            self._select_related
+        )
+        if missing_joins:
+            return await self.select_related(related=sorted(missing_joins)).values(
+                _as_dict=_as_dict, _flatten=_flatten, exclude_through=exclude_through
+            )
         excludable = self._excludable.with_projection_exclusions(
             source_model=self.model,
             select_related=self._select_related,
@@ -1381,11 +1362,106 @@ class QuerySet(Generic[T]):
         :return: number of updated rows
         :rtype: int
         """
+        updates = self.update_values(each=each, values=kwargs)
+        template = self.build_write_template(statement=UpdateWrite, values=updates)
+        async with self.model_config.database.get_query_executor() as executor:
+            return await executor.execute(template.statement, template.params)
+
+    async def update_returning(self, each: bool = False, **kwargs: Any) -> list["T"]:
+        """
+        Updates the rows like ``update()`` and returns them as stored after the
+        update::
+
+            expired = await Booking.objects.filter(status="waitlist").update_returning(
+                status="expired"
+            )
+
+        The models hold the columns of the model's own table only: relations
+        are not loaded, foreign keys are models with only the primary key set,
+        like ``all()`` without ``select_related``. ``fields()``,
+        ``select_related()`` and the ordering of the queryset do not apply,
+        the rows come back in no particular order. No signals are sent.
+
+        PostgreSQL and SQLite (3.35+) run one ``UPDATE ... RETURNING``. MySQL
+        has no ``RETURNING``: in the open transaction, or a new one, the rows
+        are selected ``FOR UPDATE``, updated and read back by primary key.
+
+        :param each: flag if whole table should be affected if no filter is passed
+        :type each: bool
+        :param kwargs: fields names and proper value types, or column expressions
+        :type kwargs: Any
+        :raises QueryDefinitionError: like ``update()``
+        :return: updated models
+        :rtype: list[Model]
+        """
+        updates = self.update_values(each=each, values=kwargs)
+        database = self.model_config.database
+        if database.rules.update_returning:
+            template = self.build_write_template(
+                statement=UpdateReturningWrite, values=updates
+            )
+            async with database.get_query_executor() as executor:
+                rows = await executor.fetch_all(template.statement, template.params)
+        else:
+            rows = await self.update_locked_rows(updates=updates)
+        return await QuerySet(model_cls=self.model)._process_query_result_rows(rows)
+
+    async def update_locked_rows(self, updates: dict) -> list:
+        """
+        Update the rows of ``update_returning()`` without ``RETURNING``, in the
+        open transaction or a new one, and return them as stored::
+
+            SELECT tracks.id FROM tracks WHERE <filters> FOR UPDATE OF tracks
+            UPDATE tracks SET ... WHERE tracks.id IN (<locked keys>)
+            SELECT tracks.* FROM tracks WHERE tracks.id IN (<locked keys>) FOR UPDATE
+
+        The lock keeps other transactions from changing the rows in between,
+        and the locking read back sees the latest committed versions (not the
+        snapshot of a REPEATABLE READ transaction), so the rows read back are
+        the rows as this update left them.
+
+        :param updates: updated values by column name
+        :type updates: dict
+        :return: rows of the updated models
+        :rtype: list
+        """
+        lock = self.build_write_template(statement=LockWrite, values=updates)
+        update = self.build_write_template(statement=UpdateLockedWrite, values=updates)
+        aliases = self.model_config.pk.column_aliases()
+        async with self.model_config.database.get_query_executor(
+            transactional=True
+        ) as executor:
+            locked = await executor.fetch_all(lock.statement, lock.params)
+            if not locked:
+                return []
+            keys = [tuple(row[alias] for alias in aliases) for row in locked]
+            if len(aliases) == 1:
+                keys = [key[0] for key in keys]
+            await executor.execute(update.statement, {**update.params, PKS_SLOT: keys})
+            rows = row_template(statement=RowsLockWrite, model_cls=self.model, pk=keys)
+            return await executor.fetch_all(rows.statement, rows.params)
+
+    def update_values(self, each: bool, values: dict) -> dict:
+        """
+        Check an ``update()`` and turn its keyword arguments into the values
+        to write, by column name: own fields only, ``on_update`` values added,
+        plain values validated and converted, expressions as expression nodes.
+
+        :param each: flag if whole table should be affected if no filter is passed
+        :type each: bool
+        :param values: keyword arguments of the update
+        :type values: dict
+        :raises QueryDefinitionError: if the queryset has no filters and
+            ``each`` is not set, or an expression is not allowed (see
+            ``update()``)
+        :return: values to write by column name
+        :rtype: dict
+        """
         self.model.verify_writable()
         if not each and not (self.filter_clauses or self.exclude_clauses):
             raise QueryDefinitionError(
                 "You cannot update without filtering the queryset first. "
-                "If you want to update all rows use update(each=True, **kwargs)"
+                "If you want to update all rows pass each=True."
             )
 
         self_fields = self.model.extract_db_own_fields().union(
@@ -1393,7 +1469,7 @@ class QuerySet(Generic[T]):
         )
         updates = {
             field_name: value
-            for field_name, value in kwargs.items()
+            for field_name, value in values.items()
             if field_name in self_fields
         }
         updates = self.model.populate_onupdate_value(updates)
@@ -1434,10 +1510,7 @@ class QuerySet(Generic[T]):
             raise sqlalchemy.exc.CompileError(
                 f"Unconsumed column names: {', '.join(unconsumed)}"
             )
-
-        template = self.build_write_template(kind="update", values=updates)
-        async with self.model_config.database.get_query_executor() as executor:
-            return await executor.execute(template.statement, template.params)
+        return updates
 
     async def delete(self, *args: Any, each: bool = False, **kwargs: Any) -> int:
         """
@@ -1465,7 +1538,7 @@ class QuerySet(Generic[T]):
                 "You cannot delete without filtering the queryset first. "
                 "If you want to delete all rows use delete(each=True)"
             )
-        template = self.build_write_template(kind="delete", values={})
+        template = self.build_write_template(statement=DeleteWrite, values={})
         async with self.model_config.database.get_query_executor() as executor:
             return await executor.execute(template.statement, template.params)
 
@@ -1924,6 +1997,7 @@ class QuerySet(Generic[T]):
         on_conflict: Literal["update"],
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> "T": ...
 
@@ -1936,6 +2010,7 @@ class QuerySet(Generic[T]):
         on_conflict: Optional[Literal["ignore", "update"]] = None,
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Optional["T"]:
         """
@@ -1950,8 +2025,9 @@ class QuerySet(Generic[T]):
         With ``on_conflict="update"`` a row conflicting on ``conflict_target``
         (the primary key by default) is updated instead, in the same statement:
         ``update_fields`` (by default all passed fields but the target and the
-        key) and the fields with ``on_update``. The stored row is returned.
-        pre_save and post_save are sent in both cases.
+        key, none when ``update_values`` are given), ``update_values`` and the
+        fields with ``on_update``. The stored row is returned. pre_save and
+        post_save are sent in both cases.
 
         :param on_conflict: ``ignore`` to skip a conflicting row, ``update`` to
             update it
@@ -1959,24 +2035,35 @@ class QuerySet(Generic[T]):
         :param conflict_target: names of the fields of the unique key the row
             conflicts on, only with ``update``
         :type conflict_target: Optional[list[str]]
-        :param update_fields: names of the fields updated, only with ``update``
+        :param update_fields: names of the fields updated from the inserted
+            row, only with ``update``
         :type update_fields: Optional[list[str]]
+        :param update_values: values or expressions set on conflict by field
+            name, only with ``update``: ``F("x")`` reads the existing row,
+            ``Inserted("x")`` the inserted one
+        :type update_values: Optional[dict[str, Any]]
         :param kwargs: fields names and proper value types
         :type kwargs: Any
-        :raises QueryDefinitionError: for ``conflict_target`` or
-            ``update_fields`` without ``on_conflict="update"``, or a target field
-            without a value
+        :raises QueryDefinitionError: for ``conflict_target``,
+            ``update_fields`` or ``update_values`` without
+            ``on_conflict="update"``, a target field without a value or invalid
+            ``update_values``
         :return: created or stored model, ``None`` when the row was skipped
         :rtype: Optional[Model]
         """
-        if (conflict_target or update_fields) and on_conflict != "update":
+        if (conflict_target or update_fields or update_values) and (
+            on_conflict != "update"
+        ):
             raise QueryDefinitionError(
-                "conflict_target and update_fields need on_conflict='update'"
+                "conflict_target, update_fields and update_values need "
+                "on_conflict='update'"
             )
         instance = self.model(**kwargs)
         if on_conflict == "update":
             return await instance._upsert(
-                conflict_target=conflict_target, update_fields=update_fields
+                conflict_target=conflict_target,
+                update_fields=update_fields,
+                update_values=update_values,
             )
         if on_conflict:
             return await instance._save(on_conflict=on_conflict)
@@ -1988,6 +2075,7 @@ class QuerySet(Generic[T]):
         on_conflict: Optional[Literal["ignore", "update"]] = None,
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
     ) -> None:
         """
         Performs a bulk create in one database session to speed up the process.
@@ -2003,8 +2091,9 @@ class QuerySet(Generic[T]):
         With ``on_conflict="ignore"`` rows conflicting with existing ones on any
         unique key are skipped. With ``on_conflict="update"`` rows conflicting on
         ``conflict_target`` (the primary key by default) update ``update_fields``
-        (by default all inserted fields but the target and the key) and fields
-        with ``on_update``. Skipped objects are marked as saved too.
+        (by default all inserted fields but the target and the key, none when
+        ``update_values`` are given), ``update_values`` and fields with
+        ``on_update``. Skipped objects are marked as saved too.
 
         Bulk operations do not send signals.
 
@@ -2016,25 +2105,39 @@ class QuerySet(Generic[T]):
         :param conflict_target: names of the fields of the unique key the rows
             conflict on, only with ``update``
         :type conflict_target: Optional[list[str]]
-        :param update_fields: names of the fields updated, only with ``update``
+        :param update_fields: names of the fields updated from the inserted
+            rows, only with ``update``
         :type update_fields: Optional[list[str]]
+        :param update_values: values or expressions set on conflict by field
+            name, the same for every row, only with ``update`` (see ``create``)
+        :type update_values: Optional[dict[str, Any]]
         """
         self.model.verify_writable()
 
         if not objects:
             raise ModelListEmptyError("Bulk create objects are empty!")
-        if (conflict_target or update_fields) and on_conflict != "update":
+        if (conflict_target or update_fields or update_values) and (
+            on_conflict != "update"
+        ):
             raise QueryDefinitionError(
-                "conflict_target and update_fields need on_conflict='update'"
+                "conflict_target, update_fields and update_values need "
+                "on_conflict='update'"
             )
-        fields = self.model_config.model_fields
-        on_update = {
-            self.model.get_column_alias(field_name=name): fields[name].get_on_update()
-            for name in self.model._onupdate_fields
-            if on_conflict == "update" and name not in (update_fields or ())
-        }
-        on_update_params = {
-            f"ormar_on_update_{column}": value for column, value in on_update.items()
+        on_update, conflict_values = (
+            self.model._conflict_updates(
+                update_fields=update_fields, update_values=update_values
+            )
+            if on_conflict == "update"
+            else ({}, {})
+        )
+        # bound after the VALUES clause, the same for every row
+        conflict_params = update_values_params(update_values=conflict_values)
+        update_params = {
+            **{
+                f"ormar_on_update_{column}": value
+                for column, value in on_update.items()
+            },
+            **conflict_params,
         }
 
         ready_objects = []
@@ -2060,28 +2163,36 @@ class QuerySet(Generic[T]):
         )
         on_update_columns = tuple(sorted(on_update))
         # MySQL drivers turn executemany into one multi-row VALUES and leave
-        # the on_update binds after it unfilled, so a batch reads the values
-        # from user variables set once before it
-        on_update_variables = (
-            bool(on_update)
+        # the binds after it unfilled, so a batch reads the on_update values
+        # and update_values literals from user variables set once before it
+        update_variables = (
+            bool(update_params)
             and not database.rules.execute_many_with_trailing_binds
             and any(len(rows) > 1 for rows in rows_by_keys.values())
         )
         async with database.get_query_executor(
             transactional=several_statements
         ) as executor:
-            if on_update_variables:  # pragma: no cover
+            if update_variables:  # pragma: no cover
                 await executor.execute(
                     query=cached_statement(
                         model_cls=self.model,
-                        key=("on_update_assignment", on_update_columns),
-                        builder=on_update_assignment,
-                        table=self.table,
+                        key=(
+                            "update_assignment",
+                            on_update_columns,
+                            update_values_key(update_values=conflict_values),
+                        ),
+                        builder=build_update_assignment,
+                        model=self.model,
                         on_update=on_update_columns,
+                        update_values=conflict_values,
                     ),
                     params={
-                        f"ormar_on_update_{index}": on_update[column]
-                        for index, column in enumerate(on_update_columns)
+                        **{
+                            f"ormar_on_update_{index}": on_update[column]
+                            for index, column in enumerate(on_update_columns)
+                        },
+                        **conflict_params,
                     },
                 )
             for rows in rows_by_keys.values():
@@ -2096,11 +2207,12 @@ class QuerySet(Generic[T]):
                     conflict_target=conflict_target,
                     update_fields=update_fields,
                     on_update=on_update_columns,
-                    on_update_variables=on_update_variables,
+                    update_values=conflict_values,
+                    update_variables=update_variables,
                 )
-                bound_on_update = {} if on_update_variables else on_update_params
+                bound_updates = {} if update_variables else update_params
                 params = [
-                    {**value_params(names=names, values=row), **bound_on_update}
+                    {**value_params(names=names, values=row), **bound_updates}
                     for row in rows
                 ]
                 if len(rows) == 1:
@@ -2209,9 +2321,8 @@ class QuerySet(Generic[T]):
         expr = cached_statement(
             model_cls=self.model,
             key=("bulk_update", updated, where_prefix),
-            builder=build_bulk_update,
-            table=self.table,
-            primary_key=key,
+            builder=BulkUpdateWrite.make,
+            model=self.model,
             columns=updated,
             where_prefix=where_prefix,
         )
@@ -2269,43 +2380,3 @@ class QuerySet(Generic[T]):
             order_bys=order_bys,
             reverse_result=bounds.reverse,
         )
-
-
-def forward_join_conditions(model: type["Model"], path: list[str]) -> dict[str, list]:
-    """
-    Return the join conditions of the tables an update expression reads from,
-    by table alias, following a path of foreign keys from ``model``::
-
-        forward_join_conditions(model=Track, path=["album"])
-        # -> {"t1b26c7": [t1b26c7_albums.id == tracks.album]}
-
-    Every table is aliased like in selects, so the conditions join the aliased
-    columns the expression reads.
-
-    :param model: updated model
-    :type model: type[Model]
-    :param path: relation names leading to the read model
-    :type path: list[str]
-    :raises QueryDefinitionError: if the path follows a reverse, many to many or
-        through relation, which can match many rows
-    :return: join conditions by table alias
-    :rtype: dict[str, list]
-    """
-    conditions: dict[str, list] = {}
-    source_table: Any = model.ormar_config.table
-    for index, relation in enumerate(path):
-        field = cast("ForeignKeyField", model.ormar_config.model_fields[relation])
-        if field.is_multi or field.virtual or field.is_through:
-            raise QueryDefinitionError(
-                f"update() expressions read related models only through foreign "
-                f"keys, '{'__'.join(path)}' follows the reverse or many to many "
-                f"relation '{relation}', which can match many rows."
-            )
-        alias = alias_for("__".join(path[: index + 1]))
-        target_table = prefixed_table(alias=alias, table=field.to.ormar_config.table)
-        conditions[alias] = [
-            target_table.c[pair.target_column] == source_table.c[pair.source_column]
-            for pair in field.link.pairs
-        ]
-        model, source_table = field.to, target_table
-    return conditions

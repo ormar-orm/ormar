@@ -1,9 +1,74 @@
-from typing import TYPE_CHECKING, Callable, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
 
 from ormar import BaseField, ForeignKeyField
 from ormar.models.relation_graph import RelationGraph
+from ormar.models.traversal import (
+    DEFAULT_FOLLOW_DEPTH,
+    NO_ANCESTORS,
+    PathRelationMap,
+    instance_traversal_enabled,
+    relation_paths,
+)
 from ormar.models.traversible import NodeList
-from ormar.queryset.utils import translate_list_to_dict
+
+
+def build_relation_tree(model: type["RelationMixin"]) -> dict[str, Any]:
+    """
+    Builds the relation tree of a model: the nested dict of the relation paths
+    of ``_iterate_related_models``, walked the same way (relations in name
+    order, a relation skipped when its target model is already on the path,
+    relations to unresolved forward references left out).
+
+    Like ``_iterate_related_models`` the walk expands a ``(model, relation)``
+    pair once and reuses that subtree wherever the pair appears again, but it
+    puts the same dict object at every such place instead of spelling out
+    every path, so the tree grows with the number of relations, not with the
+    (exponential) number of paths::
+
+        build_relation_tree(model=Book)  # -> {"author": {"country": ...}, "tags": ...}
+
+    :param model: model class to build the tree for
+    :type model: type[RelationMixin]
+    :return: nested dict of relation names, ``...`` at the leaves
+    :rtype: dict[str, Any]
+    """
+    return expand_relation_subtree(model=model, ancestors=(), expanded={})
+
+
+def expand_relation_subtree(
+    model: type["RelationMixin"],
+    ancestors: tuple[type["RelationMixin"], ...],
+    expanded: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Returns the relations below one model of the relation tree walk.
+
+    :param model: model class of the current node
+    :type model: type[RelationMixin]
+    :param ancestors: model classes on the path above the current node
+    :type ancestors: tuple[type[RelationMixin], ...]
+    :param expanded: subtrees already built, by ``<model name>_<relation>``
+    :type expanded: dict[str, Any]
+    :return: relation name to its subtree, ``...`` when nothing is below it
+    :rtype: dict[str, Any]
+    """
+    subtree: dict[str, Any] = {}
+    path = (*ancestors, model)
+    for relation in sorted(model.extract_related_names()):
+        field = model.ormar_config.model_fields[relation]
+        # a relation to a forward reference joins the tree once resolved
+        if field.has_unresolved_forward_refs() or field.to in ancestors:
+            continue
+        relation_key = f"{model.get_name()}_{relation}"
+        if relation_key not in expanded:
+            expanded[relation_key] = (
+                expand_relation_subtree(
+                    model=field.to, ancestors=path, expanded=expanded
+                )
+                or Ellipsis
+            )
+        subtree[relation] = expanded[relation_key]
+    return subtree
 
 
 class RelationMixin:
@@ -208,8 +273,11 @@ class RelationMixin:
         """
         Returns the relation paths of ``_iterate_related_models`` as a nested
         dict, the default relation map of ``model_dump``, ``save_related`` and
-        ``get_pydantic``. Built once per model class and cached until the
-        relation graph changes, so it is shared and must not be modified::
+        ``get_pydantic``. Built once per model class without the list of paths
+        (see ``build_relation_tree``) and cached until the relation graph
+        changes. The tree is shared between calls and a repeated subtree is
+        one dict object at every place it appears, so it must not be
+        modified::
 
             Book._iterate_related_models()  # -> ["author__country", "tags"]
             Book._relation_tree()  # -> {"author": {"country": ...}, "tags": ...}
@@ -220,9 +288,60 @@ class RelationMixin:
         cls._drop_stale_relation_maps()
         tree = cls.__relation_tree__
         if tree is None:
-            tree = translate_list_to_dict(list_to_trans=cls._iterate_related_models())
+            tree = build_relation_tree(model=cls)
             cls.__relation_tree__ = tree
         return tree
+
+    @classmethod
+    def _default_relation_map(cls) -> Union[dict, PathRelationMap]:
+        """
+        Returns the default relation map of ``model_dump`` and ``save_related``:
+        the cached ``_relation_tree()`` or, in ``instance`` traversal mode, a
+        ``PathRelationMap`` that decides from the path of the walk::
+
+            Author._default_relation_map()  # -> PathRelationMap(author below {})
+
+        :return: relation map to follow
+        :rtype: Union[dict, PathRelationMap]
+        """
+        if instance_traversal_enabled():
+            return PathRelationMap.for_path(model=cls, ancestors=NO_ANCESTORS)
+        return cls._relation_tree()
+
+    @classmethod
+    def _follow_relation_paths(
+        cls, max_depth: Optional[int] = None, follow_reverse: Union[bool, int] = 0
+    ) -> list[str]:
+        """
+        Returns the relation paths loaded by ``select_all(follow=True)`` and
+        ``load_all(follow=True)``. In ``map`` traversal mode without arguments
+        the cached ``_iterate_related_models()`` paths (every relation) are
+        used. Otherwise forward foreign keys are followed up to ``max_depth``
+        (``DEFAULT_FOLLOW_DEPTH``) relations deep, and reverse and many to many
+        relations only in the first ``follow_reverse`` levels (``True`` = 1)::
+
+            Chapter._follow_relation_paths()  # -> ["book__author__country"]
+            Book._follow_relation_paths(follow_reverse=True)  # + "tags"
+
+        :param max_depth: number of relations to follow at most
+        :type max_depth: Optional[int]
+        :param follow_reverse: number of first levels that follow reverse and
+            many to many relations too
+        :type follow_reverse: Union[bool, int]
+        :return: relation paths in dunder notation
+        :rtype: list[str]
+        """
+        if (
+            max_depth is None
+            and not follow_reverse
+            and not instance_traversal_enabled()
+        ):
+            return cls._iterate_related_models()
+        return relation_paths(
+            model=cls,
+            max_depth=max_depth if max_depth is not None else DEFAULT_FOLLOW_DEPTH,
+            reverse_depth=int(follow_reverse),
+        )
 
     @classmethod
     def _drop_stale_relation_maps(cls) -> None:

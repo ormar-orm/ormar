@@ -55,6 +55,9 @@ def test_rules_flags():
     assert not postgres_rules.autocommit_engine
     assert not mysql_rules.conflict_returning
     assert sqlite_rules.conflict_returning and postgres_rules.conflict_returning
+    assert not mysql_rules.update_returning
+    assert postgres_rules.update_returning
+    assert DialectRules(backend_name="oracle").update_returning
     assert not mysql_rules.execute_many_with_trailing_binds
     assert not sqlite_rules.cross_schema_foreign_keys
     assert postgres_rules.cross_schema_foreign_keys

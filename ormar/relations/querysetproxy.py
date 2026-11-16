@@ -571,6 +571,7 @@ class QuerysetProxy(Generic[T]):
         on_conflict: Literal["update"],
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> "T": ...
 
@@ -583,6 +584,7 @@ class QuerysetProxy(Generic[T]):
         on_conflict: Optional[Literal["ignore", "update"]] = None,
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
         **kwargs: Any,
     ) -> Optional["T"]:
         """
@@ -602,8 +604,12 @@ class QuerysetProxy(Generic[T]):
         :param conflict_target: names of the fields of the unique key the row
             conflicts on, only with ``update``
         :type conflict_target: Optional[list[str]]
-        :param update_fields: names of the fields updated, only with ``update``
+        :param update_fields: names of the fields updated from the inserted
+            row, only with ``update``
         :type update_fields: Optional[list[str]]
+        :param update_values: values or expressions set on conflict by field
+            name, only with ``update`` (see ``QuerySet.create``)
+        :type update_values: Optional[dict[str, Any]]
         :param kwargs: fields names and proper value types
         :type kwargs: Any
         :return: created model, ``None`` when the row was skipped
@@ -619,12 +625,18 @@ class QuerysetProxy(Generic[T]):
             kwargs[self.related_field_name] = self._owner
             # a conflicting row of another owner moves to this one, so the
             # created model belongs to the relation it was created through
-            if update_fields and self.related_field_name not in update_fields:
-                update_fields = [*update_fields, self.related_field_name]
+            related = self.related_field_name
+            if (
+                (update_fields or update_values)
+                and related not in (update_fields or ())
+                and related not in (update_values or {})
+            ):
+                update_fields = [*(update_fields or ()), related]
         created = await self.queryset.create(
             on_conflict=on_conflict,
             conflict_target=conflict_target,
             update_fields=update_fields,
+            update_values=update_values,
             **kwargs,
         )
         if created is None:
@@ -633,6 +645,25 @@ class QuerysetProxy(Generic[T]):
         if self.type_ == ormar.RelationType.MULTIPLE:
             await self.create_through_instance(created, **through_kwargs)
         return created
+
+    def check_update_filtered(self, each: bool) -> None:
+        """
+        :param each: flag if all related models should be affected if no filter
+            is passed
+        :type each: bool
+        :raises QueryDefinitionError: if the queryset has no filter besides the
+            one on the parent model and ``each`` is not set
+        """
+        # queryset proxy always have one filter for pk of parent model
+        if (
+            not each
+            and (len(self.queryset.filter_clauses) + len(self.queryset.exclude_clauses))
+            == 1
+        ):
+            raise QueryDefinitionError(
+                "You cannot update without filtering the queryset first. "
+                "If you want to update all rows pass each=True."
+            )
 
     async def update(self, each: bool = False, **kwargs: Any) -> int:
         """
@@ -648,16 +679,7 @@ class QuerysetProxy(Generic[T]):
         :return: number of updated rows
         :rtype: int
         """
-        # queryset proxy always have one filter for pk of parent model
-        if (
-            not each
-            and (len(self.queryset.filter_clauses) + len(self.queryset.exclude_clauses))
-            == 1
-        ):
-            raise QueryDefinitionError(
-                "You cannot update without filtering the queryset first. "
-                "If you want to update all rows use update(each=True, **kwargs)"
-            )
+        self.check_update_filtered(each=each)
 
         through_kwargs = kwargs.pop(self.through_model_name, {})
         children = await self.queryset.all()
@@ -669,6 +691,27 @@ class QuerysetProxy(Generic[T]):
                     **through_kwargs,  # type: ignore
                 )
         return len(children)
+
+    async def update_returning(self, each: bool = False, **kwargs: Any) -> list["T"]:
+        """
+        Updates the related models in one statement, like
+        ``QuerySet.update_returning()``, and returns them as stored after the
+        update. Unlike ``update()`` it runs no per-model ``update()``: no
+        signals are sent and fields of the through model are not updated.
+
+        You have to either pass a filter to narrow down a query or explicitly pass
+        each=True flag to affect all related models.
+
+        :param each: flag if all related models should be affected if no filter
+            is passed
+        :type each: bool
+        :param kwargs: fields names and proper value types, or column expressions
+        :type kwargs: Any
+        :return: updated models
+        :rtype: list[Model]
+        """
+        self.check_update_filtered(each=each)
+        return await self.queryset.update_returning(each=True, **kwargs)
 
     async def get_or_create(
         self,
@@ -799,7 +842,12 @@ class QuerysetProxy(Generic[T]):
             relation=self.relation, type_=self.type_, to=self.to, qryset=queryset
         )
 
-    def select_all(self, follow: bool = False) -> "QuerysetProxy[T]":
+    def select_all(
+        self,
+        follow: bool = False,
+        max_depth: Optional[int] = None,
+        follow_reverse: Union[bool, int] = 0,
+    ) -> "QuerysetProxy[T]":
         """
         By default adds only directly related models.
 
@@ -817,10 +865,17 @@ class QuerysetProxy(Generic[T]):
         by default only directly related models are saved
         with follow=True also related models of related models are saved
         :type follow: bool
+        :param max_depth: number of relations to follow at most with follow=True
+        :type max_depth: Optional[int]
+        :param follow_reverse: number of first levels where follow=True also
+            follows reverse and many to many relations, ``True`` = 1
+        :type follow_reverse: Union[bool, int]
         :return: reloaded Model
         :rtype: Model
         """
-        queryset = self.queryset.select_all(follow=follow)
+        queryset = self.queryset.select_all(
+            follow=follow, max_depth=max_depth, follow_reverse=follow_reverse
+        )
         return self.__class__(
             relation=self.relation, type_=self.type_, to=self.to, qryset=queryset
         )
