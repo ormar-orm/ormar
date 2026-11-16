@@ -285,16 +285,16 @@ async def test_update_sql_is_unchanged(catalog):
     expected = {
         "sqlite": [
             "UPDATE urt_tracks SET position=? WHERE urt_tracks.title = ?",
-            "UPDATE urt_tracks SET position=(t1b26c7_urt_albums.rank_col + ?) "
-            "FROM urt_albums AS t1b26c7_urt_albums "
-            "WHERE t1b26c7_urt_albums.id = urt_tracks.album "
+            "UPDATE urt_tracks SET position=(t6bba8518ed_urt_albums.rank_col + ?) "
+            "FROM urt_albums AS t6bba8518ed_urt_albums "
+            "WHERE t6bba8518ed_urt_albums.id = urt_tracks.album "
             "AND urt_tracks.title = ?",
         ],
         "mysql": [
             "UPDATE urt_tracks SET position=%s WHERE urt_tracks.title = %s",
-            "UPDATE urt_tracks, urt_albums AS t1b26c7_urt_albums "
-            "SET urt_tracks.position=(t1b26c7_urt_albums.rank_col + %s) "
-            "WHERE t1b26c7_urt_albums.id = urt_tracks.album "
+            "UPDATE urt_tracks, urt_albums AS t6bba8518ed_urt_albums "
+            "SET urt_tracks.position=(t6bba8518ed_urt_albums.rank_col + %s) "
+            "WHERE t6bba8518ed_urt_albums.id = urt_tracks.album "
             "AND urt_tracks.title = %s",
         ],
     }
@@ -312,9 +312,9 @@ async def test_update_sql_is_unchanged(catalog):
         "WHERE (urt_releases.region, urt_releases.number) IN "
         "(SELECT ormar_matched.region, ormar_matched.number FROM "
         "(SELECT urt_releases.region AS region, urt_releases.number AS number "
-        "FROM urt_releases LEFT OUTER JOIN urt_albums AS t1b26c7_urt_albums "
-        "ON t1b26c7_urt_albums.id=urt_releases.album "
-        "WHERE t1b26c7_urt_albums.name = %(ormar_p0)s) AS ormar_matched)"
+        "FROM urt_releases LEFT OUTER JOIN urt_albums AS t6bba8518ed_urt_albums "
+        "ON t6bba8518ed_urt_albums.id=urt_releases.album "
+        "WHERE t6bba8518ed_urt_albums.name = %(ormar_p0)s) AS ormar_matched)"
     )
 
 

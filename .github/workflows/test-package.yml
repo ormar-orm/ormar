@@ -113,6 +113,15 @@ jobs:
         DATABASE_URL: "sqlite:///testsuite"
       run: bash scripts/test.sh
 
+    - name: Run sqlite with the deprecated map relation traversal
+      # the map traversal stays selectable until 0.31.0, one run without
+      # coverage keeps the whole suite passing in that mode too
+      if: matrix.python-version == '3.11' && !matrix.sqlalchemy
+      env:
+        DATABASE_URL: "sqlite:///testsuite"
+        ORMAR_RELATION_TRAVERSAL: map
+      run: PYTHONPATH=. pytest -q -W "ignore::DeprecationWarning" tests/
+
     - name: Upload coverage
       uses: codecov/codecov-action@v7.1.1
       with:

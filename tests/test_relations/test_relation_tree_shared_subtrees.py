@@ -303,7 +303,7 @@ def test_dumps_of_self_related_models_match_the_expanded_paths(options):
 
 
 def test_pydantic_models_of_self_related_models_match_the_expanded_paths(
-    monkeypatch,
+    monkeypatch, map_traversal
 ):
     shared = {}
     for model in RELATED_TO_SELF:

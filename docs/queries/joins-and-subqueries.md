@@ -3,7 +3,7 @@
 To join one table to another, so load also related models you can use following methods.
 
 * `select_related(related: Union[list, str]) -> QuerySet`
-* `select_all(follow: bool = True) -> QuerySet`
+* `select_all(follow: bool = True, max_depth: Optional[int] = None, follow_reverse: Union[bool, int] = 0) -> QuerySet`
 * `prefetch_related(related: Union[list, str]) -> QuerySet`
 
 
@@ -139,7 +139,7 @@ fields and the final `Models` are fetched for you.
 
 ## select_all
 
-`select_all(follow: bool = False) -> QuerySet`
+`select_all(follow: bool = False, max_depth: Optional[int] = None, follow_reverse: Union[bool, int] = 0) -> QuerySet`
 
 By default when you select `all()` none of the relations are loaded, likewise, 
 when `select_related()` is used you need to explicitly specify all relations that should
@@ -150,16 +150,38 @@ That's why `select_all()` was introduced, so by default load all relations of a 
 
 By default adds only directly related models of a parent model (from which the query is run).
 
-If `follow=True` is set it adds also related models of related models.
+If `follow=True` is set it adds also related models of related models:
+
+* foreign keys and one to one relations (nullable ones too) are followed up to
+  `max_depth` levels deep (default 5). Such a join has at most one row on the other
+  side, so it never multiplies the rows of the query;
+* reverse foreign keys and many to many relations are followed only in the first
+  `follow_reverse` levels (`True` = 1, default 0), as each of them multiplies rows.
+  You can also name them explicitly in `select_related()`.
+
+```python
+# book -> author -> country, but not author.books or book.tags
+await Chapter.objects.select_all(follow=True).all()
+# also the reverse/many to many relations of the first two levels
+await Department.objects.select_all(follow=True, follow_reverse=2).all()
+# only one level of foreign keys
+await Chapter.objects.select_all(follow=True, max_depth=1).all()
+```
 
 !!!info
-    To not get stuck in an infinite loop as related models also keep a relation
-    to parent model visited models set is kept.
-    
-    That way already visited models that are nested are loaded, but the load do not
-    follow them inside. So Model A -> Model B -> Model C -> Model A -> Model X
-    will load second Model A but will never follow into Model X.
-    Nested relations of those kind need to be loaded manually.
+    To not get stuck in an infinite loop, as related models also keep a relation
+    to the parent model, a relation is not followed when its target model is already
+    on the path above (a direct self relation is followed once).
+
+!!!note
+    Django's `select_related()` without arguments also stops at depth 5, but follows only
+    non-null foreign keys. ormar follows nullable foreign keys too, as they are nullable
+    by default.
+
+    Until 0.30.0 `follow=True` followed every relation (also reverse and many to many)
+    without a depth limit. That behaviour is kept for one release with the deprecated
+    `ORMAR_RELATION_TRAVERSAL=map` switch (only when neither `max_depth` nor `follow_reverse`
+    is passed) and removed in 0.31.0.
 
 With sample date like follow:
 
@@ -200,7 +222,7 @@ class Company(ormar.Model):
 To select all `Companies` with all `Branches` and `Addresses` you can simply query:
 
 ```python
-companies = await Company.objects.select_all(follow=True).all()
+companies = await Company.objects.select_all(follow=True, follow_reverse=1).all()
 
 # which is equivalent to:
 companies = await Company.objects.select_related('branches__address').all()

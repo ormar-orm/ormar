@@ -68,7 +68,7 @@ async def test_save_related_with_exclude_keeps_the_cached_tree():
 
 
 @pytest.mark.asyncio
-async def test_bulk_create_builds_the_tree_once(monkeypatch):
+async def test_bulk_create_builds_the_tree_once(monkeypatch, map_traversal):
     calls = []
     original = relation_mixin.build_relation_tree
 

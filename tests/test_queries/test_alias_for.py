@@ -12,7 +12,7 @@ def test_alias_is_stable_and_path_specific():
 
 def test_alias_is_a_short_identifier_without_underscores():
     alias = alias_for("a__very__long__relation__path__that__keeps__going")
-    assert len(alias) == 7
+    assert len(alias) == 11
     assert alias.startswith("t")
     assert "_" not in alias
     int(alias[1:], 16)

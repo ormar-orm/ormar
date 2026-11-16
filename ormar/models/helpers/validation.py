@@ -25,7 +25,9 @@ def generate_model_example(
     :rtype: dict[str, int]
     """
     example: dict[str, Any] = dict()
-    relation_map = relation_map if relation_map is not None else model._relation_tree()
+    relation_map = (
+        relation_map if relation_map is not None else model._default_relation_map()
+    )
     for name, field in model.ormar_config.model_fields.items():
         populates_sample_fields_values(
             example=example, name=name, field=field, relation_map=relation_map

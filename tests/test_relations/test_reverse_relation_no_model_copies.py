@@ -169,7 +169,7 @@ def test_self_reference_serializes_without_recursion():
     assert json.loads(root.model_dump_json()) == root.model_dump()
 
 
-def test_get_pydantic_keeps_reverse_relations():
+def test_get_pydantic_keeps_reverse_relations(map_traversal):
     album_pydantic = Album.get_pydantic()
     tracks_annotation = get_args(album_pydantic.model_fields["tracks"].annotation)[0]
     assert get_origin(tracks_annotation) is list
@@ -227,3 +227,15 @@ async def test_many_to_many_reverse_relation_serializes():
             "posts": [{"id": post.id, "title": "Post"}],
         }
         assert json.loads(loaded.model_dump_json()) == loaded.model_dump()
+
+
+def test_recursive_get_pydantic_keeps_reverse_relations(instance_traversal):
+    album_pydantic = Album.get_pydantic()
+    tracks_annotation = get_args(album_pydantic.model_fields["tracks"].annotation)[0]
+    assert get_origin(tracks_annotation) is list
+    track_pydantic = get_args(tracks_annotation)[0]
+    assert set(track_pydantic.model_fields) == {"id", "title", "album"}
+    assert not track_pydantic.model_fields["album"].is_required()
+    assert "tracks" not in Album.get_pydantic(exclude={"tracks"}).model_fields
+    node_pydantic = Node.get_pydantic()
+    assert set(node_pydantic.model_fields) == {"id", "name", "parent", "children"}

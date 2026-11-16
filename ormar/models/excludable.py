@@ -131,6 +131,14 @@ class FlattenMap:
         """
         return self._data
 
+    @property
+    def flatten_all(self) -> bool:
+        """
+        :return: True if every relation is rendered as its primary key
+        :rtype: bool
+        """
+        return self._flatten_all
+
     def is_field_flattened(self, field: str) -> bool:
         """
         Decide if a relation field should be rendered as its primary key.

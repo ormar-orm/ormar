@@ -528,7 +528,9 @@ class Model(ModelRow):
         """
         self.verify_writable()
         relation_map = (
-            relation_map if relation_map is not None else self._relation_tree()
+            relation_map
+            if relation_map is not None
+            else cast(builtins.dict, self._default_relation_map())
         )
         if exclude and isinstance(exclude, set):
             exclude = translate_list_to_dict(exclude)
@@ -835,6 +837,8 @@ class Model(ModelRow):
         follow: bool = False,
         exclude: Union[list, str, set, dict, None] = None,
         order_by: Union[list, str, None] = None,
+        max_depth: Optional[int] = None,
+        follow_reverse: Union[bool, int] = 0,
     ) -> T:
         """
         Allow to refresh existing Models fields from database.
@@ -852,6 +856,14 @@ class Model(ModelRow):
         will load second Model A but will never follow into Model X.
         Nested relations of those kind need to be loaded manually.
 
+        :param max_depth: number of relations to follow at most with
+            follow=True, forward foreign keys ``DEFAULT_FOLLOW_DEPTH`` (5) deep by
+            default (every relation without limit in the deprecated ``map``
+            traversal)
+        :type max_depth: Optional[int]
+        :param follow_reverse: number of first levels where follow=True also
+            follows reverse and many to many relations, ``True`` = 1
+        :type follow_reverse: Union[bool, int]
         :param order_by: columns by which models should be sorted
         :type order_by: Union[list, str]
         :raises NoMatch: If given pk is not found in database.
@@ -867,7 +879,9 @@ class Model(ModelRow):
         """
         relations = list(self.extract_related_names())
         if follow:
-            relations = self._iterate_related_models()
+            relations = self._follow_relation_paths(
+                max_depth=max_depth, follow_reverse=follow_reverse
+            )
         queryset = self.__class__.objects
         if exclude:
             queryset = queryset.exclude_fields(exclude)

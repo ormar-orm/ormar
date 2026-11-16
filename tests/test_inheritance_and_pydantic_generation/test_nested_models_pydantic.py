@@ -1,5 +1,6 @@
 import ormar
 from tests.lifespan import init_tests
+from tests.schema_helpers import relation_schema
 from tests.settings import create_config
 
 base_ormar_config = create_config()
@@ -43,9 +44,7 @@ create_test_database = init_tests(base_ormar_config)
 def test_have_proper_children():
     TicketPackageOut = TicketPackage.get_pydantic(exclude={"ticket"})
     assert "package" in TicketPackageOut.model_fields
-    PydanticPackage = TicketPackageOut.__pydantic_core_schema__["schema"]["fields"][
-        "package"
-    ]["schema"]["schema"]["schema"]["cls"]
+    PydanticPackage = relation_schema(schema=TicketPackageOut, field="package")
     assert "library" in PydanticPackage.model_fields
 
 

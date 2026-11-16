@@ -58,7 +58,7 @@ async def test_uuid_pk_in_save_related():
         department = Department(**to_save)
         await department.save_related(follow=True, save_all=True)
         department_check = (
-            await Department.objects.select_all(follow=True)
+            await Department.objects.select_all(follow=True, follow_reverse=2)
             .order_by(Department.courses.students.name.asc())
             .get()
         )

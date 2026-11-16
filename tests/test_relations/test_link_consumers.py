@@ -57,28 +57,29 @@ def compiled(queryset) -> str:
 
 EXPECTED_JOINS = {
     "track_album": (
-        "FROM lc_tracks LEFT OUTER JOIN lc_albums AS t1b26c7_lc_albums "
-        "ON t1b26c7_lc_albums.album_pk=lc_tracks.album_ref"
+        "FROM lc_tracks LEFT OUTER JOIN lc_albums AS t6bba8518ed_lc_albums "
+        "ON t6bba8518ed_lc_albums.album_pk=lc_tracks.album_ref"
     ),
     "album_tracks": (
-        "FROM lc_albums LEFT OUTER JOIN lc_tracks AS tf5ec81_lc_tracks "
-        "ON tf5ec81_lc_tracks.album_ref=lc_albums.album_pk"
+        "FROM lc_albums LEFT OUTER JOIN lc_tracks AS t5041ef1cf6_lc_tracks "
+        "ON t5041ef1cf6_lc_tracks.album_ref=lc_albums.album_pk"
     ),
     "post_categories": (
-        "FROM lc_posts LEFT OUTER JOIN posts_categorys AS tb6d45f_posts_categorys "
-        "ON tb6d45f_posts_categorys.post=lc_posts.post_pk "
-        "LEFT OUTER JOIN lc_categories AS ta01dee_lc_categories "
-        "ON ta01dee_lc_categories.category_pk=tb6d45f_posts_categorys.category"
+        "FROM lc_posts LEFT OUTER JOIN posts_categorys AS t9fed6b1cab_posts_categorys "
+        "ON t9fed6b1cab_posts_categorys.post=lc_posts.post_pk "
+        "LEFT OUTER JOIN lc_categories AS ta975c6a916_lc_categories "
+        "ON ta975c6a916_lc_categories.category_pk=t9fed6b1cab_posts_categorys.category"
     ),
     "category_posts_categories": (
-        "FROM lc_categories LEFT OUTER JOIN posts_categorys AS t947735_posts_categorys "
-        "ON t947735_posts_categorys.category=lc_categories.category_pk "
-        "LEFT OUTER JOIN lc_posts AS t5d13af_lc_posts "
-        "ON t5d13af_lc_posts.post_pk=t947735_posts_categorys.post "
-        "LEFT OUTER JOIN posts_categorys AS t07e726_posts_categorys "
-        "ON t07e726_posts_categorys.post=t5d13af_lc_posts.post_pk "
-        "LEFT OUTER JOIN lc_categories AS tf4ceba_lc_categories "
-        "ON tf4ceba_lc_categories.category_pk=t07e726_posts_categorys.category"
+        "FROM lc_categories LEFT OUTER JOIN posts_categorys "
+        "AS td10de44558_posts_categorys "
+        "ON td10de44558_posts_categorys.category=lc_categories.category_pk "
+        "LEFT OUTER JOIN lc_posts AS t3d90b08af7_lc_posts "
+        "ON t3d90b08af7_lc_posts.post_pk=td10de44558_posts_categorys.post "
+        "LEFT OUTER JOIN posts_categorys AS t34bacdaa24_posts_categorys "
+        "ON t34bacdaa24_posts_categorys.post=t3d90b08af7_lc_posts.post_pk "
+        "LEFT OUTER JOIN lc_categories AS t8d1adc3bbc_lc_categories "
+        "ON t8d1adc3bbc_lc_categories.category_pk=t34bacdaa24_posts_categorys.category"
     ),
 }
 

@@ -842,7 +842,12 @@ class QuerysetProxy(Generic[T]):
             relation=self.relation, type_=self.type_, to=self.to, qryset=queryset
         )
 
-    def select_all(self, follow: bool = False) -> "QuerysetProxy[T]":
+    def select_all(
+        self,
+        follow: bool = False,
+        max_depth: Optional[int] = None,
+        follow_reverse: Union[bool, int] = 0,
+    ) -> "QuerysetProxy[T]":
         """
         By default adds only directly related models.
 
@@ -860,10 +865,17 @@ class QuerysetProxy(Generic[T]):
         by default only directly related models are saved
         with follow=True also related models of related models are saved
         :type follow: bool
+        :param max_depth: number of relations to follow at most with follow=True
+        :type max_depth: Optional[int]
+        :param follow_reverse: number of first levels where follow=True also
+            follows reverse and many to many relations, ``True`` = 1
+        :type follow_reverse: Union[bool, int]
         :return: reloaded Model
         :rtype: Model
         """
-        queryset = self.queryset.select_all(follow=follow)
+        queryset = self.queryset.select_all(
+            follow=follow, max_depth=max_depth, follow_reverse=follow_reverse
+        )
         return self.__class__(
             relation=self.relation, type_=self.type_, to=self.to, qryset=queryset
         )
