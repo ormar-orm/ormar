@@ -618,3 +618,155 @@ async def test_main_referenced_keeps_main_columns():
             {"name": "Why don't you use ormar yet?", "category__name": "News"},
             {"name": "Check this out, ormar now for free", "category__name": "News"},
         ]
+
+
+POST_NAMES = [
+    "Ormar strikes again!",
+    "Why don't you use ormar yet?",
+    "Check this out, ormar now for free",
+]
+
+
+@pytest.mark.asyncio
+async def test_values_related_fields_join_relation_automatically():
+    async with base_ormar_config.database:
+        posts = await Post.objects.values(["category__name", "category__sort_order"])
+        assert posts == [{"category__name": "News", "category__sort_order": 0}] * 3
+
+
+@pytest.mark.asyncio
+async def test_values_own_and_related_fields_join_relation_automatically():
+    async with base_ormar_config.database:
+        posts = await Post.objects.values(["name", "category__name"])
+        assert posts == [
+            {"name": post_name, "category__name": "News"} for post_name in POST_NAMES
+        ]
+
+
+@pytest.mark.asyncio
+async def test_values_list_related_fields_join_relation_automatically():
+    async with base_ormar_config.database:
+        posts = await Post.objects.values_list(
+            ["category__name", "category__sort_order"]
+        )
+        assert posts == [("News", 0)] * 3
+
+
+@pytest.mark.asyncio
+async def test_values_list_flatten_related_field_joins_relation_automatically():
+    async with base_ormar_config.database:
+        names = await Post.objects.values_list("category__name", flatten=True)
+        assert names == ["News"] * 3
+
+
+@pytest.mark.asyncio
+async def test_values_nested_related_path_joins_whole_path_automatically():
+    async with base_ormar_config.database:
+        posts = await Post.objects.values(["name", "category__created_by__name"])
+        assert posts == [
+            {"name": post_name, "category__created_by__name": "Anonymous"}
+            for post_name in POST_NAMES
+        ]
+
+
+@pytest.mark.asyncio
+async def test_values_dict_and_set_specs_join_relations_automatically():
+    async with base_ormar_config.database:
+        from_dict = await Post.objects.values(
+            {"name": ..., "category": {"name": ..., "created_by": {"name"}}}
+        )
+        from_set = await Post.objects.values(
+            {"name", "category__name", "category__created_by__name"}
+        )
+        expected = [
+            {
+                "name": post_name,
+                "category__name": "News",
+                "category__created_by__name": "Anonymous",
+            }
+            for post_name in POST_NAMES
+        ]
+        assert from_dict == from_set == expected
+
+
+@pytest.mark.asyncio
+async def test_values_related_fields_with_relation_already_selected():
+    async with base_ormar_config.database:
+        posts = await Post.objects.select_related("category__created_by").values(
+            ["name", "category__name"]
+        )
+        assert posts == [
+            {"name": post_name, "category__name": "News"} for post_name in POST_NAMES
+        ]
+
+
+@pytest.mark.asyncio
+async def test_values_related_fields_with_filter_on_same_relation():
+    async with base_ormar_config.database:
+        posts = await Post.objects.filter(category__name="News").values(
+            ["name", "category__sort_order"]
+        )
+        assert posts == [
+            {"name": post_name, "category__sort_order": 0} for post_name in POST_NAMES
+        ]
+        assert (
+            await Post.objects.filter(category__name="Sports").values(
+                ["category__name"]
+            )
+            == []
+        )
+
+
+@pytest.mark.asyncio
+async def test_fields_with_related_paths_then_values_joins_relation():
+    async with base_ormar_config.database:
+        posts = await Post.objects.fields(["name", "category__name"]).values()
+        assert posts == [
+            {"name": post_name, "category__name": "News"} for post_name in POST_NAMES
+        ]
+        names = await Post.objects.fields("category__name").values_list(flatten=True)
+        assert names == ["News"] * 3
+
+
+@pytest.mark.asyncio
+async def test_exclude_fields_with_related_path_does_not_join_relation():
+    async with base_ormar_config.database:
+        posts = await Post.objects.exclude_fields("category__name").values()
+        assert posts == [
+            {"id": post_id, "name": post_name, "category": 1}
+            for post_id, post_name in enumerate(POST_NAMES, start=1)
+        ]
+
+
+@pytest.mark.asyncio
+async def test_values_reverse_relation_field_returns_row_per_related_model():
+    async with base_ormar_config.database:
+        categories = await Category.objects.values(["name", "posts__name"])
+        assert categories == [
+            {"name": "News", "posts__name": post_name} for post_name in POST_NAMES
+        ]
+
+
+@pytest.mark.asyncio
+async def test_values_m2m_relation_field_returns_row_per_related_model():
+    async with base_ormar_config.database:
+        users = await User.objects.values(["name", "roles__name"], exclude_through=True)
+        assert users == [
+            {"name": "Anonymous", "roles__name": "admin"},
+            {"name": "Anonymous", "roles__name": "editor"},
+        ]
+
+
+@pytest.mark.asyncio
+async def test_values_relation_name_without_join_returns_foreign_key():
+    async with base_ormar_config.database:
+        posts = await Post.objects.values(["name", "category"])
+        assert posts == [{"name": post_name, "category": 1} for post_name in POST_NAMES]
+
+
+@pytest.mark.asyncio
+async def test_querysetproxy_values_related_field_joins_relation_automatically():
+    async with base_ormar_config.database:
+        category = await Category.objects.get(name="News")
+        posts = await category.posts.values_list(["name", "category__sort_order"])
+        assert posts == [(post_name, 0) for post_name in POST_NAMES]
