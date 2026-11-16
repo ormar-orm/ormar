@@ -59,8 +59,8 @@ Every method takes a SQLAlchemy statement and optional `params`, values of named
 
 | Method | Returns |
 | ------ | ------- |
-| `fetch_all(query, params=None)` | list of rows |
-| `fetch_one(query, params=None)` | first row or `None` |
+| `fetch_all(query, params=None, as_tuples=False)` | list of rows |
+| `fetch_one(query, params=None, as_tuples=False)` | first row or `None` |
 | `fetch_val(query, column=0, params=None)` | value of the column at position `column` of the first row, or `None` without rows |
 | `execute(query, params=None)` | for an `INSERT` the primary key of the inserted row, for `UPDATE` / `DELETE` the number of matched rows (also those already holding the new values) |
 | `execute_many(query, values)` | `None`; runs the statement once per mapping in `values` |
@@ -70,8 +70,9 @@ Every method takes a SQLAlchemy statement and optional `params`, values of named
 
 Rows are mappings keyed by the result labels: the column name or the name given with
 `.label()`. The selected column objects work as keys too. Rows are not tuples, so
-`row[0]` raises a `KeyError`; to read a column by position use
-`fetch_val(query, column=...)`.
+`row[0]` raises a `KeyError`; to read columns by position pass `as_tuples=True` to
+`fetch_all()` or `fetch_one()`, which return tuples of values in select order (with the
+same type conversion), or use `fetch_val(query, column=...)` for a single value.
 
 ```python
 async with database.get_query_executor() as executor:
@@ -94,6 +95,12 @@ async with database.get_query_executor() as executor:
     )
     await executor.fetch_val(query, column=1)  # 'Bob'
     await executor.fetch_val(sa.select(sa.func.max(accounts.c.balance)))  # 100
+
+    rows = await executor.fetch_all(
+        sa.select(accounts.c.id, accounts.c.owner_name).order_by(accounts.c.id),
+        as_tuples=True,
+    )
+    rows[0]  # (1, 'Alice')
 ```
 
 Treat rows as read-only, use `dict(row)` for a copy you can change.

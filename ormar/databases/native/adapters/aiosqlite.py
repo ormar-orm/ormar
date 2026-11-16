@@ -13,7 +13,12 @@ from ormar.databases.native.adapters.base import (
     first_value,
     inserted_primary_key,
 )
-from ormar.databases.native.compiler import BoundBatch, BoundStatement, row_to_dict
+from ormar.databases.native.compiler import (
+    BoundBatch,
+    BoundStatement,
+    row_to_dict,
+    row_to_tuple,
+)
 
 
 class AiosqliteAdapter(DriverAdapter):
@@ -36,7 +41,9 @@ class AiosqliteAdapter(DriverAdapter):
         super().__init__(dialect=dialect)
         self.driver_errors = (sqlite3.Error,)
 
-    async def fetch_all(self, raw: Any, bound: BoundStatement) -> List[Dict[str, Any]]:
+    async def fetch_all(
+        self, raw: Any, bound: BoundStatement, as_tuples: bool = False
+    ) -> List[Any]:
         """
         Run a statement and return all rows keyed by result label.
 
@@ -44,8 +51,10 @@ class AiosqliteAdapter(DriverAdapter):
         :type raw: Any
         :param bound: statement to execute
         :type bound: BoundStatement
+        :param as_tuples: return tuples of values in select order instead
+        :type as_tuples: bool
         :return: rows
-        :rtype: List[Dict[str, Any]]
+        :rtype: List[Any]
         """
         async with execute_mutex(raw=raw):
             async with raw.driver_connection.execute(
@@ -55,7 +64,8 @@ class AiosqliteAdapter(DriverAdapter):
         self.resolve_processors(
             bound=bound, coltypes=[None] * len(bound.plan.result_keys)
         )
-        return [row_to_dict(plan=bound.plan, values=row) for row in rows]
+        convert = row_to_tuple if as_tuples else row_to_dict
+        return [convert(plan=bound.plan, values=row) for row in rows]
 
     async def execute(self, raw: Any, bound: BoundStatement) -> Any:
         """

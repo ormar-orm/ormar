@@ -78,6 +78,15 @@ async def test_reading_rows():
                     == 100
                 )
 
+                rows = await executor.fetch_all(
+                    sa.select(accounts.c.id, accounts.c.owner_name).order_by(
+                        accounts.c.id
+                    ),
+                    as_tuples=True,
+                )
+                assert [row[1] for row in rows] == ["Alice", "Bob", "Carol"]
+                assert all(isinstance(row, tuple) for row in rows)
+
 
 @pytest.mark.asyncio
 async def test_fetch_val_column_without_native_execution():

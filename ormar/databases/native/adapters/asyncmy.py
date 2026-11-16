@@ -11,7 +11,12 @@ from ormar.databases.native.adapters.base import (
     execute_mutex,
     inserted_primary_key,
 )
-from ormar.databases.native.compiler import BoundBatch, BoundStatement, row_to_dict
+from ormar.databases.native.compiler import (
+    BoundBatch,
+    BoundStatement,
+    row_to_dict,
+    row_to_tuple,
+)
 
 
 class AsyncmyAdapter(DriverAdapter):
@@ -39,7 +44,9 @@ class AsyncmyAdapter(DriverAdapter):
         self.driver_errors = (dbapi.Error, AttributeError)  # type: ignore[union-attr]
         self.unbuffered_cursor = dbapi.asyncmy.cursors.SSCursor  # type: ignore
 
-    async def fetch_all(self, raw: Any, bound: BoundStatement) -> List[Dict[str, Any]]:
+    async def fetch_all(
+        self, raw: Any, bound: BoundStatement, as_tuples: bool = False
+    ) -> List[Any]:
         """
         Run a statement on a cursor and return all rows keyed by result label;
         the result column types come from ``cursor.description``.
@@ -48,8 +55,10 @@ class AsyncmyAdapter(DriverAdapter):
         :type raw: Any
         :param bound: statement to execute
         :type bound: BoundStatement
+        :param as_tuples: return tuples of values in select order instead
+        :type as_tuples: bool
         :return: rows
-        :rtype: List[Dict[str, Any]]
+        :rtype: List[Any]
         """
         async with execute_mutex(raw=raw), raw.driver_connection.cursor() as cursor:
             await cursor.execute(query=bound.sql, args=tuple(bound.args))
@@ -57,7 +66,8 @@ class AsyncmyAdapter(DriverAdapter):
                 bound=bound, coltypes=[desc[1] for desc in cursor.description]
             )
             rows = await cursor.fetchall()
-        return [row_to_dict(plan=bound.plan, values=row) for row in rows]
+        convert = row_to_tuple if as_tuples else row_to_dict
+        return [convert(plan=bound.plan, values=row) for row in rows]
 
     async def execute(self, raw: Any, bound: BoundStatement) -> Any:
         """

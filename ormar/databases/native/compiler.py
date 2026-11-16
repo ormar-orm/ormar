@@ -67,6 +67,7 @@ class StatementPlan:
         self.result_types: Tuple[Any, ...] = tuple(col[3] for col in result_columns)
         self.result_processors: Optional[List[ResultProcessor]] = None
         self.processed_columns: Tuple[Tuple[str, Callable[[Any], Any]], ...] = ()
+        self.processed_positions: Tuple[Tuple[int, Callable[[Any], Any]], ...] = ()
         self.row_class = row_class_for(result_columns=result_columns)
         self.returning = bool(compiled.effective_returning)
         self.is_insert = bool(compiled.isinsert)
@@ -712,15 +713,22 @@ def resolve_result_processors(
     :param coltypes: driver-reported column types (or None per column)
     :type coltypes: Sequence[Any]
     """
-    plan.result_processors = [
+    result_processors = [
         type_._cached_result_processor(dialect=dialect, coltype=coltype)
         for type_, coltype in zip(plan.result_types, coltypes)
     ]
-    plan.processed_columns = tuple(
-        (key, processor)
-        for key, processor in zip(plan.result_keys, plan.result_processors)
+    processed_positions = tuple(
+        (position, processor)
+        for position, processor in enumerate(result_processors)
         if processor is not None
     )
+    plan.processed_positions = processed_positions
+    plan.processed_columns = tuple(
+        (plan.result_keys[position], processor)
+        for position, processor in processed_positions
+    )
+    # set last: a plan with result_processors is treated as fully resolved
+    plan.result_processors = result_processors
 
 
 def row_to_dict(plan: StatementPlan, values: Sequence[Any]) -> Dict[str, Any]:
@@ -741,3 +749,25 @@ def row_to_dict(plan: StatementPlan, values: Sequence[Any]) -> Dict[str, Any]:
     for key, processor in plan.processed_columns:
         row[key] = processor(row[key])
     return row  # type: ignore[no-any-return]
+
+
+def row_to_tuple(plan: StatementPlan, values: Sequence[Any]) -> Tuple[Any, ...]:
+    """
+    Convert one driver row into a tuple of values in select order, running
+    each value through the same result processor ``row_to_dict`` uses::
+
+        (1, '{"a": 1}')  # -> (1, {"a": 1}) on SQLite
+
+    :param plan: plan of the executed statement, with resolved processors
+    :type plan: StatementPlan
+    :param values: row values in result column order
+    :type values: Sequence[Any]
+    :return: row values in result column order
+    :rtype: Tuple[Any, ...]
+    """
+    if not plan.processed_positions:
+        return tuple(values)
+    row = list(values)
+    for position, processor in plan.processed_positions:
+        row[position] = processor(row[position])
+    return tuple(row)

@@ -112,6 +112,16 @@
 
     `Integer`, `BigInteger` and `SmallInteger` accept `unsigned=True`: the column is `UNSIGNED` on MySQL and MariaDB (foreign keys to it too), gets `CHECK (column >= 0)` on PostgreSQL and SQLite, and `minimum` defaults to `0`. Alembic autogenerate no longer recreates columns that were made unsigned by hand.
 
+* **Rows as tuples from the query executor**
+
+    `fetch_all()` and `fetch_one()` of `database.get_query_executor()` take `as_tuples=True` and return tuples of values in select order instead of rows keyed by result label, with the same type conversion.
+
+    ```python
+    async with database.get_query_executor() as executor:
+        rows = await executor.fetch_all(select(users.c.id, users.c.name), as_tuples=True)
+        # -> [(1, "a"), (2, "b")]
+    ```
+
 ### 🐛 Fixes
 
 * `values()` and `values_list()` join the relations of related fields they select (e.g. `values(["name", "category__name"])`, also after `fields()`), like filters do. Without `select_related()` those fields were silently dropped from the result. As with `select_related()`, a reverse or many-to-many relation returns one row per related model.
