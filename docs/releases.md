@@ -29,9 +29,17 @@
 
     Migration: if a response must keep exactly one level of nesting use `get_pydantic(max_depth=1)`; if `select_all(follow=True)` / `load_all(follow=True)` must load reverse or many to many relations pass `follow_reverse=N` or list them in `select_related()`; for deeper forward chains pass `max_depth=`.
 
+* **`values()` and `values_list()` join the relations of selected related fields** ([#2005](https://github.com/ormar-orm/ormar/pull/2005))
+
+    Related fields they select (e.g. `values(["name", "category__name"])`, also after `fields()`) are joined like in filters. Without `select_related()` those fields used to be silently dropped. As with `select_related()`, a reverse or many to many relation returns one row per related model, so such queries can return more rows than before.
+
+* **`ormar.Enum` forwards `sqlalchemy.Enum` options** ([#1385](https://github.com/ormar-orm/ormar/issues/1385), [#1987](https://github.com/ormar-orm/ormar/pull/1987))
+
+    `values_callable`, `native_enum`, `create_constraint`, `length`, `validate_strings`, `schema`, `metadata`, `inherit_schema` and `quote` are passed to the column type. They used to be accepted and silently dropped, so e.g. an `int` enum with `values_callable` stored member names (`"UK"`) instead of values. If you passed any of them, check the generated DDL and the stored data: rows written as names are not read back with `values_callable`.
+
 ### 🆕 Features
 
-* **`update()` and `delete()` with related models** ([#1967](https://github.com/ormar-orm/ormar/issues/1967))
+* **`update()` and `delete()` with related models** ([#1967](https://github.com/ormar-orm/ormar/issues/1967), [#1973](https://github.com/ormar-orm/ormar/pull/1973))
 
     `update()` and `delete()` accept filters on related models of any kind (forward, reverse, many to many) and touch the rows the same filters select in `all()`, instead of raising `QueryDefinitionError`. Expressions in `update()` can read fields of models reached through foreign keys; rows with a `NULL` foreign key on the path are not updated. See [update](queries/update.md#reading-related-models).
 
@@ -40,7 +48,7 @@
     await Track.objects.filter(album__name="A").update(position=F("album__rank"))
     ```
 
-* **`Greatest`, `Least` and `Coalesce` in column expressions** ([#1974](https://github.com/ormar-orm/ormar/issues/1974))
+* **`Greatest`, `Least` and `Coalesce` in column expressions** ([#1974](https://github.com/ormar-orm/ormar/issues/1974), [#1977](https://github.com/ormar-orm/ormar/pull/1977))
 
     Functions for filters and `update()`, e.g. atomic "never go back" or "never below zero" updates. On SQLite `Greatest` / `Least` compile to the scalar `max()` / `min()`; with a `NULL` argument PostgreSQL ignores it, MySQL and SQLite return `NULL`. See [update](queries/update.md#functions).
 
@@ -49,7 +57,7 @@
     await Pass.objects.filter(id=1).update(refunded=Coalesce(F("refunded"), 0) + amount)
     ```
 
-* **`Random()` in column expressions**
+* **`Random()` in column expressions** ([#1977](https://github.com/ormar-orm/ormar/pull/1977))
 
     A random float in `[0, 1)` per row for filters and `update()`, also accepted by `order_by()` like `"?"` and `ormar.random()`.
 
@@ -57,7 +65,7 @@
     await Player.objects.update(each=True, score=Random())
     ```
 
-* **Atomic upsert with `create(on_conflict="update")`** ([#1975](https://github.com/ormar-orm/ormar/issues/1975))
+* **Atomic upsert with `create(on_conflict="update")`** ([#1975](https://github.com/ormar-orm/ormar/issues/1975), [#1978](https://github.com/ormar-orm/ormar/pull/1978))
 
     Inserts the row or updates the one it conflicts with on `conflict_target`, in one statement, and returns the stored row. Unlike `update_or_create()` concurrent calls neither fail nor overwrite each other. `pre_save` / `post_save` are sent in both cases. See [conflict handling](queries/create.md#update-conflicting-rows).
 
@@ -68,7 +76,7 @@
     )
     ```
 
-* **`update_returning()`: update rows and get them back**
+* **`update_returning()`: update rows and get them back** ([#1986](https://github.com/ormar-orm/ormar/pull/1986))
 
     `QuerySet.update_returning(each=False, **kwargs)` (and on `QuerysetProxy`) updates like `update()`, with the same filters and expressions, and returns the updated models as stored, with their own columns. PostgreSQL and SQLite (3.35+) run one `UPDATE ... RETURNING`; MySQL locks the rows with `SELECT ... FOR UPDATE`, updates them by primary key and reads them back in one transaction. `update()` is unchanged. See [update_returning](queries/update.md#update_returning).
 
@@ -78,7 +86,7 @@
     )
     ```
 
-* **Expressions on conflict with `update_values`**
+* **Expressions on conflict with `update_values`** ([#1985](https://github.com/ormar-orm/ormar/pull/1985))
 
     `create()` and `bulk_create()` with `on_conflict="update"` take `update_values`: values or column expressions set on the conflicting row in the same statement, e.g. an atomic counter or a "never go back" marker. `F("x")` is the existing row's column, the new `ormar.Inserted("x")` the value the insert tried to write (`excluded.x`, `VALUES(x)` on MySQL). With `update_values` the `update_fields` default to none; `on_update` fields not named in either still get their value. The rules of expressions in `update()` apply, the statement is cached per expression shape, and MySQL bulk upserts keep their single batch. See [expressions on conflict](queries/create.md#expressions-on-conflict).
 
@@ -95,7 +103,7 @@
     )
     ```
 
-* **Enums stored by value with `ormar.Enum(store_values=True)`**
+* **Enums stored by value with `ormar.Enum(store_values=True)`** ([#1991](https://github.com/ormar-orm/ormar/pull/1991))
 
     An `int` enum gets an `INTEGER` column with a check constraint on its values instead of a string enum column, so the database holds `1`, `2` and compares them as numbers. Other enums store their values instead of member names.
 
@@ -108,11 +116,11 @@
     # country INTEGER NOT NULL CHECK (country IN (1, 2))
     ```
 
-* **Unsigned integers with `unsigned=True`** ([#1015](https://github.com/ormar-orm/ormar/issues/1015))
+* **Unsigned integers with `unsigned=True`** ([#1015](https://github.com/ormar-orm/ormar/issues/1015), [#1992](https://github.com/ormar-orm/ormar/pull/1992))
 
     `Integer`, `BigInteger` and `SmallInteger` accept `unsigned=True`: the column is `UNSIGNED` on MySQL and MariaDB (foreign keys to it too), gets `CHECK (column >= 0)` on PostgreSQL and SQLite, and `minimum` defaults to `0`. Alembic autogenerate no longer recreates columns that were made unsigned by hand.
 
-* **Rows as tuples from the query executor**
+* **Rows as tuples from the query executor** ([#1983](https://github.com/ormar-orm/ormar/pull/1983))
 
     `fetch_all()` and `fetch_one()` of `database.get_query_executor()` take `as_tuples=True` and return tuples of values in select order instead of rows keyed by result label, with the same type conversion.
 
@@ -124,31 +132,29 @@
 
 ### 🐛 Fixes
 
-* `values()` and `values_list()` join the relations of related fields they select (e.g. `values(["name", "category__name"])`, also after `fields()`), like filters do. Without `select_related()` those fields were silently dropped from the result. As with `select_related()`, a reverse or many-to-many relation returns one row per related model.
 * `OrmarConfig(constraints=[...])` and `ormar_config.copy(constraints=[...])` accept `IndexColumns` for type checkers. The annotation was `list[ColumnCollectionConstraint]`, which `IndexColumns` (a subclass of `sqlalchemy.Index`) is not, so mypy rejected it although it worked at runtime. [#1982](https://github.com/ormar-orm/ormar/pull/1982)
-* `ormar.Enum` passes `sqlalchemy.Enum` options (`values_callable`, `native_enum`, `create_constraint`, `length`, `validate_strings`, `schema`, `metadata`, `inherit_schema`, `quote`) to the column type. They were accepted and silently dropped, so an `int` enum always stored member names (`"UK"`) instead of values. [#1385](https://github.com/ormar-orm/ormar/issues/1385)
-* `fetch_val(query, column=...)` of the query executor returned the first column for any `column` when the statement ran through SQLAlchemy (drivers without native execution, `native_execution=False`); it returns the requested column now.
+* `fetch_val(query, column=...)` of the query executor returned the first column for any `column` when the statement ran through SQLAlchemy (drivers without native execution, `native_execution=False`); it returns the requested column now. [#1984](https://github.com/ormar-orm/ormar/pull/1984)
 * Two relation paths of one query whose table aliases had the same hash raised `QueryDefinitionError: Alias ... collides with an already joined relation` (since 0.27.0, aliases were a 24 bit hash of the relation path). Rare for one query, but likely with many joins (about 11 % for 2,000 joins). Aliases are now a 40 bit hash (0.0002 % for 2,000 joins), and a remaining collision is resolved: every alias is owned by the first path that gets it and a colliding path gets the next free salted hash. [#1998](https://github.com/ormar-orm/ormar/pull/1998)
 
 ### 📝 Docs
 
-* **SQLAlchemy core statements**: how to run core statements on ormar's connection and in its transactions with `database.get_query_executor()`, what its methods return and how to turn the rows back into models. See [SQLAlchemy core statements](queries/sqlalchemy-core.md).
+* **SQLAlchemy core statements**: how to run core statements on ormar's connection and in its transactions with `database.get_query_executor()`, what its methods return and how to turn the rows back into models. See [SQLAlchemy core statements](queries/sqlalchemy-core.md). [#1984](https://github.com/ormar-orm/ormar/pull/1984)
 
 ### ⚡ Performance
 
-* **Relation trees keep their size with densely related models** ([#1995](https://github.com/ormar-orm/ormar/issues/1995))
+* **Relation trees keep their size with densely related models** ([#1995](https://github.com/ormar-orm/ormar/issues/1995), [#1996](https://github.com/ormar-orm/ormar/pull/1996))
 
-    The default relation map of `model_dump()`, `save_related()` and `get_pydantic()` was built by spelling out every relation path of the model, and the number of paths grows exponentially with how densely models are related (self references, several relations to the same model, reverse relations). It was cached on each model class, so a class could keep tens of megabytes for the life of the process. The tree is now built directly and a repeated subtree is stored once: 7 models related to each other through foreign keys and many to many relations take 0.02 MB and 3 ms instead of 64 MB and 1.2 s per class. The tree has the same content; the flat list of paths is only built for `load_all(follow=True)` and `select_all(follow=True)`.
-* **Upserts reuse their compiled statement** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))
+    The relation tree behind `model_dump()`, `save_related()` and `get_pydantic()` (only used by the deprecated `map` traversal since [#1998](https://github.com/ormar-orm/ormar/pull/1998)) was built by spelling out every relation path of the model, and the number of paths grows exponentially with how densely models are related (self references, several relations to the same model, reverse relations). It was cached on each model class, so a class could keep tens of megabytes for the life of the process. The tree is now built directly and a repeated subtree is stored once: 7 models related to each other through foreign keys and many to many relations take 0.02 MB and 3 ms instead of 64 MB and 1.2 s per class. The tree has the same content; the flat list of paths is only built for `load_all(follow=True)` and `select_all(follow=True)`.
+* **Upserts reuse their compiled statement** ([#1979](https://github.com/ormar-orm/ormar/issues/1979), [#1980](https://github.com/ormar-orm/ormar/pull/1980))
 
     SQLAlchemy gives no cache key to inserts with `ON CONFLICT` / `ON DUPLICATE KEY`, so `create(on_conflict=...)` and `bulk_create(on_conflict=...)` compiled their statement on every call and asyncpg prepared it again for a single row. Statements without a cache key now keep their plan per statement object (bounded like the other plans): a one-row upsert on PostgreSQL takes one round trip instead of up to three.
-* **MySQL bulk upserts with `on_update` fields run as one batch** ([#1979](https://github.com/ormar-orm/ormar/issues/1979))
+* **MySQL bulk upserts with `on_update` fields run as one batch** ([#1979](https://github.com/ormar-orm/ormar/issues/1979), [#1980](https://github.com/ormar-orm/ormar/pull/1980))
 
     `bulk_create(on_conflict="update")` of a model with `on_update` fields ran one statement per row on MySQL. The `on_update` values are now set once in user variables, so the rows go in one multi-row insert.
 
 ### 📦 Dependencies
 
-* **SQLAlchemy 2.1 supported**, the range is now `>=2.0.50,<2.2`. Native execution reads the asyncpg transaction state the way both versions do, and an empty `execute_many()` no longer passes the empty parameter list SQLAlchemy 2.1 deprecates. The lower bound goes up from 2.0.40, because ormar 0.29 already needed 2.0.50 (asyncmy error translation and asyncpg disconnects failed on older releases); CI now also runs the suite on 2.0.50.
+* **SQLAlchemy 2.1 supported**, the range is now `>=2.0.50,<2.2`. Native execution reads the asyncpg transaction state the way both versions do, and an empty `execute_many()` no longer passes the empty parameter list SQLAlchemy 2.1 deprecates. The lower bound goes up from 2.0.40, because ormar 0.29 already needed 2.0.50 (asyncmy error translation and asyncpg disconnects failed on older releases); CI now also runs the suite on 2.0.50. [#1981](https://github.com/ormar-orm/ormar/pull/1981)
 
 ## 0.29.0
 
