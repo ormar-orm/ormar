@@ -129,6 +129,28 @@ await Product.objects.update(each=True, price=Least(F("price"), F("max_price") *
 * Literal arguments are typed like in arithmetic, from the first field or expression
   argument and the literal (`Greatest(F("count"), 2.5)` compares with a float).
 
+`ormar.Func(name, *arguments)` calls any other SQL function by name, with any number
+of fields, expressions or literals as arguments:
+
+```python
+from ormar import F, Func
+
+await Member.objects.update(each=True, email=Func("lower", F("email")))
+await Code.objects.update(each=True, value=Func("replace", F("value"), "-", ""))
+await Member.objects.filter(name=Func("upper", F("nick"))).all()
+```
+
+* The name is passed to the database as is: letters, digits and underscores, with
+  dots for a schema qualified function (`Func("extensions.unaccent", F("town"))`).
+  `Func("greatest", ...)` and `Func("least", ...)` compile like `Greatest` / `Least`.
+* Literal arguments are typed by their own value. Without a field or expression
+  argument (`Func("upper", "abc")`), the literals take the type of the column that
+  is written or compared.
+* The result has the type of the first field or expression argument, else of that
+  column. Pass `type_` (a SQLAlchemy type class or instance) when the function
+  returns something else, e.g. to use it in arithmetic:
+  `Func("length", F("name"), type_=sqlalchemy.Integer) * 2`.
+
 `ormar.Random()` is a random float from 0 (inclusive) to 1 (exclusive), drawn by
 the database for each row:
 

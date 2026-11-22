@@ -13,6 +13,7 @@ from ormar.queryset.clause import NullsOrdering, and_, or_
 from ormar.queryset.expressions import (
     Coalesce,
     F,
+    Func,
     Greatest,
     Inserted,
     Least,
@@ -38,6 +39,7 @@ __all__ = [
     "or_",
     "Coalesce",
     "F",
+    "Func",
     "Greatest",
     "Inserted",
     "Least",

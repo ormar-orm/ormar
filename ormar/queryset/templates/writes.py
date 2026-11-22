@@ -97,6 +97,7 @@ def update_value_clauses(
                 columns=expression_columns(node=value, model=model_cls, upsert=True),
                 slot=f"ormar_u{index}",
                 inserted=inserted,
+                reference_type=table.c[name].type,
             )
             if isinstance(value, Expression)
             else sqlalchemy.bindparam(key=f"ormar_u{index}", type_=table.c[name].type)

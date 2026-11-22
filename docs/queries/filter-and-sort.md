@@ -228,7 +228,8 @@ relation. Through a reverse foreign key or a many-to-many relation the
 expression is compared per related row, as in `filter(tracks__position=1)`.
 
 Expressions can also use the functions `ormar.Greatest`, `ormar.Least`,
-`ormar.Coalesce` and `ormar.Random`, see [update](update.md#functions):
+`ormar.Coalesce`, `ormar.Random` and any SQL function through `ormar.Func`, see
+[update](update.md#functions):
 
 ```python
 await Track.objects.filter(play_count__gt=Greatest(F("position"), 10)).all()
