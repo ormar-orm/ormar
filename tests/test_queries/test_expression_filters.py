@@ -371,19 +371,21 @@ async def test_like_wildcards_in_expression_literals_are_escaped(players):
 
 
 @pytest.mark.asyncio
-async def test_unaccent_search(players):
-    if not DATABASE_URL.startswith("postgresql"):
-        pytest.skip("unaccent is a PostgreSQL extension")
-    try:  # pragma: no cover
+@pytest.mark.skipif(
+    not DATABASE_URL.startswith("postgresql"),
+    reason="unaccent is a PostgreSQL extension",
+)
+async def test_unaccent_search(players):  # pragma: no cover
+    try:
         async with base_ormar_config.database.transaction():
             async with base_ormar_config.database.connection() as connection:
                 await connection.execute(
                     sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS unaccent")
                 )
-    except Exception:  # pragma: no cover
+    except Exception:
         pytest.skip("the database user cannot create the unaccent extension")
-    await Team.objects.create(name="Kraków")  # pragma: no cover
-    town = Func("unaccent", F("name"))  # pragma: no cover
+    await Team.objects.create(name="Kraków")
+    town = Func("unaccent", F("name"))
     teams = Team.objects.filter(town.icontains(Func("unaccent", "KRAKOW")))
     assert await teams.values_list("name", flatten=True) == ["Kraków"]
     teams = Team.objects.filter(name__icontains=Func("unaccent", "krakow"))
