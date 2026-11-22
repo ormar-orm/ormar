@@ -98,7 +98,7 @@ to a table, get it too:
 
 | Field | `default` | Column default |
 |-------|-----------|----------------|
-| `Boolean` | `True` / `False` | `true` / `false` (`1` / `0` on SQLite) |
+| `Boolean` | `True` / `False` | `true` / `false` |
 | `Integer`, `BigInteger`, `SmallInteger` | `int` | the number |
 | `Float` | `float` or `int` | the number |
 | `Decimal` | `Decimal` or `int` | the number |

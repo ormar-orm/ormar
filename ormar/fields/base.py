@@ -374,15 +374,15 @@ class BaseField(FieldInfo):  # type: ignore[misc]
             return self.server_default
         field_type = self.__type__
         if field_type is bool and type(default) is bool:
-            return sqlalchemy.true() if default else sqlalchemy.false()
+            return sqlalchemy.text("true" if default else "false")
         if field_type is int and type(default) is int:
             return sqlalchemy.text(str(default))
         if field_type is float and type(default) in (int, float):
-            return (
-                sqlalchemy.text(repr(float(default)))
-                if math.isfinite(default)
-                else None
-            )
+            try:
+                number = float(default)
+            except OverflowError:
+                return None
+            return sqlalchemy.text(repr(number)) if math.isfinite(number) else None
         if field_type is decimal.Decimal and type(default) in (int, decimal.Decimal):
             literal = decimal.Decimal(default)
             return (
@@ -393,7 +393,7 @@ class BaseField(FieldInfo):  # type: ignore[misc]
             and type(default) is str
             and not isinstance(self.column_type, sqlalchemy.Text)
         ):
-            return default
+            return sqlalchemy.literal(default, type_=sqlalchemy.String())
         return None
 
     def _get_encrypted_column(self, name: str) -> sqlalchemy.Column:

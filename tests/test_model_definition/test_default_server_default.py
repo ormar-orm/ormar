@@ -5,7 +5,9 @@ import uuid
 import pytest
 import sqlalchemy
 from sqlalchemy.dialects import mysql, postgresql, sqlite
-from sqlalchemy.schema import CreateColumn, CreateTable
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.schema import CreateColumn, CreateTable, ExecutableDDLElement
+from sqlalchemy.sql.compiler import DDLCompiler
 
 import ormar
 from tests.lifespan import init_tests
@@ -17,6 +19,27 @@ base_ormar_config = create_config()
 class Color(enum.Enum):
     RED = "red"
     BLUE = "blue"
+
+
+class Level(enum.IntEnum):
+    LOW = 1
+
+
+class AddColumn(ExecutableDDLElement):
+    """``ALTER TABLE ... ADD COLUMN`` of a column, as a migration tool emits it."""
+
+    def __init__(self, table_name: str, column: sqlalchemy.Column) -> None:
+        self.table_name = table_name
+        self.column = column
+
+
+@compiles(AddColumn)
+def compile_add_column(
+    element: AddColumn, compiler: DDLCompiler, **kwargs: object
+) -> str:
+    """Render the column specification with the dialect's DDL compiler."""
+    column_spec = compiler.get_column_specification(element.column)
+    return f"ALTER TABLE {element.table_name} ADD COLUMN {column_spec}"
 
 
 class Gadget(ormar.Model):
@@ -38,6 +61,10 @@ class Gadget(ormar.Model):
         default=3, max_digits=10, decimal_places=2
     )
     name: str = ormar.String(max_length=20, default="it's")
+    backslash: str = ormar.String(max_length=20, default="C:\\path\\n")
+    percent: str = ormar.String(max_length=20, default="50%% off :name %s")
+    multiline: str = ormar.String(max_length=20, default="first\nsecond")
+    accented: str = ormar.String(max_length=20, default="zażółć 🙂")
 
 
 class Excluded(ormar.Model):
@@ -52,6 +79,10 @@ class Excluded(ormar.Model):
     token: uuid.UUID = ormar.UUID(default=uuid.uuid4)
     counter: int = ormar.Integer(default=lambda: 1)
     flag_as_int: bool = ormar.Boolean(default=0)
+    number_as_str: int = ormar.Integer(default="5")
+    number_as_enum: int = ormar.Integer(default=Level.LOW)
+    number_as_bool: int = ormar.Integer(default=True)
+    huge_ratio: float = ormar.Float(default=10**400)
     not_a_number: float = ormar.Float(default=float("nan"))
     infinite_price: decimal.Decimal = ormar.Decimal(
         default=decimal.Decimal("Infinity"), max_digits=10, decimal_places=2
@@ -68,6 +99,25 @@ class StringPk(ormar.Model):
     ormar_config = base_ormar_config.copy(tablename="default_string_pk")
 
     code: str = ormar.String(max_length=10, primary_key=True, default="main")
+
+
+class Account(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="default_accounts")
+
+    tenant_id: int = ormar.Integer(primary_key=True)
+    login: str = ormar.String(max_length=20, primary_key=True)
+
+
+class Membership(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="default_memberships")
+
+    id: int = ormar.Integer(primary_key=True)
+    account: Account = ormar.ForeignKey(
+        Account,
+        columns={"tenant_id": "tenant_id", "login": "account_login"},
+        related_name="memberships",
+    )
+    tenant_id: int = ormar.Integer(default=4, nullable=False)
 
 
 class Explicit(ormar.Model):
@@ -92,6 +142,10 @@ DERIVED_DEFAULTS = {
     "price": decimal.Decimal("1.50"),
     "whole_price": decimal.Decimal("3.00"),
     "name": "it's",
+    "backslash": "C:\\path\\n",
+    "percent": "50%% off :name %s",
+    "multiline": "first\nsecond",
+    "accented": "zażółć 🙂",
 }
 
 
@@ -114,6 +168,7 @@ def test_simple_literal_defaults_get_a_server_default():
     assert server_default_sql(table=table, column_name="price") == "1.50"
     assert server_default_sql(table=table, column_name="whole_price") == "3"
     assert server_default_sql(table=table, column_name="name") == "'it''s'"
+    assert server_default_sql(table=table, column_name="multiline") == "'first\nsecond'"
     assert table.columns["label"].server_default is None
 
 
@@ -122,6 +177,15 @@ def test_other_defaults_get_no_server_default():
     for column_name in Excluded.ormar_config.model_fields:
         assert columns[column_name].server_default is None, column_name
     assert StringPk.ormar_config.table.columns["code"].server_default is None
+
+
+def test_shared_column_takes_the_plain_field_default():
+    column = Membership.ormar_config.table.columns["tenant_id"]
+    assert not column.nullable
+    assert (
+        server_default_sql(table=Membership.ormar_config.table, column_name="tenant_id")
+        == "4"
+    )
 
 
 def test_explicit_server_default_and_nullable_win():
@@ -149,7 +213,10 @@ def test_field_server_default_stays_unset():
 @pytest.mark.parametrize(
     "dialect,expected_fragments",
     [
-        (sqlite.dialect(), ["flag BOOLEAN DEFAULT 0", "ratio FLOAT DEFAULT (0.5)"]),
+        (
+            sqlite.dialect(),
+            ["flag BOOLEAN DEFAULT false", "ratio FLOAT DEFAULT (0.5)"],
+        ),
         (
             postgresql.dialect(),
             ["flag BOOLEAN DEFAULT false", "ratio FLOAT DEFAULT 0.5"],
@@ -201,12 +268,10 @@ async def test_added_column_fills_existing_rows():
         await connection.run_sync(legacy_metadata.create_all)
         await connection.execute(legacy_table.insert(), [{"id": 1}, {"id": 2}])
         for field_name in DERIVED_DEFAULTS:
-            column_ddl = CreateColumn(gadget_columns[field_name]).compile(
-                dialect=connection.dialect
-            )
             await connection.execute(
-                sqlalchemy.text(
-                    f"ALTER TABLE default_legacy_gadgets ADD COLUMN {column_ddl}"
+                AddColumn(
+                    table_name="default_legacy_gadgets",
+                    column=gadget_columns[field_name],
                 )
             )
         extended_table = sqlalchemy.Table(
