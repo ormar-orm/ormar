@@ -51,17 +51,12 @@ class OrmarDeprecatedSince020(OrmarDeprecationWarning):
         super().__init__(message, *args, since=(0, 20), expected_removal=(0, 30))
 
 
-class OrmarDeprecatedSince031(OrmarDeprecationWarning):
-    """A specific `OrmarDeprecationWarning` subclass defining
-    functionality deprecated since Ormar 0.31."""
+class OrmarDefaultChangeSince031(OrmarDeprecationWarning):
+    """An `OrmarDeprecationWarning` subclass for a default that changes in
+    Ormar 0.32, while the old behaviour stays available until Ormar 1.0."""
 
     def __init__(self, message: str, *args: object) -> None:
-        super().__init__(message, *args, since=(0, 31), expected_removal=(0, 32))
-
-
-class OrmarDefaultChangeSince031(OrmarDeprecatedSince031):
-    """An `OrmarDeprecatedSince031` subclass for a default that changes in
-    Ormar 0.32, while the old behaviour stays available."""
+        super().__init__(message, *args, since=(0, 31))
 
     def __str__(self) -> str:
         return (

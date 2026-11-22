@@ -68,9 +68,9 @@
 
 ### 🐛 Fixes
 
-* **`load_all(exclude=...)` works with excluded `NOT NULL` fields**
+* **`load_all(exclude=...)` works with excluded own fields that have `nullable=False`**
 
-    Excluding a `NOT NULL` field (own or of a related model) raised `ValidationError`, as the reload copied its `None` back with validation. Excluded `NOT NULL` fields now keep their current values, other excluded fields are still set to `None`.
+    Excluding such a field of the model raised `ValidationError`, as the reload copied its `None` back with validation. Now the field keeps its current value, including a local change that was not saved yet; other excluded own fields are still set to `None`. Excluded fields of related models behave as before.
 
 * **Several filter groups in one `filter()` keep each other's joins**
 

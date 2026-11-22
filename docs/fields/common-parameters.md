@@ -83,7 +83,8 @@ User(is_active=None)  # ValidationError
     in a non-`Optional` field, as for any other `NOT NULL` field (see
     [selecting columns](../queries/select-columns.md)), so the rule that a field has to be
     nullable to be excluded still applies. `load_all(exclude=...)` keeps the current value of
-    excluded `NOT NULL` fields.
+    the model's own excluded fields with `nullable=False`, including a local change that was
+    not saved yet; excluded fields of related models are not covered yet.
 
 !!!warning
     Without the flag (`not_null_defaults=None`) the fields stay nullable and each model with

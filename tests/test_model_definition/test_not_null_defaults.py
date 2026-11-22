@@ -10,7 +10,7 @@ from sqlalchemy.dialects import mysql, postgresql, sqlite
 from sqlalchemy.schema import CreateTable
 
 import ormar
-from ormar.warnings import OrmarDeprecatedSince031
+from ormar.warnings import OrmarDefaultChangeSince031
 from tests.lifespan import init_tests
 from tests.schema_helpers import AddColumn
 from tests.settings import create_config
@@ -122,7 +122,7 @@ def deprecations(caught: list[warnings.WarningMessage]) -> list[str]:
     return [
         str(item.message)
         for item in caught
-        if issubclass(item.category, OrmarDeprecatedSince031)
+        if issubclass(item.category, OrmarDefaultChangeSince031)
     ]
 
 
@@ -262,6 +262,7 @@ def test_unset_flag_warns_once_per_model_listing_the_fields():
         "in Ormar 0.32 they become NOT NULL and non-Optional by default. Set "
     )
     assert caught[0].filename == __file__
+    assert caught[0].message.expected_removal == (1, 0)
     assert Product.ormar_config.model_fields["stock"].nullable
     assert Product.ormar_config.table.columns["stock"].nullable
     assert ProductProxy.ormar_config.table is Product.ormar_config.table
@@ -385,14 +386,12 @@ async def test_load_all_keeps_excluded_not_null_fields():
             animal = await Animal(age=4, keeper=keeper).save()
             animal.age = 7
 
-            await animal.load_all(exclude=["age", "keeper__rank"])
+            await animal.load_all(exclude="age")
             assert animal.age == 7
-            assert animal.keeper.id == keeper.id
-            assert animal.keeper.rank is None
+            assert animal.keeper.rank == 5
 
             await animal.load_all()
             assert animal.age == 4
-            assert animal.keeper.rank == 5
 
             await keeper.load_all(exclude="rank")
             assert keeper.rank == 5
