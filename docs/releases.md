@@ -66,6 +66,8 @@
     ormar.annotations_of(members[0])["active"]
     ```
 
+    `order_by()` now checks a name without relations when it is called: one that is neither a field, a column nor an annotation raises `QueryDefinitionError` at `order_by()` instead of failing when the query runs.
+
 ### 🐛 Fixes
 
 * **Several filter groups in one `filter()` keep each other's joins**

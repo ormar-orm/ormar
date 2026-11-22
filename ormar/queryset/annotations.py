@@ -26,7 +26,6 @@ from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.order_action import OrderAction, order_text_clause
 from ormar.queryset.actions.select_action import (
     SelectAction,
-    check_condition_path,
     resolve_expression,
 )
 from ormar.queryset.expressions import (
@@ -62,12 +61,22 @@ class Annotation(NamedTuple):
     slot: str
 
 
+def column_names(model: type["Model"]) -> set[str]:
+    """
+    :param model: queried model
+    :type model: type[Model]
+    :return: database column names of the model's table
+    :rtype: set[str]
+    """
+    return {column.name for column in model.ormar_config.table.columns}
+
+
 def check_annotation_name(
     name: str, model: type["Model"], annotations: Mapping[str, Annotation]
 ) -> None:
     """
     Reject a name used by a field, relation or column of the model or by
-    another annotation.
+    another annotation, or containing ``__``, which separates relations.
 
     :param name: name of the annotation
     :type name: str
@@ -75,11 +84,15 @@ def check_annotation_name(
     :type model: type[Model]
     :param annotations: annotations already on the queryset
     :type annotations: Mapping[str, Annotation]
-    :raises QueryDefinitionError: if the name is taken
+    :raises QueryDefinitionError: if the name is taken or contains ``__``
     """
+    if "__" in name:
+        raise QueryDefinitionError(
+            f"annotate(): '{name}' contains '__', which separates relations, "
+            f"give the annotation another name"
+        )
     config = model.ormar_config
-    columns = {column.name for column in config.table.columns}
-    if name in config.model_fields or name == "pk" or name in columns:
+    if name in config.model_fields or name == "pk" or name in column_names(model):
         raise QueryDefinitionError(
             f"annotate(): '{name}' is a field or column of "
             f"{model.get_name(lower=False)}, give the annotation another name"
@@ -115,20 +128,40 @@ def resolve_annotation(
             f"Case()...), not {type(expression).__name__}"
         )
     node, columns = resolve_expression(node=expression._node(), model=model)
-    for column in columns.values():
-        check_condition_path(
-            model=model,
-            path=column.related_parts,
-            upsert=False,
-            update=False,
-            owner="annotate() expressions",
-        )
+    for path, column in columns.items():
+        check_forward_path(name=name, path=path, column=column)
     return Annotation(
         name=name,
         node=node,
         columns=columns,
         slot=f"{ANNOTATION_SLOT_PREFIX}{index}",
     )
+
+
+def check_forward_path(name: str, path: str, column: SelectAction) -> None:
+    """
+    Allow a field of an annotation to be read through foreign keys only,
+    which match at most one row.
+
+    :param name: name of the annotation
+    :type name: str
+    :param path: field path as written in the expression
+    :type path: str
+    :param column: resolved field
+    :type column: SelectAction
+    :raises QueryDefinitionError: if the path follows a reverse, many to many
+        or through relation
+    """
+    target = column.source_model
+    for relation in column.related_parts:
+        field = target.ormar_config.model_fields[relation]
+        if field.is_multi or field.virtual or field.is_through:
+            raise QueryDefinitionError(
+                f"annotate({name}=...): F('{path}') follows the reverse or many to "
+                f"many relation '{relation}', annotations read related models only "
+                f"through foreign keys; aggregate it with Count(), Sum()..."
+            )
+        target = field.to
 
 
 def annotation_clause(annotation: Annotation) -> Any:
@@ -155,8 +188,8 @@ def annotation_orders(
     :type annotations: Mapping[str, Annotation]
     :param model: queried model
     :type model: type[Model]
-    :raises QueryDefinitionError: if a string names neither a field nor an
-        annotation, e.g. one annotated only after ``order_by()``
+    :raises QueryDefinitionError: if a string names neither a field, a
+        column nor an annotation, e.g. one annotated only after ``order_by()``
     :return: the arguments with annotations resolved
     :rtype: list[Any]
     """
@@ -169,13 +202,18 @@ def annotation_orders(
                 descending=column.startswith("-"),
                 model_cls=model,
             )
-        elif name and "__" not in name and name not in ("pk", "?"):
-            if name not in model.ormar_config.model_fields:
-                raise QueryDefinitionError(
-                    f"order_by('{column}'): {model.get_name(lower=False)} has no "
-                    f"field or annotation '{name}'; annotate() has to come before "
-                    f"the order_by() naming it"
-                )
+        elif (
+            name
+            and "__" not in name
+            and name not in ("pk", "?")
+            and name not in model.ormar_config.model_fields
+            and name not in column_names(model)
+        ):
+            raise QueryDefinitionError(
+                f"order_by('{column}'): {model.get_name(lower=False)} has no "
+                f"field, column or annotation '{name}'; annotate() has to come "
+                f"before the order_by() naming it"
+            )
         resolved.append(column)
     return resolved
 
@@ -312,6 +350,22 @@ def annotation_value(annotation: Annotation, value: Any) -> Any:
     if value is None or target_type is None or isinstance(value, target_type):
         return value
     return target_type(value)  # pragma: no cover - MySQL only
+
+
+def coerced_annotations(
+    annotations: Mapping[str, Annotation],
+) -> dict[str, Annotation]:
+    """
+    :param annotations: annotations of a queryset
+    :type annotations: Mapping[str, Annotation]
+    :return: the annotations whose values are converted (see ``result_type``)
+    :rtype: dict[str, Annotation]
+    """
+    return {
+        name: annotation
+        for name, annotation in annotations.items()
+        if result_type(node=annotation.node) is not None
+    }
 
 
 def row_annotations(row: Any, annotations: Mapping[str, Annotation]) -> dict[str, Any]:

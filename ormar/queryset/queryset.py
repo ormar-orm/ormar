@@ -44,6 +44,7 @@ from ormar.queryset.annotations import (
     annotations_params,
     attach_annotations,
     check_annotation_name,
+    coerced_annotations,
     resolve_annotation,
     row_annotations,
     split_annotation_fields,
@@ -1305,11 +1306,14 @@ class QuerySet(Generic[T]):
             list(self._annotations) if _annotation_names is None else _annotation_names
         )
         if returned:
-            returned_annotations = {name: self._annotations[name] for name in returned}
-            rows = [
-                {**row, **row_annotations(row=row, annotations=returned_annotations)}
-                for row in rows
-            ]
+            coerced = coerced_annotations(
+                annotations={name: self._annotations[name] for name in returned}
+            )
+            if coerced:
+                rows = [
+                    {**row, **row_annotations(row=row, annotations=coerced)}
+                    for row in rows
+                ]
             columns = ValuesColumns(
                 names=(
                     *(columns.names if _model_columns else ()),
@@ -1320,10 +1324,12 @@ class QuerySet(Generic[T]):
         result = extract_values(rows=rows, columns=columns, as_dict=_as_dict)
         if _as_dict:
             return result
-        model_column_count = (
-            self._excludable.include_entry_count() if _model_columns else 0
+        returned_count = (
+            len({name for _, name in columns.names})
+            if returned
+            else self._excludable.include_entry_count()
         )
-        if _flatten and model_column_count + len(_annotation_names or ()) != 1:
+        if _flatten and returned_count != 1:
             raise QueryDefinitionError(
                 "You cannot flatten values_list if more than one field is selected!"
             )

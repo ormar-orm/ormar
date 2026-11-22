@@ -358,7 +358,8 @@ await User.objects.annotate(active=Count("bookings")).values(["name", "active"])
 * `ormar.annotations_of(model)` returns a read-only mapping of the annotations of a
   model loaded by an annotated queryset (empty for other models). Annotations are
   not fields: `model_dump()` does not return them and `save()` / `update()` do not
-  write them.
+  write them. They are not kept by `copy()`, `pickle` or `model_copy()` and
+  `load()` does not refresh them; query the model again to read new values.
 * `values()` and `values_list()` return the annotations after the fields: all of
   them without `fields`, else the ones named in `fields` (`values(["name",
   "active"])`, `values_list("active", flatten=True)`).
@@ -370,8 +371,8 @@ await User.objects.annotate(active=Count("bookings")).values(["name", "active"])
   `NULL`; wrap other expressions in `Coalesce` to choose.
 * Annotation names are not filter keys: to filter by the value compare the
   expression itself, `filter(Count("bookings") > 3)`.
-* An annotation name cannot be a field, relation or column name of the model, or
-  another annotation.
+* An annotation name cannot be a field, relation or column name of the model or
+  another annotation, and cannot contain `__`.
 * `count()`, `exists()` and `sum()` / `avg()` / `min()` / `max()` ignore the
   annotations and the orders by them.
 * With `select_related()` of a reverse relation the rows of a model repeat, each

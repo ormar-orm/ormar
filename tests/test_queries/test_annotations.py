@@ -1,3 +1,4 @@
+import copy
 import decimal
 from typing import Optional
 
@@ -277,6 +278,12 @@ async def test_annotate_values_without_field_subset(users):
         await User.objects.annotate(active=ACTIVE).values_list(
             ["name", "active"], flatten=True
         )
+    for queryset in (
+        User.objects.annotate(active=ACTIVE),
+        User.objects.annotate(active=ACTIVE).fields("name"),
+    ):
+        with pytest.raises(QueryDefinitionError):
+            await queryset.values_list(flatten=True)
 
 
 @pytest.mark.asyncio
@@ -342,6 +349,8 @@ async def test_annotations_of(users):
     with pytest.raises(TypeError):
         annotations["active"] = 5  # type: ignore[index]
     assert "active" not in alice.model_dump()
+    assert ormar.annotations_of(alice.model_copy()) == {}
+    assert ormar.annotations_of(copy.copy(alice)) == {}
     alice.score = 4
     await alice.update()
     reloaded = await User.objects.get(name="Alice")
@@ -401,8 +410,16 @@ async def test_invalid_annotations(users):
         User.objects.annotate(active=ACTIVE).annotate(active=Count("tags"))
     with pytest.raises(QueryDefinitionError, match="takes an expression"):
         User.objects.annotate(active=1)
-    with pytest.raises(QueryDefinitionError, match="only through foreign keys"):
-        User.objects.annotate(price=F("bookings__price"))
+    with pytest.raises(QueryDefinitionError, match="contains '__'"):
+        User.objects.annotate(club__fee=F("club__fee"))
+    red = await Tag.objects.get(name="red")
+    for queryset in (User.objects, red.users):
+        with pytest.raises(
+            QueryDefinitionError,
+            match="F\\('bookings__price'\\) follows the reverse or many to many "
+            "relation 'bookings'",
+        ):
+            queryset.annotate(price=F("bookings__price"))
     with pytest.raises(QueryDefinitionError, match="annotate\\(\\) has to come"):
         User.objects.order_by("-active").annotate(active=ACTIVE)
     with pytest.raises(QueryDefinitionError):
@@ -497,3 +514,12 @@ def test_cache_keys_cover_annotations():
     assert key_of(User.objects.annotate(a=ACTIVE, b=F("id"))) != key_of(
         User.objects.annotate(b=F("id"), a=ACTIVE)
     )
+
+
+@pytest.mark.asyncio
+async def test_order_by_column_names_and_unknown_names(users):
+    queryset = User.objects.annotate(active=ACTIVE)
+    names = await queryset.order_by("-user_score").values_list("name", flatten=True)
+    assert names == ["Bob", "Carol", "Alice"]
+    with pytest.raises(QueryDefinitionError, match="no field, column or annotation"):
+        User.objects.order_by("missing")
