@@ -1,7 +1,5 @@
 """Tests for ``OrmarConfig.tablename_factory`` and ``ormar.snake_case_tablename``."""
 
-from typing import Optional
-
 import pytest
 
 import ormar
@@ -26,7 +24,7 @@ class UserProfile(ormar.Model):
 
     id: int = ormar.Integer(primary_key=True)
     nick: str = ormar.String(max_length=100)
-    tags: Optional[list[Tag]] = ormar.ManyToMany(Tag)
+    tags = ormar.ManyToMany(Tag)
 
 
 class HTTPRequest(ormar.Model):
@@ -39,7 +37,7 @@ class TaggedBase(ormar.Model):
     ormar_config = base_ormar_config.copy(abstract=True)
 
     id: int = ormar.Integer(primary_key=True)
-    tags: Optional[list[Tag]] = ormar.ManyToMany(Tag, related_name="tagged")
+    tags = ormar.ManyToMany(Tag, related_name="tagged")
 
 
 class BlogPost(TaggedBase):
@@ -65,16 +63,14 @@ class DefaultProfile(ormar.Model):
 
     id: int = ormar.Integer(primary_key=True)
     nick: str = ormar.String(max_length=100)
-    tags: Optional[list[DefaultTag]] = ormar.ManyToMany(DefaultTag)
+    tags = ormar.ManyToMany(DefaultTag)
 
 
 class DefaultTaggedBase(ormar.Model):
     ormar_config = default_ormar_config.copy(abstract=True)
 
     id: int = ormar.Integer(primary_key=True)
-    tags: Optional[list[DefaultTag]] = ormar.ManyToMany(
-        DefaultTag, related_name="tagged"
-    )
+    tags = ormar.ManyToMany(DefaultTag, related_name="tagged")
 
 
 class DefaultPost(DefaultTaggedBase):
