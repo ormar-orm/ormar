@@ -104,6 +104,7 @@ from ormar.queryset import (
     Sum,
     When,
     and_,
+    annotations_of,
     or_,
     random,
 )
@@ -173,6 +174,7 @@ __all__ = [
     "NullsOrdering",
     "ExcludableItems",
     "and_",
+    "annotations_of",
     "Avg",
     "Case",
     "Coalesce",

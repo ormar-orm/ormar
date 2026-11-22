@@ -325,8 +325,63 @@ await Member.objects.filter(Sum("bookings__training__price") > 500).all()
 * `Sum`, `Avg`, `Min` and `Max` take a path ending in a field and give `NULL` when
   there are no related rows. `Min` and `Max` keep the type of the field, `Avg` is a
   decimal. The type of `Sum` depends on the database: the sum of an integer field
-  is a decimal on MySQL and a numeric on PostgreSQL for `bigint` fields.
+  is a decimal on MySQL and a numeric on PostgreSQL for `bigint` fields
+  ([annotations](#annotations) return it as an `int`).
 * Aggregates are not allowed in `update_values` of upserts.
+
+## Annotations
+
+`annotate(**expressions)` adds values computed by the database to each returned
+row, by name, e.g. users ordered by the number of their active bookings. Any
+expression works: aggregates of related rows, `Func`, `Case`, and arithmetic of
+fields of the model and of models reached through foreign keys (joined like
+`select_related()`).
+
+```python
+import ormar
+from ormar import Count
+
+users = (
+    await User.objects.annotate(
+        active=Count("bookings", filter={"status": "active"})
+    )
+    .order_by(["-active", "id"])
+    .limit(20)
+    .all()
+)
+ormar.annotations_of(users[0])["active"]  # -> 3
+
+await User.objects.annotate(active=Count("bookings")).values(["name", "active"])
+# -> [{"name": "Alice", "active": 3}, ...]
+```
+
+* `ormar.annotations_of(model)` returns a read-only mapping of the annotations of a
+  model loaded by an annotated queryset (empty for other models). Annotations are
+  not fields: `model_dump()` does not return them and `save()` / `update()` do not
+  write them.
+* `values()` and `values_list()` return the annotations after the fields: all of
+  them without `fields`, else the ones named in `fields` (`values(["name",
+  "active"])`, `values_list("active", flatten=True)`).
+* `order_by("-active")` orders by an annotation; call it after the `annotate()`
+  adding the name. With `select_related()` and `limit()` the annotation also
+  picks the limited main models; `first()`, `last()` and negative slices work
+  like with fields. Where `NULL` values go depends on the database: first in
+  ascending order on SQLite and MySQL, last on PostgreSQL. `Count` is never
+  `NULL`; wrap other expressions in `Coalesce` to choose.
+* Annotation names are not filter keys: to filter by the value compare the
+  expression itself, `filter(Count("bookings") > 3)`.
+* An annotation name cannot be a field, relation or column name of the model, or
+  another annotation.
+* `count()`, `exists()` and `sum()` / `avg()` / `min()` / `max()` ignore the
+  annotations and the orders by them.
+* With `select_related()` of a reverse relation the rows of a model repeat, each
+  with the same value; the model keeps one.
+* Annotations belong to the queried model only: `prefetch_related()` models get
+  none and a `Prefetch` queryset cannot be annotated.
+* Types: `Count` is an `int`, `Avg` a `Decimal`, `Sum` of an integer field an
+  `int`, `Min`, `Max` and `Sum` of other fields the type of the field. Other
+  expressions are returned as the database driver returns them, e.g. a `Sum`
+  inside arithmetic is a decimal on MySQL.
 
 ## QuerysetProxy methods
 
@@ -335,6 +390,11 @@ returns the list of related models.
 
 But at the same time it exposes a subset of QuerySet API, so you can filter, create,
 select related etc related models directly from parent model.
+
+### annotate
+
+Works exactly the same as [annotate](#annotations) above but annotates the related
+models: `await club.users.annotate(active=Count("bookings")).all()`.
 
 ### count
 

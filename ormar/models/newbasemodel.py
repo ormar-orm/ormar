@@ -135,6 +135,7 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         "_orm",
         "__pk_only__",
         "__ormar_excludable__",
+        "__ormar_annotations__",
         "__cached_hash__",
         "__pydantic_extra__",
         "__pydantic_fields_set__",

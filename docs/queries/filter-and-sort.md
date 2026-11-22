@@ -1014,6 +1014,23 @@ picks random main models and each keeps all its related rows.
     The database sorts the whole filtered table to pick the rows, so on large
     tables filter the rows first.
 
+#### Ordering by annotations
+
+An annotation added with [annotate()](aggregations.md#annotations) is ordered by its
+name, after the `annotate()` call:
+
+```python
+users = (
+    await User.objects.annotate(active=ormar.Count("bookings"))
+    .order_by(["-active", "name"])
+    .all()
+)
+```
+
+Like an order on a field of the queried model it replaces the default primary key
+order. `NULL` values come first in ascending order on SQLite and MySQL and last on
+PostgreSQL.
+
 #### Controlling NULL placement with `nulls_ordering`
 
 Both `.asc()` and `.desc()` accept an optional `nulls_ordering` argument so you can

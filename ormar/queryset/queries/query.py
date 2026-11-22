@@ -8,6 +8,7 @@ from sqlalchemy.sql.roles import FromClauseRole
 import ormar  # noqa I100
 from ormar.models.helpers.models import group_related_list
 from ormar.queryset.actions.filter_action import FilterAction
+from ormar.queryset.annotations import annotation_clause
 from ormar.queryset.join import SqlJoin
 from ormar.queryset.queries import FilterQuery, LimitQuery, OffsetQuery, OrderQuery
 from ormar.relations.aliases import prefixed_columns
@@ -16,6 +17,7 @@ if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
     from ormar.models.excludable import ExcludableItems
     from ormar.queryset import OrderAction
+    from ormar.queryset.annotations import Annotation
     from ormar.queryset.templates import SlotBinder
 
 
@@ -28,6 +30,8 @@ class Query:
     With a ``binder`` (see ``templates.SlotBinder``) every filter value, the
     limit and the offset are bound as named parameters, so the select can be
     cached as a statement template.
+
+    ``annotations`` are selected after the columns, each under its name.
     """
 
     def __init__(  # noqa CFQ002
@@ -42,6 +46,7 @@ class Query:
         order_bys: Optional[list["OrderAction"]],
         limit_raw_sql: bool,
         binder: Optional["SlotBinder"] = None,
+        annotations: Optional[list["Annotation"]] = None,
     ) -> None:
         self.query_offset = offset
         self.limit_count = limit_count
@@ -63,6 +68,7 @@ class Query:
 
         self.limit_raw_sql = limit_raw_sql
         self.binder = binder
+        self.annotations = annotations or []
 
     def _init_sorted_orders(self) -> None:
         """
@@ -125,6 +131,10 @@ class Query:
         :rtype: sqlalchemy.sql.selectable.Select
         """
         self._join_related_models()
+        self.columns.extend(
+            annotation_clause(annotation=annotation).label(annotation.name)
+            for annotation in self.annotations
+        )
 
         if self._pagination_query_required():
             limit_qry, on_clause = self._build_pagination_condition()

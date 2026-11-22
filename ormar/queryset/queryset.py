@@ -36,6 +36,18 @@ from ormar.queryset.actions.select_action import (
     expression_paths,
     resolve_expression,
 )
+from ormar.queryset.annotations import (
+    Annotation,
+    AnnotationOrderAction,
+    annotation_orders,
+    annotations_cache_key,
+    annotations_params,
+    attach_annotations,
+    check_annotation_name,
+    resolve_annotation,
+    row_annotations,
+    split_annotation_fields,
+)
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.expressions import (
     Expression,
@@ -74,7 +86,11 @@ from ormar.queryset.utils import (
     get_relationship_alias_model_and_str,
     normalize_slice,
 )
-from ormar.queryset.values_columns import extract_values, values_column_map
+from ormar.queryset.values_columns import (
+    ValuesColumns,
+    extract_values,
+    values_column_map,
+)
 from ormar.queryset.write_statements import (
     BulkUpdateWrite,
     DeleteWrite,
@@ -141,6 +157,7 @@ class QuerySet(Generic[T]):
         reverse_result: bool = False,
         prefetch_querysets: Optional[dict[str, "QuerySet"]] = None,
         row_lock: Optional[dict[str, bool]] = None,
+        annotations: Optional[dict[str, Annotation]] = None,
     ) -> None:
         self.proxy_source_model = proxy_source_model
         self.model_cls = model_cls
@@ -158,6 +175,7 @@ class QuerySet(Generic[T]):
             {} if prefetch_querysets is None else prefetch_querysets
         )
         self.row_lock = row_lock or {}
+        self._annotations: dict[str, Annotation] = annotations or {}
 
     @property
     def model_config(self) -> "OrmarConfig":
@@ -198,6 +216,7 @@ class QuerySet(Generic[T]):
         reverse_result: Optional[bool] = None,
         prefetch_querysets: Optional[dict[str, "QuerySet"]] = None,
         row_lock: Optional[dict[str, bool]] = None,
+        annotations: Optional[dict[str, Annotation]] = None,
     ) -> "QuerySet":
         """
         Method that returns new instance of queryset based on passed params,
@@ -211,6 +230,7 @@ class QuerySet(Generic[T]):
             "limit_raw_sql": "limit_sql_raw",
             "reverse_result": "_reverse_result",
             "prefetch_querysets": "_prefetch_querysets",
+            "annotations": "_annotations",
         }
         passed_args = locals()
 
@@ -234,6 +254,7 @@ class QuerySet(Generic[T]):
             reverse_result=replace_if_none("reverse_result"),
             prefetch_querysets=replace_if_none("prefetch_querysets"),
             row_lock=replace_if_none("row_lock"),
+            annotations=replace_if_none("annotations"),
         )
 
     async def _prefetch_related_models(
@@ -281,17 +302,20 @@ class QuerySet(Generic[T]):
         registry = RowRegistry()
         result_rows = []
         for i, row in enumerate(rows):
-            result_rows.append(
-                self.model.from_row(
-                    row=row,
-                    select_related=self._select_related,
-                    excludable=self._excludable,
-                    source_model=self.model,
-                    proxy_source_model=self.proxy_source_model,
-                    plan_cache=plan_cache,
-                    registry=registry,
-                )
+            instance = self.model.from_row(
+                row=row,
+                select_related=self._select_related,
+                excludable=self._excludable,
+                source_model=self.model,
+                proxy_source_model=self.proxy_source_model,
+                plan_cache=plan_cache,
+                registry=registry,
             )
+            if self._annotations and instance is not None:
+                attach_annotations(
+                    instance=instance, row=row, annotations=self._annotations
+                )
+            result_rows.append(instance)
             if i % 100 == 99:  # pragma: no cover
                 await asyncio.sleep(0)
 
@@ -324,17 +348,21 @@ class QuerySet(Generic[T]):
             if start:
                 await asyncio.sleep(0)
             chunk = rows[start : start + FLAT_ROWS_CHUNK]
-            result.extend(
-                cast(
-                    list["T"],
-                    self.model.from_flat_rows(
-                        rows=chunk,
-                        excludable=self._excludable,
-                        plan_cache=plan_cache,
-                        registry=registry,
-                    ),
-                )
+            instances = cast(
+                list["T"],
+                self.model.from_flat_rows(
+                    rows=chunk,
+                    excludable=self._excludable,
+                    plan_cache=plan_cache,
+                    registry=registry,
+                ),
             )
+            if self._annotations:
+                for instance, row in zip(instances, chunk):
+                    attach_annotations(
+                        instance=instance, row=row, annotations=self._annotations
+                    )
+            result.extend(instances)
         return result
 
     def _resolve_filter_groups(
@@ -424,6 +452,7 @@ class QuerySet(Generic[T]):
             limit_raw_sql=self.limit_sql_raw,
             limit_count=limit if limit is not None else self.limit_count,
             binder=binder,
+            annotations=list(self._annotations.values()),
         )
         exp = qry.build_select_expression()
         if self.row_lock:
@@ -491,6 +520,7 @@ class QuerySet(Generic[T]):
             limit=limit if limit is not None else self.limit_count,
             offset=offset or self.query_offset,
         )
+        params.update(annotations_params(annotations=self._annotations))
         key = self.select_cache_key(
             variant=variant, limit=limit, offset=offset, order_bys=order_bys
         )
@@ -686,6 +716,7 @@ class QuerySet(Generic[T]):
         * limit and offset presence - see ``limit_cache_key``
         * ``limit_raw_sql`` - limit on raw rows instead of main models
         * ``row_lock`` - the ``select_for_update`` options
+        * annotations - see ``annotations_cache_key``
 
         Any new queryset option that changes the built SQL has to be added
         here; the cross check of the test suite fails when one is missing.
@@ -712,6 +743,7 @@ class QuerySet(Generic[T]):
             bool(offset or self.query_offset),
             self.limit_sql_raw,
             tuple(self.row_lock.items()),
+            annotations_cache_key(annotations=self._annotations),
         )
 
     def filter(  # noqa: A003
@@ -1097,24 +1129,101 @@ class QuerySet(Generic[T]):
 
         To sort randomly provide ``"?"``, ``ormar.random()`` or ``ormar.Random()``
 
+        To sort by an annotation provide its name, after the ``annotate()``
+        call adding it
+
         :param columns: columns by which models should be sorted
         :type columns: Union[list, str]
+        :raises QueryDefinitionError: if a name without relations is neither
+            a field nor an annotation
         :return: QuerySet
         :rtype: QuerySet
         """
         if not isinstance(columns, list):
             columns = [columns]
+        columns = annotation_orders(
+            columns=columns, annotations=self._annotations, model=self.model
+        )
         orders_by = expand_pk_orders(model_cls=self.model, columns=columns)
 
         order_bys = self.order_bys + [x for x in orders_by if x not in self.order_bys]
         return self.rebuild_self(order_bys=order_bys)
 
-    async def values(
+    def annotate(self, **expressions: Any) -> "QuerySet[T]":
+        """
+        Add values computed by the database for each row, by name::
+
+            users = (
+                await User.objects.annotate(
+                    active=ormar.Count("bookings", filter={"status": "active"})
+                )
+                .order_by(["-active", "id"])
+                .limit(20)
+                .all()
+            )
+            ormar.annotations_of(users[0])["active"]
+
+        An annotation is any expression: an aggregate of related rows
+        (``Count``, ``Sum``...), ``Func``, ``Case`` or arithmetic of fields
+        of the model and of models reached through foreign keys, which are
+        joined like ``select_related``. Read the values with
+        ``ormar.annotations_of()`` or name them in ``values()``, order by
+        them with ``order_by()`` called after ``annotate()``. They are not
+        fields: not dumped and not saved.
+
+        :param expressions: expressions by annotation name
+        :type expressions: Any
+        :raises QueryDefinitionError: if a name is a field, relation or
+            column of the model or already annotated, or a value is not an
+            expression or reads a reverse or many to many relation
+        :return: QuerySet
+        :rtype: QuerySet
+        """
+        annotations = dict(self._annotations)
+        select_related = self._select_related
+        for name, expression in expressions.items():
+            check_annotation_name(name=name, model=self.model, annotations=annotations)
+            annotation = resolve_annotation(
+                name=name,
+                expression=expression,
+                model=self.model,
+                index=len(annotations),
+            )
+            for path in expression_paths(
+                node=annotation.node, columns=annotation.columns
+            ):
+                select_related = path.update_select_related(
+                    select_related=select_related
+                )
+            annotations[name] = annotation
+        return self.rebuild_self(annotations=annotations, select_related=select_related)
+
+    def without_annotations(self) -> "QuerySet[T]":
+        """
+        :return: the queryset without annotations and the orders by them,
+            for ``count()``, ``exists()`` and the aggregates, which return no
+            rows
+        :rtype: QuerySet
+        """
+        if not self._annotations:
+            return self
+        return self.rebuild_self(
+            annotations={},
+            order_bys=[
+                order
+                for order in self.order_bys
+                if not isinstance(order, AnnotationOrderAction)
+            ],
+        )
+
+    async def values(  # noqa: CCR001
         self,
         fields: Union[list, str, set, dict, None] = None,
         exclude_through: bool = False,
         _as_dict: bool = True,
         _flatten: bool = False,
+        _annotation_names: Optional[list[str]] = None,
+        _model_columns: bool = True,
     ) -> list:
         """
         Return a list of dictionaries with column values in order of the fields
@@ -1122,6 +1231,9 @@ class QuerySet(Generic[T]):
 
         To filter for given row use filter/exclude methods before values,
         to limit number of rows use limit/offset or paginate before values.
+
+        Annotations are returned after the fields: all of them without
+        ``fields``, else the ones named in ``fields``.
 
         Note that it always return a list even for one row from database.
 
@@ -1131,19 +1243,42 @@ class QuerySet(Generic[T]):
         :type _flatten: bool
         :param _as_dict: internal parameter if return dict or tuples
         :type _as_dict: bool
+        :param _annotation_names: internal parameter, the annotations named
+            in ``fields`` (None for all of them)
+        :type _annotation_names: Optional[list[str]]
+        :param _model_columns: internal parameter, False when ``fields``
+            named only annotations
+        :type _model_columns: bool
         :param fields: field name or list of field names to extract from db
         :type fields:  Union[list, str, set, dict]
         """
-        if fields:
-            return await self.fields(columns=fields).values(
-                _as_dict=_as_dict, _flatten=_flatten, exclude_through=exclude_through
+        passed: dict[str, Any] = {
+            "_as_dict": _as_dict,
+            "_flatten": _flatten,
+            "exclude_through": exclude_through,
+        }
+        if fields and self._annotations:
+            model_fields, annotation_names = split_annotation_fields(
+                fields=fields, annotations=self._annotations
             )
+            return await (
+                self.fields(columns=model_fields) if model_fields else self
+            ).values(
+                **passed,
+                _annotation_names=annotation_names,
+                _model_columns=bool(model_fields),
+            )
+        passed.update(
+            _annotation_names=_annotation_names, _model_columns=_model_columns
+        )
+        if fields:
+            return await self.fields(columns=fields).values(**passed)
         missing_joins = self._excludable.included_relation_paths().difference(
             self._select_related
         )
         if missing_joins:
             return await self.select_related(related=sorted(missing_joins)).values(
-                _as_dict=_as_dict, _flatten=_flatten, exclude_through=exclude_through
+                **passed
             )
         excludable = self._excludable.with_projection_exclusions(
             source_model=self.model,
@@ -1166,10 +1301,29 @@ class QuerySet(Generic[T]):
             exclude_through=exclude_through,
             column_names=list(rows[0].keys()),  # type: ignore
         )
+        returned = (
+            list(self._annotations) if _annotation_names is None else _annotation_names
+        )
+        if returned:
+            returned_annotations = {name: self._annotations[name] for name in returned}
+            rows = [
+                {**row, **row_annotations(row=row, annotations=returned_annotations)}
+                for row in rows
+            ]
+            columns = ValuesColumns(
+                names=(
+                    *(columns.names if _model_columns else ()),
+                    *((name, name) for name in returned),
+                ),
+                key_parts=columns.key_parts if _model_columns else {},
+            )
         result = extract_values(rows=rows, columns=columns, as_dict=_as_dict)
         if _as_dict:
             return result
-        if _flatten and self._excludable.include_entry_count() != 1:
+        model_column_count = (
+            self._excludable.include_entry_count() if _model_columns else 0
+        )
+        if _flatten and model_column_count + len(_annotation_names or ()) != 1:
             raise QueryDefinitionError(
                 "You cannot flatten values_list if more than one field is selected!"
             )
@@ -1215,7 +1369,7 @@ class QuerySet(Generic[T]):
         :return: result of the check
         :rtype: bool
         """
-        template = self.build_select_template(
+        template = self.without_annotations().build_select_template(
             variant=("exists",), wrap=exists_statement
         )
         async with self.model_config.database.get_query_executor() as executor:
@@ -1245,7 +1399,9 @@ class QuerySet(Generic[T]):
             distinct=distinct,
             pk_column_names=self.model_config.pk.column_aliases(),
         )
-        template = self.build_select_template(variant=("count", distinct), wrap=wrap)
+        template = self.without_annotations().build_select_template(
+            variant=("count", distinct), wrap=wrap
+        )
         async with self.model_config.database.get_query_executor() as executor:
             result = await executor.fetch_val(
                 query=template.statement, params=template.params
@@ -1271,7 +1427,7 @@ class QuerySet(Generic[T]):
         wrap = functools.partial(
             aggregate_statement, func_name=func_name, select_columns=select_columns
         )
-        template = self.build_select_template(
+        template = self.without_annotations().build_select_template(
             variant=("aggregate", func_name, tuple(columns)), wrap=wrap
         )
         async with self.model_config.database.get_query_executor() as executor:

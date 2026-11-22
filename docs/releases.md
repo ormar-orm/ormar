@@ -51,13 +51,19 @@
     )
     ```
 
-* **Aggregates of related rows: `ormar.Count`, `Sum`, `Avg`, `Min` and `Max`**
+* **Annotations: `annotate()` and aggregates of related rows (`ormar.Count`, `Sum`, `Avg`, `Min` and `Max`)**
 
-    Compute one value per row of the queried model over its related rows, reached through a reverse foreign key or a many to many relation and optionally further through foreign keys. `filter=` restricts the aggregated rows with keyword filters or a filter group of the related model, `Count` takes `distinct=True`. They are correlated subqueries usable wherever expressions are: compared in `filter()` / `exclude()`, as filter values, in `update()` and inside `Case` and functions. See [aggregates of related rows](queries/aggregations.md#aggregates-of-related-rows).
+    The aggregates compute one value per row of the queried model over its related rows, reached through a reverse foreign key or a many to many relation and optionally further through foreign keys. `filter=` restricts the aggregated rows with keyword filters or a filter group of the related model, `Count` takes `distinct=True`. They are correlated subqueries usable wherever expressions are: compared in `filter()` / `exclude()`, as filter values, in `update()` and inside `Case` and functions. See [aggregates of related rows](queries/aggregations.md#aggregates-of-related-rows).
+
+    `QuerySet.annotate(**expressions)` selects any expression (aggregates, `Func`, `Case`, arithmetic of fields) for each row under a name: read it with `ormar.annotations_of(model)`, return it from `values()` / `values_list()` and order by it with `order_by()`, also with `select_related()` and `limit()`. Annotations are not dumped or saved. See [annotations](queries/aggregations.md#annotations).
 
     ```python
     await Member.objects.filter(Count("bookings", filter={"status": "active"}) > 3).all()
     await Member.objects.update(each=True, booked=Count("bookings"))
+    members = await Member.objects.annotate(
+        active=Count("bookings", filter={"status": "active"})
+    ).order_by("-active").limit(20).all()
+    ormar.annotations_of(members[0])["active"]
     ```
 
 ### 🐛 Fixes
