@@ -57,7 +57,7 @@
 
 * **`max()`, `min()`, `sum()` and `avg()` join the relations of related columns**
 
-    `Author.objects.max("posts__score")` failed with an SQL error unless the relation was joined with `select_related()` or a filter. The aggregate joins the relations of its columns now, like `values()` and filters do. As with `select_related()`, a reverse or many to many join returns one row per related model, so `sum()` and `avg()` of the queried model's own columns count them once per row.
+    `Author.objects.max("posts__score")` failed with an SQL error unless the relation was joined with `select_related()` or a filter. The aggregate joins the relations of its columns now, like `values()` and filters do. As with `select_related()`, a reverse or many to many join returns one row per related model. `sum()` and `avg()` raise `QueryDefinitionError` when a reverse or many to many relation they join themselves would repeat another of their columns (e.g. `sum(["rating", "posts__score"])`), instead of counting it once per related row; call them separately for these columns.
 
 ## 0.30.0
 

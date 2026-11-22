@@ -69,6 +69,7 @@ from ormar.queryset.utils import (
     get_or_create_with_retry,
     get_relationship_alias_model_and_str,
     normalize_slice,
+    validate_aggregate_joins,
 )
 from ormar.queryset.values_columns import extract_values, values_column_map
 from ormar.queryset.write_statements import (
@@ -1270,6 +1271,12 @@ class QuerySet(Generic[T]):
             )
         missing_joins = select_related[len(self._select_related) :]
         if missing_joins:
+            validate_aggregate_joins(
+                func_name=func_name,
+                source_model=self.model,
+                select_actions=select_actions,
+                added_joins=missing_joins,
+            )
             return await self.select_related(
                 related=missing_joins
             )._query_aggr_function(func_name=func_name, columns=columns)
