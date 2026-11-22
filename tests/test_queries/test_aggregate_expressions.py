@@ -526,6 +526,13 @@ async def test_self_referencing_select_related_and_filter(categories):
     )
     assert [category.name for category in loaded] == ["first"]
     assert [child.name for child in loaded[0].children] == ["leaf"]
+    with_parent = (
+        await Category.objects.select_related("parent")
+        .filter(Count("children", filter={"parent__name": "first"}) > 0)
+        .all()
+    )
+    assert [category.name for category in with_parent] == ["first"]
+    assert with_parent[0].parent.name == "root"
 
 
 @pytest.mark.asyncio
