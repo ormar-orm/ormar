@@ -263,15 +263,83 @@ await Track.objects.exclude(
 ).all()
 ```
 
-The comparison operators take a literal or another expression as the value.
-`in_()`, `isnull()` and the lookups `iexact()`, `contains()`, `startswith()`,
-`endswith()` and their variants take only plain values for now; the lookups take
-strings, escaped and wrapped in `%` like `filter(name__icontains=...)`.
+The comparison operators and the lookups `iexact()`, `contains()`,
+`startswith()`, `endswith()` and their `i` variants take a literal or another
+expression as the value. A string is escaped and wrapped in `%` like in
+`filter(name__icontains=...)`. The value of an expression is escaped and
+wrapped in `%` in SQL (`'%' || value || '%'`, `concat()` on MySQL), in the
+expression form as well as in keyword filters:
+
+```python
+# WHERE lower(tracks.name) LIKE '%' || <escaped lower(albums.name)> || '%' ESCAPE '!'
+await Track.objects.filter(
+    Func("lower", F("name")).contains(Func("lower", F("album__name")))
+).all()
+await Track.objects.filter(name__icontains=F("album__name")).all()
+```
+
+The value of an expression matches literally: `%`, `_` and `!` in it are
+escaped in SQL (`replace(value, '%', '!%')` and so on, with `ESCAPE '!'`), so
+`name__contains=F("code")` with a code `a_c` matches `xa_cx` but not `abc`. A
+value that is not text (e.g. an integer column) is cast to text first.
+
+`in_()` takes a list of literals and `isnull()` a bool, neither takes an
+expression.
 
 A literal value is bound with the type of the filtered expression. A `Func`
 without `type_` is the exception: it is bound with the type of its own value,
 so `Func("upper", F("uid")) == "AB12"` compares text even though `uid` is a UUID
 column. Pass `type_` when the value needs the column's conversion.
+
+#### Accent-insensitive search
+
+PostgreSQL removes accents with the `unaccent` function of the extension of the
+same name, shipped with the official images and most hosted databases. Enable it
+once per database (it needs the privilege to create extensions):
+
+```sql
+CREATE EXTENSION IF NOT EXISTS unaccent;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;  -- only for the index below
+```
+
+Then apply it to both sides of a like lookup:
+
+```python
+from ormar import F, Func
+
+# matches "Kraków" and "KRAKOW"
+await City.objects.filter(
+    Func("unaccent", F("name")).icontains(Func("unaccent", "krakow"))
+).all()
+```
+
+Some hosted PostgreSQL services install extensions into an `extensions`
+schema that is not on the search path; call the function by its qualified
+name there: `Func("extensions.unaccent", F("name"))`.
+
+An index can speed the search up, but `unaccent` is `STABLE` and indexes need
+`IMMUTABLE` functions. Index an immutable wrapper instead, e.g. with a trigram
+index of the `pg_trgm` extension, which serves `LIKE '%...%'`, and filter on the
+wrapper. Qualify the function and its dictionary with the schema the
+extension lives in (`public` below, `extensions` on some hosted services), as
+an immutable function must not depend on the search path:
+
+```sql
+CREATE FUNCTION immutable_unaccent(text) RETURNS text
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
+    AS $$ SELECT public.unaccent('public.unaccent'::regdictionary, $1) $$;
+CREATE INDEX cities_name_unaccent
+    ON cities USING gin (immutable_unaccent(name) gin_trgm_ops);
+```
+
+```python
+await City.objects.filter(
+    Func("immutable_unaccent", F("name")).icontains(Func("unaccent", "krakow"))
+).all()
+```
+
+On MySQL the default collations already ignore case and accents, so a plain
+`filter(name__icontains="krakow")` matches `Kraków`.
 
 The comparisons work on `F()`, arithmetic and functions only. A field accessor
 (`Model.field`) has comparisons of its own (see Python style filters), so wrap
