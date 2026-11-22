@@ -171,11 +171,14 @@ def build_update_assignment(
     return update_assignment(
         table=table,
         on_update=on_update,
+        # a bind shared by the per-dialect clauses of a JSON path is set once
         value_binds=tuple(
-            element
-            for clause in clauses.values()
-            for element in visitors.iterate(clause)
-            if isinstance(element, BindParameter)
+            {
+                element.key: element
+                for clause in clauses.values()
+                for element in visitors.iterate(clause)
+                if isinstance(element, BindParameter)
+            }.values()
         ),
     )
 

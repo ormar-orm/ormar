@@ -36,6 +36,12 @@ like the arguments of ``filter()``, holds::
         rank=Case(*(When(id=pk, then=rank) for rank, pk in enumerate(order, 1)))
     )
 
+``F("data")["key"]`` reads a value at a path in a JSON field, cast to the
+type it is compared as or written into::
+
+    Book.objects.filter(F("meta")["tags"][0].as_string() == "sea")
+    Book.objects.filter(Book.meta["pages"].as_integer() > 100)
+
 ``Model.field`` accessors are expressions themselves, ``F("path")`` names a
 field by its path. ``Expression`` defines only dunders and underscored names,
 so it never shadows a field reached through a ``FieldAccessor``, which has
@@ -54,6 +60,7 @@ from typing import (
     NamedTuple,
     Optional,
     Sequence,
+    Union,
     cast,
 )
 
@@ -61,10 +68,11 @@ import sqlalchemy
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import operators as sql_operators
 from sqlalchemy.sql.compiler import SQLCompiler
-from sqlalchemy.sql.elements import BindParameter
+from sqlalchemy.sql.elements import BinaryExpression, BindParameter, ColumnElement
 from sqlalchemy.sql.functions import Function as SQLFunction
 from sqlalchemy.sql.functions import GenericFunction, ReturnTypeFromArgs, coalesce
-from sqlalchemy.types import Float, NullType, TypeEngine
+from sqlalchemy.sql.visitors import InternalTraversal
+from sqlalchemy.types import JSON, Float, NullType, TypeEngine
 from sqlalchemy.types import to_instance as type_instance
 
 import ormar  # noqa: I100, I202
@@ -81,6 +89,11 @@ class Expression:
     Base of column expressions, combined with ``+``, ``-`` and ``*``. The
     literal operand has to be on the right side (``F("a") + 1``).
     """
+
+    # ``__getitem__`` of JSON paths would make expressions iterable through
+    # the sequence protocol, endlessly: ``list(F("a"))`` and ``"x" in F("a")``
+    # raise TypeError instead
+    __iter__ = None
 
     def _node(self) -> "Expression":
         """
@@ -245,6 +258,134 @@ class F(Comparable, Expression):
         :type path: str
         """
         self._path = path
+
+    def __getitem__(self, key: Union[str, int]) -> "JsonPath":
+        """
+        :param key: object key or array index in a JSON field
+        :type key: Union[str, int]
+        :return: the value at the key, to cast with ``as_string()``,
+            ``as_integer()``, ``as_float()`` or ``as_boolean()``
+        :rtype: JsonPath
+        """
+        return JsonPath(field=self, keys=(check_json_key(key=key),))
+
+
+# keys that the JSON path syntax of every dialect reads literally: SQLite and
+# MySQL bind them inside ``$."key"``, PostgreSQL nested paths as ``{a, b}``,
+# and MySQL rejects control characters in paths
+JSON_KEY_FORBIDDEN = re.compile(r'["\\{},\x00-\x1f]')
+
+
+# SQLAlchemy casts of JSON index operations by ``JsonPath`` cast name
+JSON_CASTS: dict[str, Callable[[Any], Any]] = {
+    "string": operator.methodcaller("as_string"),
+    "integer": operator.methodcaller("as_integer"),
+    "float": operator.methodcaller("as_float"),
+    "boolean": operator.methodcaller("as_boolean"),
+}
+
+
+def check_json_key(key: Any) -> Union[str, int]:
+    """
+    :param key: object key or array index of a JSON path
+    :type key: Any
+    :raises QueryDefinitionError: if the key is not a string or a
+        non-negative int, or a string the JSON path syntax of some dialect
+        does not read literally
+    :return: the key
+    :rtype: Union[str, int]
+    """
+    if isinstance(key, int) and not isinstance(key, bool) and key >= 0:
+        return key
+    if (
+        isinstance(key, str)
+        and key
+        and key == key.strip()
+        and key.lower() != "null"
+        and not JSON_KEY_FORBIDDEN.search(key)
+    ):
+        return key
+    raise QueryDefinitionError(
+        f"JSON path keys are non-negative array indexes or object keys without "
+        f'", \\, {{, }}, commas, control characters or surrounding whitespace, '
+        f"and other than 'null', got {key!r}"
+    )
+
+
+class JsonPath(Comparable, Expression):
+    """
+    Value at a path of object keys and array indexes in an ``ormar.JSON``
+    field, ``F("data")["a"][0]`` or ``Model.data["a"][0]``, compared or
+    written after a cast: ``as_string()``, ``as_integer()``, ``as_float()``
+    or ``as_boolean()``. A missing key or a JSON ``null`` reads as ``NULL``.
+    """
+
+    def __init__(
+        self,
+        field: F,
+        keys: tuple[Union[str, int], ...],
+        cast_name: Optional[str] = None,
+    ) -> None:
+        """
+        :param field: the JSON field
+        :type field: F
+        :param keys: object keys and array indexes from the field's root
+        :type keys: tuple[Union[str, int], ...]
+        :param cast_name: name of the cast in ``JSON_CASTS``, None before one
+        :type cast_name: Optional[str]
+        """
+        self._field = field
+        self._path = field._path
+        self._keys = keys
+        self._cast_name = cast_name
+
+    def _index(self) -> Union[str, int, tuple[Union[str, int], ...]]:
+        """
+        :return: the value bound as the path: a single key, or the keys of a
+            longer path
+        :rtype: Union[str, int, tuple[Union[str, int], ...]]
+        """
+        return self._keys[0] if len(self._keys) == 1 else self._keys
+
+    def __getitem__(self, key: Union[str, int]) -> "JsonPath":
+        """
+        :param key: object key or array index below the current path
+        :type key: Union[str, int]
+        :raises QueryDefinitionError: if the path is already cast
+        :return: the value at the longer path
+        :rtype: JsonPath
+        """
+        if self._cast_name is not None:
+            raise QueryDefinitionError("Index a JSON path before casting it")
+        return JsonPath(field=self._field, keys=(*self._keys, check_json_key(key=key)))
+
+    def _cast(self, cast_name: str) -> "JsonPath":
+        """
+        :param cast_name: name of the cast in ``JSON_CASTS``
+        :type cast_name: str
+        :raises QueryDefinitionError: if the path is already cast
+        :return: the path read as the cast type
+        :rtype: JsonPath
+        """
+        if self._cast_name is not None:
+            raise QueryDefinitionError("A JSON path takes one cast")
+        return JsonPath(field=self._field, keys=self._keys, cast_name=cast_name)
+
+    def as_string(self) -> "JsonPath":
+        """:return: the value as SQL text"""
+        return self._cast(cast_name="string")
+
+    def as_integer(self) -> "JsonPath":
+        """:return: the value as an SQL integer"""
+        return self._cast(cast_name="integer")
+
+    def as_float(self) -> "JsonPath":
+        """:return: the value as an SQL float"""
+        return self._cast(cast_name="float")
+
+    def as_boolean(self) -> "JsonPath":
+        """:return: the value as an SQL boolean"""
+        return self._cast(cast_name="boolean")
 
 
 class Inserted(Comparable, Expression):
@@ -516,7 +657,7 @@ def fields_read(node: Any) -> list[str]:
     names = [
         leaf._path
         for leaf in expression_leaves(node=node)
-        if isinstance(leaf, F) and "__" not in leaf._path
+        if isinstance(leaf, (F, JsonPath)) and "__" not in leaf._path
     ]
     for action in expression_conditions(node=node):
         names += action.fields_read()
@@ -603,6 +744,74 @@ def compile_random_on_sqlite(
     return "(abs(random() % 9007199254740992) / 9007199254740992.0)"
 
 
+class DialectClause(ColumnElement[Any]):
+    """
+    Clause rendered as ``sqlite`` on SQLite, ``mysql`` on MySQL and MariaDB
+    and ``default`` elsewhere, all of the type of ``default``.
+    """
+
+    inherit_cache = True
+    _traverse_internals = [
+        ("default", InternalTraversal.dp_clauseelement),
+        ("sqlite", InternalTraversal.dp_clauseelement),
+        ("mysql", InternalTraversal.dp_clauseelement),
+    ]
+
+    def __init__(
+        self, default: Any, sqlite: Optional[Any] = None, mysql: Optional[Any] = None
+    ) -> None:
+        """
+        :param default: clause of the other dialects
+        :type default: Any
+        :param sqlite: clause on SQLite, ``default`` if None
+        :type sqlite: Optional[Any]
+        :param mysql: clause on MySQL, ``default`` if None
+        :type mysql: Optional[Any]
+        """
+        self.default = default
+        self.sqlite = sqlite if sqlite is not None else default
+        self.mysql = mysql if mysql is not None else default
+        self.type = default.type
+
+
+@compiles(DialectClause)
+def compile_dialect_clause(
+    element: DialectClause, compiler: SQLCompiler, **kwargs: Any
+) -> str:
+    """Other dialects render the default clause."""
+    return compiler.process(obj=element.default, **kwargs)
+
+
+@compiles(DialectClause, "sqlite")
+def compile_dialect_clause_on_sqlite(
+    element: DialectClause, compiler: SQLCompiler, **kwargs: Any
+) -> str:
+    """SQLite renders its own clause."""
+    return compiler.process(obj=element.sqlite, **kwargs)
+
+
+@compiles(DialectClause, "mysql")
+@compiles(DialectClause, "mariadb")
+def compile_dialect_clause_on_mysql(
+    element: DialectClause, compiler: SQLCompiler, **kwargs: Any
+) -> str:
+    """MySQL and MariaDB render the MySQL clause."""
+    return compiler.process(obj=element.mysql, **kwargs)
+
+
+# SQLAlchemy 2.1 casts JSON index operations on SQLite itself, 2.0 renders a
+# bare ``JSON_EXTRACT``, which returns the stored JSON type
+SQLITE_CASTS_JSON = tuple(
+    int(part) for part in sqlalchemy.__version__.split(".")[:2]
+) >= (2, 1)
+
+# the JSON index operation of a path by the number of its keys
+JSON_INDEX_OPERATORS = {
+    True: sql_operators.json_getitem_op,
+    False: sql_operators.json_path_getitem_op,
+}
+
+
 # ``Case`` values written into the SQL instead of bound
 SQL_CONSTANTS: dict[Optional[bool], Callable[[], Any]] = {
     None: sqlalchemy.null,
@@ -620,8 +829,8 @@ SQL_FUNCTIONS: dict[str, Callable[..., Any]] = {
 
 def expression_leaves(node: Any) -> Iterator[Any]:
     """
-    Yield the fields (``F``, ``Inserted``) and literals of an expression, left
-    to right; ``Random()`` is neither.
+    Yield the fields (``F``, ``Inserted``, ``JsonPath``) and literals of an
+    expression, left to right; ``Random()`` is neither.
 
     :param node: expression node
     :type node: Any
@@ -716,6 +925,7 @@ def expression_key(node: Any) -> Any:
         # -> ("length", (("f", "a"),), (Integer, "Integer()"))
         Random()  # -> ("random",)
         Inserted("a")  # -> ("inserted", "a")
+        F("a")["b"][0].as_string()  # -> ("json", "a", (str, int), "string")
         Case(When(id=7, then=1), default=None)
         # -> ("case", ((<condition key>, int),), ("constant", None))
 
@@ -759,6 +969,9 @@ def expression_key(node: Any) -> Any:
         return ("random",)
     if isinstance(node, Inserted):
         return ("inserted", node._path)
+    if isinstance(node, JsonPath):
+        key_types = tuple(type(key) for key in node._keys)
+        return ("json", node._path, key_types, node._cast_name)
     return ("f", node._path) if isinstance(node, F) else type(node)
 
 
@@ -805,7 +1018,7 @@ def expression_literals(node: Any) -> list[Any]:
     :rtype: list[Any]
     """
     return [
-        leaf
+        leaf._index() if isinstance(leaf, JsonPath) else leaf
         for leaf in expression_leaves(node=node)
         if not isinstance(leaf, (F, Inserted))
     ]
@@ -870,6 +1083,12 @@ def expression_clause(
     if isinstance(node, Random):
         return RandomFloat()
     index = index or itertools.count()
+    if isinstance(node, JsonPath):
+        return json_path_clause(
+            node=node,
+            column=columns[node._path].aliased_column,
+            key=f"{slot}_{next(index)}" if slot is not None else None,
+        )
     if isinstance(node, Case):
         return case_clause(
             node=node,
@@ -1137,4 +1356,59 @@ def literal_bind(key: Optional[str], value: Any, compared_type: Any) -> BindPara
         unique=key is None,
         _compared_to_operator=sql_operators.eq,
         _compared_to_type=compared_type,
+    )
+
+
+def json_path_clause(node: JsonPath, column: Any, key: Optional[str]) -> Any:
+    """
+    Build the SQL of a JSON path with SQLAlchemy's JSON index operations, a
+    single key as ``->>`` on PostgreSQL, a longer path as ``#>>``, and
+    ``JSON_EXTRACT`` (with ``JSON_UNQUOTE`` for strings on MySQL) elsewhere,
+    each cast to the type of the path's cast, on SQLite also with SQLAlchemy
+    2.0. A boolean is ``NULL`` for a missing key on MySQL too, where
+    SQLAlchemy's ``as_boolean()`` reads it as false.
+
+    The path is bound as one parameter named ``key`` like the literals of
+    ``expression_clause``, so statement templates and the user variables of
+    MySQL upserts bind it like any value; anonymous without a key.
+
+    :param node: JSON path with a cast (see ``expression_columns``)
+    :type node: JsonPath
+    :param column: the JSON column in the aliased table of its join
+    :type column: Any
+    :param key: name of the bound path, None for an anonymous one
+    :type key: Optional[str]
+    :return: SQL of the cast value
+    :rtype: Any
+    """
+    single = len(node._keys) == 1
+    path_type = (
+        (
+            JSON.JSONIntIndexType
+            if isinstance(node._keys[0], int)
+            else JSON.JSONStrIndexType
+        )
+        if single
+        else JSON.JSONPathType
+    )
+    path = BindParameter(
+        key=key, value=node._index(), type_=path_type(), unique=key is None
+    )
+    element = BinaryExpression(
+        left=column,
+        right=path,
+        operator=JSON_INDEX_OPERATORS[single],
+        type_=column.type,
+    )
+    value = JSON_CASTS[cast(str, node._cast_name)](element)
+    return DialectClause(
+        default=value,
+        sqlite=None
+        if SQLITE_CASTS_JSON
+        else sqlalchemy.cast(expression=value, type_=value.type),
+        mysql=(
+            sqlalchemy.case((element.is_not(other=None), value))
+            if node._cast_name == "boolean"
+            else None
+        ),
     )
