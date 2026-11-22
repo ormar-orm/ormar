@@ -71,7 +71,7 @@ from sqlalchemy.sql.compiler import SQLCompiler
 from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.functions import Function as SQLFunction
 from sqlalchemy.sql.functions import GenericFunction, ReturnTypeFromArgs, coalesce
-from sqlalchemy.sql.selectable import Alias
+from sqlalchemy.sql.selectable import Alias, Subquery
 from sqlalchemy.sql.visitors import replacement_traverse
 from sqlalchemy.types import Float, Integer, NullType, Numeric, TypeEngine
 from sqlalchemy.types import to_instance as type_instance
@@ -1427,13 +1427,14 @@ class AggregateTables:
         :rtype: Any
         """
         if table not in self.replaced:
-            self.replaced[table] = self.root.alias() if table is self.root else table
             if self.derived and (
                 table is self.parent or isinstance(table, Alias)
             ):  # pragma: no cover
                 self.replaced[table] = sqlalchemy.select(self.parent).subquery(
                     name=None if table is self.root else table.name
                 )
+            else:
+                self.replaced[table] = self.root.alias()
         return self.replaced[table]
 
     def replace(self, element: Any, **kwargs: Any) -> Any:
@@ -1443,9 +1444,12 @@ class AggregateTables:
         :param kwargs: options of the traversal
         :type kwargs: Any
         :return: the replacement of a replaced table or of its column, None
-            to keep the element
+            to keep the element and replace inside it; a derived table, made
+            by a nested aggregate, is kept as it is
         :rtype: Any
         """
+        if isinstance(element, Subquery):  # pragma: no cover
+            return element
         if isinstance(element, sqlalchemy.Column):
             if self.is_replaced(table=element.table):
                 return self.replacement(table=element.table).c[element.name]
