@@ -244,6 +244,7 @@ async def run_reads(title):
     await Book.objects.filter(title=title).exists()
     await Book.objects.filter(title=title).max("year")
     await Book.objects.filter(title=title).sum(["year", "id"])
+    await Book.objects.select_related("author").filter(title=title).avg("year")
     await Book.objects.get_or_none()
     return [book async for book in Book.objects.filter(title=title).iterate()]
 

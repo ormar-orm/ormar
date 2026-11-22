@@ -4,7 +4,6 @@ import pytest
 import pytest_asyncio
 
 import ormar
-from ormar.exceptions import QueryDefinitionError
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -187,24 +186,48 @@ async def test_max_and_min_join_to_many_relation_of_other_columns(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("func_name", ["sum", "avg"])
-async def test_sum_and_avg_reject_join_to_many_relation_of_other_columns(func_name):
+@pytest.mark.parametrize(
+    "func_name, expected",
+    [
+        (
+            "sum",
+            [
+                {"writer__rating": 18, "topics__priority": 9},
+                {"rating": 13, "articles__score": 18},
+                {"articles__score": 18, "articles__topics__priority": 9},
+                {"score": 12, "topics__priority": 9},
+            ],
+        ),
+        (
+            "avg",
+            [
+                {"writer__rating": 6, "topics__priority": 3},
+                {"rating": 6.5, "articles__score": 6},
+                {"articles__score": 6, "articles__topics__priority": 3},
+                {"score": 6, "topics__priority": 3},
+            ],
+        ),
+    ],
+)
+async def test_sum_and_avg_join_to_many_relation_of_other_columns(func_name, expected):
     async with base_ormar_config.database:
         writer = await sample_data()
-        with pytest.raises(QueryDefinitionError, match="'writer__rating'"):
+        results = [
             await aggregate(
                 Article.objects, func_name, ["writer__rating", "topics__priority"]
-            )
-        with pytest.raises(QueryDefinitionError, match="'rating'.*'articles'"):
-            await aggregate(Writer.objects, func_name, ["rating", "articles__score"])
-        with pytest.raises(QueryDefinitionError, match="'articles__score'"):
+            ),
+            await aggregate(Writer.objects, func_name, ["rating", "articles__score"]),
             await aggregate(
                 Writer.objects,
                 func_name,
                 ["articles__score", "articles__topics__priority"],
-            )
-        with pytest.raises(QueryDefinitionError, match="'score'.*'topics'"):
-            await aggregate(writer.articles, func_name, ["score", "topics__priority"])
+            ),
+            await aggregate(writer.articles, func_name, ["score", "topics__priority"]),
+        ]
+        assert [
+            {column: float(value) for column, value in result.items()}
+            for result in results
+        ] == expected
 
 
 @pytest.mark.asyncio
@@ -248,26 +271,25 @@ async def test_aggregate_reuses_joins_of_select_related_and_filters(func_name):
 
 
 @pytest.mark.asyncio
-async def test_aggregate_counts_rows_of_joined_reverse_relations():
+async def test_sum_counts_each_row_once_with_joined_reverse_relations():
     """
     A reverse or many to many join of ``select_related()`` or a filter returns
-    one row per related model, so the own fields of the queried model repeat for
-    each related row and ``sum()`` / ``avg()`` count them once per row. A join
-    added by ``sum()`` / ``avg()`` itself is rejected instead.
+    one row per related model, ``sum()`` still counts each row of the model a
+    column is read from once.
     """
     async with base_ormar_config.database:
         await sample_data()
         assert await Writer.objects.sum("rating") == 13
         joined_queryset = Writer.objects.select_related("articles")
-        assert await joined_queryset.sum("rating") == 18
+        assert await joined_queryset.sum("rating") == 13
         result = await joined_queryset.sum(["rating", "articles__score"])
-        assert result == {"rating": 18, "articles__score": 18}
-        with pytest.raises(QueryDefinitionError):
-            await Writer.objects.sum(["rating", "articles__score"])
+        assert result == {"rating": 13, "articles__score": 18}
+        assert await Writer.objects.sum(["rating", "articles__score"]) == result
         explicit_queryset = Article.objects.select_related(["writer", "topics"])
         result = await explicit_queryset.sum(["writer__rating", "topics__priority"])
-        assert result == {"writer__rating": 23, "topics__priority": 9}
-        assert await Writer.objects.filter(articles__score__gt=0).sum("rating") == 18
+        assert result == {"writer__rating": 18, "topics__priority": 9}
+        assert await Writer.objects.filter(articles__score__gt=0).sum("rating") == 13
+        assert await Writer.objects.filter(articles__score__gt=6).sum("rating") == 5
         nested_queryset = Writer.objects.select_related("articles__topics")
-        assert await nested_queryset.sum("articles__score") == 21
+        assert await nested_queryset.sum("articles__score") == 18
         assert await Writer.objects.sum("articles__topics__priority") == 9

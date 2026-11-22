@@ -21,13 +21,16 @@ Currently 6 aggregation functions are supported.
 
 `sum`, `avg`, `min` and `max` join the relations of related columns they aggregate
 (e.g. `Author.objects.max("books__year")`), like filters do, so `select_related` is not needed.
-As with `select_related`, a one-to-many or many-to-many join returns one row per related model,
-so the columns of the queried model repeat for each related row and `sum` / `avg` count them once per row.
 
-To not return such inflated results silently, `sum` and `avg` raise `QueryDefinitionError` when a
-one-to-many or many-to-many relation they join themselves would repeat another of their columns,
-e.g. `Author.objects.sum(["rating", "books__year"])`. Call `sum` / `avg` separately for these columns.
-Joins of `select_related` and filters are kept as they are.
+A one-to-many or many-to-many join returns one row per related model, so the columns of the
+other tables repeat for each related row. `sum` and `avg` count each row once anyway: own fields
+of the queried model count once per queried row, so `Author.objects.select_related("books").sum("rating")`
+sums each author's rating once, however many books they have. Related fields count once per row
+of the relation path (for a many to many relation, once per link), so
+`Book.objects.sum("tags__priority")` adds the priority of a tag once for each book it is linked to,
+and in `Author.objects.sum(["rating", "books__year"])` the rating counts once per author and the
+year once per book. A field reached through foreign keys only (e.g. `Book.objects.sum("author__rating")`)
+counts once per row of the queried model.
 
 
 ## count

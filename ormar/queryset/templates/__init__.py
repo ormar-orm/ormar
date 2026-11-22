@@ -62,6 +62,7 @@ from ormar.queryset.templates.cache_keys import (
     value_cache_key,
 )
 from ormar.queryset.templates.reads import (
+    AggregateColumn,
     aggregate_statement,
     count_statement,
     exists_statement,
@@ -90,6 +91,7 @@ from ormar.queryset.templates.writes import (
 )
 
 __all__ = [
+    "AggregateColumn",
     "LIMIT_SLOT",
     "OFFSET_SLOT",
     "PK_SLOT",

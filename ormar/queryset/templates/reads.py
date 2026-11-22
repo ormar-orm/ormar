@@ -10,6 +10,7 @@ seen, and the wrapped statement is what gets cached.
 from typing import (
     Any,
     List,
+    NamedTuple,
     Tuple,
 )
 
@@ -66,8 +67,21 @@ def count_statement(
     return expr
 
 
+class AggregateColumn(NamedTuple):
+    """
+    Column of an aggregate function: its ``label`` in the result row, its
+    ``column_name`` in the read select and the labels of the primary key
+    columns identifying the row it is read from (``row_key_names``), empty
+    when the joins do not repeat its rows.
+    """
+
+    label: str
+    column_name: str
+    row_key_names: Tuple[str, ...]
+
+
 def aggregate_statement(
-    select: sqlalchemy.sql.Select, func_name: str, select_columns: List[Any]
+    select: sqlalchemy.sql.Select, func_name: str, columns: List[AggregateColumn]
 ) -> Executable:
     """
     Wrap a read select into aggregate function columns, the statement run by
@@ -76,17 +90,63 @@ def aggregate_statement(
         SELECT max(subquery_for_max.score) AS score
         FROM (<select>) AS subquery_for_max
 
+    A one-to-many or many-to-many join repeats the rows of the other tables, so
+    a column with ``row_key_names`` is aggregated over the distinct rows it is
+    read from, identified by the primary keys on its relation path. Every
+    column then gets its own subquery, all in one statement::
+
+        SELECT (
+            SELECT sum(rating) FROM (
+                SELECT DISTINCT id, rating FROM (<select>) AS subquery_for_sum_0
+            ) AS distinct_rows_0
+        ) AS rating,
+        (
+            SELECT sum(t1a2b3c4d5_score) FROM (<select>) AS subquery_for_sum_1
+        ) AS articles__score
+
     :param select: read select of the queryset
     :type select: sqlalchemy.sql.Select
     :param func_name: aggregate function name
     :type func_name: str
-    :param select_columns: aggregate column expressions
-    :type select_columns: List[Any]
+    :param columns: aggregated columns
+    :type columns: List[AggregateColumn]
     :return: aggregate statement
     :rtype: Executable
     """
-    subquery = select.alias(name=f"subquery_for_{func_name}")
-    return sqlalchemy.select(*select_columns).select_from(subquery)
+    func = getattr(sqlalchemy.func, func_name)
+    if not any(column.row_key_names for column in columns):
+        subquery = select.alias(name=f"subquery_for_{func_name}")
+        return sqlalchemy.select(
+            *(
+                func(sqlalchemy.column(column.column_name)).label(column.label)
+                for column in columns
+            )
+        ).select_from(subquery)
+    aggregates = []
+    for index, column in enumerate(columns):
+        rows: Any = select.alias(name=f"subquery_for_{func_name}_{index}")
+        if column.row_key_names:
+            row_column_names = dict.fromkeys(
+                (*column.row_key_names, column.column_name)
+            )
+            rows = (
+                sqlalchemy.select(
+                    *(
+                        sqlalchemy.column(column_name)
+                        for column_name in row_column_names
+                    )
+                )
+                .select_from(rows)
+                .distinct()
+                .alias(name=f"distinct_rows_{index}")
+            )
+        aggregate = (
+            sqlalchemy.select(func(sqlalchemy.column(column.column_name)))
+            .select_from(rows)
+            .scalar_subquery()
+        )
+        aggregates.append(aggregate.label(column.label))
+    return sqlalchemy.select(*aggregates)
 
 
 def release_values(statement: Executable) -> None:

@@ -26,7 +26,6 @@ from ormar.relations.aliases import alias_for
 if TYPE_CHECKING:  # pragma no cover
     from ormar import BaseField, Model
     from ormar.databases.connection import DatabaseConnection
-    from ormar.queryset.actions.select_action import SelectAction
 
 T = TypeVar("T")
 
@@ -542,50 +541,6 @@ def to_many_relation_paths(
                 many_paths.add("__".join(path_parts))
             target_model = related_field.to
     return many_paths
-
-
-def validate_aggregate_joins(
-    func_name: str,
-    source_model: type["Model"],
-    select_actions: list["SelectAction"],
-    added_joins: list[str],
-) -> None:
-    """
-    Checks that relations joined only for ``sum()`` / ``avg()`` columns do not
-    repeat the rows of other aggregated columns.
-
-    A reverse foreign key or many to many join returns one row per related
-    model, so a column whose path does not go through that relation would be
-    counted once per related row, e.g. ``rating`` in
-    ``Author.objects.sum(["rating", "posts__score"])``.
-
-    :param func_name: aggregate function name
-    :type func_name: str
-    :param source_model: queried model
-    :type source_model: type[Model]
-    :param select_actions: aggregated columns
-    :type select_actions: list[SelectAction]
-    :param added_joins: relation paths joined for the aggregated columns
-    :type added_joins: list[str]
-    :raises QueryDefinitionError: if a column is not under a joined relation
-        holding many models
-    """
-    if func_name not in ["sum", "avg"]:
-        return
-    many_paths = to_many_relation_paths(
-        source_model=source_model, relation_paths=added_joins
-    )
-    for select_action in select_actions:
-        for many_path in sorted(many_paths):
-            related_str = select_action.related_str
-            if related_str != many_path and not related_str.startswith(
-                f"{many_path}__"
-            ):
-                raise QueryDefinitionError(
-                    f"{func_name}('{select_action.query_str}') would count each "
-                    f"row once per related model joined for '{many_path}'. "
-                    f"Call {func_name}() separately for these columns."
-                )
 
 
 def resolve_implicit_through_relation(

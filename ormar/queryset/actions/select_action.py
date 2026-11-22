@@ -1,11 +1,12 @@
 import decimal
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import sqlalchemy
 
 from ormar.exceptions import QueryDefinitionError  # noqa: I202
 from ormar.queryset.actions.query_action import QueryAction
 from ormar.queryset.expressions import F, Inserted, expression_leaves
+from ormar.relations.aliases import alias_for
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import Model
@@ -40,14 +41,65 @@ class SelectAction(QueryAction):
         column_name = self.target_model.get_column_alias(field_name=self.field_name)
         return sqlalchemy.column(f"{alias}{column_name}")
 
-    def apply_func(
-        self, func: Callable, use_label: bool = True
-    ) -> sqlalchemy.sql.expression.ColumnElement:
-        result = func(self.get_text_clause())
-        if use_label:
-            rel_prefix = f"{self.related_str}__" if self.related_str else ""
-            result = result.label(f"{rel_prefix}{self.field_name}")
-        return result
+    @property
+    def result_label(self) -> str:
+        """
+        :return: label of the aggregated column in the result row, its dunder path
+            without the through model name
+        :rtype: str
+        """
+        rel_prefix = f"{self.related_str}__" if self.related_str else ""
+        return f"{rel_prefix}{self.field_name}"
+
+    def repeated_by(self, many_paths: set[str]) -> bool:
+        """
+        Checks if a join of a relation holding many models repeats the rows the
+        column is read from, which is the case for every such relation that is
+        not on the column's own relation path, e.g. ``"articles"`` for
+        ``rating`` but not for ``articles__score`` from ``Writer``.
+
+        :param many_paths: dunder paths of the joined relations holding many
+            models
+        :type many_paths: set[str]
+        :return: whether some of the joins repeat the column's rows
+        :rtype: bool
+        """
+        return any(
+            self.related_str != many_path
+            and not self.related_str.startswith(f"{many_path}__")
+            for many_path in many_paths
+        )
+
+    def row_key_names(self) -> tuple[str, ...]:
+        """
+        Returns the labels of the primary key columns of the queried model and of
+        every table joined on the way to the column, through tables of many to
+        many relations included. Together they identify one row of the related
+        model the column is read from, e.g. ``("id", "t1a2b3c4d5_id")`` for
+        ``articles__score`` from ``Writer``, so the rows repeated by other joins
+        can be dropped.
+
+        :return: primary key column labels in the joined select
+        :rtype: tuple[str, ...]
+        """
+        tables: list[tuple[str, type["Model"]]] = [("", self.source_model)]
+        target_model = self.source_model
+        path_parts: list[str] = []
+        for relation in self.related_parts:
+            related_field = target_model.ormar_config.model_fields[relation]
+            path_parts.append(relation)
+            relation_path = "__".join(path_parts)
+            if related_field.is_multi:
+                through_model = related_field.through
+                through_path = f"{relation_path}__{through_model.get_name()}"
+                tables.append((alias_for(through_path), through_model))
+            target_model = related_field.to
+            tables.append((alias_for(relation_path), target_model))
+        return tuple(
+            f"{table_prefix}_{column_name}" if table_prefix else column_name
+            for table_prefix, model in tables
+            for column_name in model.ormar_config.pk.column_aliases()
+        )
 
 
 def expression_columns(
