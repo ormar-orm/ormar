@@ -8,7 +8,6 @@ import sqlalchemy
 import ormar
 from ormar import Coalesce, F, Func, Greatest, Least
 from ormar.exceptions import QueryDefinitionError
-from ormar.queryset.expressions import expression_literals, replace_literals
 from ormar.queryset.templates import template_cache_for
 from tests.lifespan import init_tests
 from tests.settings import DATABASE_URL, create_config
@@ -22,6 +21,15 @@ class Team(ormar.Model):
     id: int = ormar.Integer(primary_key=True)
     name: str = ormar.String(max_length=20)
     rank: int = ormar.Integer(default=0)
+
+
+class Snippet(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="exprfilter_snippets")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=20)
+    code: str = ormar.String(max_length=20)
+    number: int = ormar.Integer(default=0)
 
 
 class Player(ormar.Model):
@@ -276,13 +284,6 @@ async def test_templates_are_cached_by_shape(players):
         assert await codes(same_code) == expected
 
 
-def test_replace_literals_copies_the_expression():
-    expression = Func("lower", Coalesce(F("nick"), "a_")) + 1
-    replaced = replace_literals(node=expression, replacement=str)
-    assert expression_literals(node=replaced) == ["a_", "1"]
-    assert expression_literals(node=expression) == ["a_", 1]
-
-
 def test_expressions_stay_hashable():
     score = F("score")
     assert {score: 1}[score] == 1
@@ -343,6 +344,67 @@ async def test_like_expression_values_with_pagination(players):
     assert players_page[1].team is None
 
 
+async def snippet_names(*groups: ormar.queryset.clause.FilterGroup, **kwargs) -> list:
+    queryset = Snippet.objects.filter(*groups, **kwargs).order_by("name")
+    return await queryset.values_list("name", flatten=True)
+
+
+@pytest.mark.asyncio
+async def test_expression_values_match_literally(players):
+    for name, code in (
+        ("xaby", "a_b"),
+        ("abc", "a_c"),
+        ("xa_cx", "zz"),
+        ("1005", "0%"),
+        ("100%", "!b"),
+        ("a!b", "a\\b"),
+        ("ab", "%"),
+        ("a\\b", "q_"),
+    ):
+        await Snippet.objects.create(name=name, code=code)
+    without_underscore = Func("replace", F("code"), "_", "")
+    assert await snippet_names(name__contains=without_underscore) == ["xaby"]
+    assert await snippet_names(F("name").contains(Func("lower", "a_c"))) == ["xa_cx"]
+    assert await snippet_names(F("name").contains(Func("lower", "0%"))) == ["100%"]
+    assert await snippet_names(name__contains=F("code")) == []
+    assert await snippet_names(name__endswith=Func("lower", "!b")) == ["a!b"]
+    assert await snippet_names(name__iendswith=Func("lower", "\\b")) == ["a\\b"]
+    assert await snippet_names(name__startswith=Func("lower", "%")) == []
+    assert await snippet_names(name__istartswith=Func("lower", "_")) == []
+    assert await snippet_names(name__iexact=Func("lower", "A_C")) == []
+    assert await snippet_names(name__iexact=Func("lower", "XA_CX")) == ["xa_cx"]
+
+
+@pytest.mark.asyncio
+async def test_column_values_match_literally(players):
+    for name, code in (
+        ("50%", "0%"),
+        ("1005", "0%"),
+        ("ya_cy", "a_c"),
+        ("abc", "a_c"),
+        ("p!q\\r", "!q\\"),
+        ("pq\\r", "!q\\"),
+    ):
+        await Snippet.objects.create(name=name, code=code)
+    assert await snippet_names(name__contains=F("code")) == ["50%", "p!q\\r", "ya_cy"]
+
+
+@pytest.mark.asyncio
+async def test_iexact_expression_value_matches_literally(players):
+    await Player.objects.create(code="e-5", name="ab", nick="a%")
+    await Player.objects.create(code="f-6", name="A%", nick="a%")
+    assert await codes(F("name").iexact(F("nick"))) == ["a-1", "f-6"]
+
+
+@pytest.mark.asyncio
+async def test_like_lookups_take_non_text_expression_values(players):
+    await Snippet.objects.create(name="n1205", code="x", number=120)
+    await Snippet.objects.create(name="n1300", code="y", number=13)
+    assert await snippet_names(name__contains=F("number")) == ["n1205", "n1300"]
+    assert await snippet_names(name__endswith=F("number") + 1085) == ["n1205"]
+    assert await snippet_names(F("name").istartswith(F("number"))) == []
+
+
 @pytest.mark.asyncio
 async def test_like_wildcards_in_expression_literals_are_escaped(players):
     lower_name = Func("lower", F("name"))
@@ -376,14 +438,10 @@ async def test_like_wildcards_in_expression_literals_are_escaped(players):
     reason="unaccent is a PostgreSQL extension",
 )
 async def test_unaccent_search(players):  # pragma: no cover
-    try:
-        async with base_ormar_config.database.transaction():
-            async with base_ormar_config.database.connection() as connection:
-                await connection.execute(
-                    sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS unaccent")
-                )
-    except Exception:
-        pytest.skip("the database user cannot create the unaccent extension")
+    async with base_ormar_config.database.connection() as connection:
+        await connection.execute(
+            sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS unaccent")
+        )
     await Team.objects.create(name="Kraków")
     town = Func("unaccent", F("name"))
     teams = Team.objects.filter(town.icontains(Func("unaccent", "KRAKOW")))

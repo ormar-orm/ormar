@@ -34,7 +34,6 @@ so it never shadows a field reached through a ``FieldAccessor``, which has
 lookup methods of its own instead of ``Comparable``.
 """
 
-import copy
 import itertools
 import operator
 import re
@@ -137,8 +136,8 @@ class Comparable:
     Values are literals or expressions; ``like`` lookups (``iexact``,
     ``contains``, ``startswith``, ...) take strings, escaped and wrapped in
     ``%`` like in ``filter(name__icontains=...)``, or expressions, wrapped in
-    ``%`` in SQL with the wildcards of their string literals escaped
-    (``in_()`` takes a list of literals only)::
+    ``%`` in SQL with the wildcards of their value escaped, so it matches
+    literally (``in_()`` takes a list of literals only)::
 
         Func("unaccent", F("town")).icontains(Func("unaccent", "krakow"))
     """
@@ -488,38 +487,6 @@ def expression_leaves(node: Any) -> Iterator[Any]:
             yield from expression_leaves(node=argument)
     elif not isinstance(node, Random):
         yield node
-
-
-def replace_literals(node: Any, replacement: Callable[[Any], Any]) -> Any:
-    """
-    Return a copy of an expression with each literal replaced, fields and
-    ``Random()`` kept::
-
-        replace_literals(node=F("a") + 1, replacement=str)  # -> F("a") + "1"
-
-    :param node: expression node
-    :type node: Any
-    :param replacement: maps a literal to the one written instead
-    :type replacement: Callable[[Any], Any]
-    :return: expression node with the literals replaced
-    :rtype: Any
-    """
-    if isinstance(node, Combined):
-        return Combined(
-            left=replace_literals(node=node._left, replacement=replacement),
-            op=node._op,
-            right=replace_literals(node=node._right, replacement=replacement),
-        )
-    if isinstance(node, Function):
-        function = copy.copy(node)
-        function._arguments = tuple(
-            replace_literals(node=argument, replacement=replacement)
-            for argument in node._arguments
-        )
-        return function
-    if isinstance(node, Expression):
-        return node
-    return replacement(node)
 
 
 def expression_key(node: Any) -> Any:

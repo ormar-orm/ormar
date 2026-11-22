@@ -25,11 +25,11 @@
     )
     ```
 
-* **`ormar.Func` and filtering on SQL expressions** ([#2018](https://github.com/ormar-orm/ormar/pull/2018), [#2019](https://github.com/ormar-orm/ormar/pull/2019))
+* **`ormar.Func` and filtering on SQL expressions** ([#2018](https://github.com/ormar-orm/ormar/pull/2018), [#2019](https://github.com/ormar-orm/ormar/pull/2019), [#2020](https://github.com/ormar-orm/ormar/pull/2020))
 
     `Func(name, *arguments)` calls any SQL function wherever `Greatest` / `Least` / `Coalesce` do: in filter values, `update()` and upsert `update_values`. Arguments are fields, expressions or literals; a dotted name calls a function in a schema, `type_=` sets the returned type. See [functions](queries/update.md#functions).
 
-    `F()`, arithmetic and functions can also be the filtered side: compare them with `==`, `!=`, `<`, `<=`, `>`, `>=` or `in_()`, `iexact()`, `(i)contains()`, `(i)startswith()`, `(i)endswith()` and `isnull()`. Each comparison is a filter group for `filter()`, `exclude()`, `get()`, `ormar.and_()` / `or_()` and `~`; related fields are joined automatically. The like lookups take expression values too, in both forms (`name__icontains=Func(...)`), wrapped in `%` in SQL, which makes an accent-insensitive search a one-liner on PostgreSQL. See [filtering on expressions](queries/filter-and-sort.md#filtering-on-expressions).
+    `F()`, arithmetic and functions can also be the filtered side: compare them with `==`, `!=`, `<`, `<=`, `>`, `>=` or `in_()`, `iexact()`, `(i)contains()`, `(i)startswith()`, `(i)endswith()` and `isnull()`. Each comparison is a filter group for `filter()`, `exclude()`, `get()`, `ormar.and_()` / `or_()` and `~`; related fields are joined automatically. The like lookups take expression values too, in both forms (`name__icontains=Func(...)`), escaped and wrapped in `%` in SQL so they match literally, which makes an accent-insensitive search a one-liner on PostgreSQL. See [filtering on expressions](queries/filter-and-sort.md#filtering-on-expressions).
 
     ```python
     await Member.objects.update(each=True, email=Func("lower", F("email")))

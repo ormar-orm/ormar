@@ -19,7 +19,6 @@ from ormar.queryset.expressions import (
     expression_key,
     expression_literals,
     expression_params,
-    replace_literals,
     slot_literals,
 )
 
@@ -76,6 +75,11 @@ COMPARISON_OPERATORS = {
     "__le__": sql_operators.le,
 }
 ESCAPE_CHARACTERS = ["%", "_"]
+# escape character of plain string values, escaped in Python
+VALUE_ESCAPE = "\\"
+# escape character of expression values, escaped in SQL; unlike a backslash
+# it is no escape character in MySQL string literals
+EXPRESSION_ESCAPE = "!"
 # operators taking an expression value; ``in`` takes a list and ``isnull`` a
 # bool, so neither has an expression form
 EXPRESSION_VALUE_OPERATORS = (
@@ -141,7 +145,7 @@ def like_pattern(value: Any, operator: str) -> Any:
         like_pattern(value=func.lower(name), operator="endswith")
         # -> '%' || lower(name)
 
-    :param value: searched text, already escaped, or SQL expression
+    :param value: searched text or SQL text expression, already escaped
     :type value: Any
     :param operator: ``contains``, ``startswith`` or ``endswith`` lookup
     :type operator: str
@@ -152,21 +156,70 @@ def like_pattern(value: Any, operator: str) -> Any:
     suffix = "%" if "end" not in operator else ""
     if isinstance(value, str):
         return f"{prefix}{value}{suffix}"
-    wildcard = sqlalchemy.literal_column(text="'%'", type_=sqlalchemy.String())
-    value = sqlalchemy.type_coerce(expression=value, type_=sqlalchemy.String())
+    wildcard = sql_string(text="%")
     if prefix:
         value = wildcard.concat(value)
     return value.concat(wildcard) if suffix else value
 
 
-def escape_like_literal(literal: Any) -> Any:
+def sql_string(text: str) -> Any:
     """
-    :param literal: literal of an expression value
-    :type literal: Any
-    :return: the literal with ``LIKE`` wildcards escaped if it is a string
+    :param text: text without quotes
+    :type text: str
+    :return: the text as an SQL string literal written into the statement,
+        not bound, so it takes no parameter of a statement template
     :rtype: Any
     """
-    return escape_like(value=literal) if has_like_wildcards(value=literal) else literal
+    return sqlalchemy.literal_column(text=f"'{text}'", type_=sqlalchemy.String())
+
+
+def escape_like_clause(value: Any) -> Any:
+    """
+    Escape the ``LIKE`` wildcards of an SQL expression's value in SQL, so it
+    matches literally, with the ``ESCAPE '!'`` clause ``comparison_clause``
+    adds. A value that is not text is cast to text first::
+
+        escape_like_clause(value=func.lower(name))
+        # -> replace(replace(replace(lower(name), '!', '!!'), '%', '!%'),
+        #            '_', '!_')
+
+    :param value: SQL expression
+    :type value: Any
+    :return: SQL text expression matching the value in ``LIKE``
+    :rtype: Any
+    """
+    if not isinstance(value.type, sqlalchemy.String):
+        value = sqlalchemy.cast(expression=value, type_=sqlalchemy.String())
+    for character in (EXPRESSION_ESCAPE, *ESCAPE_CHARACTERS):
+        value = sqlalchemy.func.replace(
+            value,
+            sql_string(text=character),
+            sql_string(text=f"{EXPRESSION_ESCAPE}{character}"),
+            type_=sqlalchemy.String(),
+        )
+    return value
+
+
+def like_value_clause(value: Any, operator: str) -> Any:
+    """
+    Turn an SQL expression's value into the right side of a filter: for
+    ``iexact`` and the ``LIKE`` lookups escaped (see ``escape_like_clause``),
+    the lookups also wrapped in ``%`` (see ``like_pattern``); for the other
+    operators the value itself.
+
+    :param value: SQL expression
+    :type value: Any
+    :param operator: filter operator
+    :type operator: str
+    :return: right side of the condition
+    :rtype: Any
+    """
+    if operator != "iexact" and operator not in LIKE_OPERATORS:
+        return value
+    value = escape_like_clause(value=value)
+    if operator == "iexact":
+        return value
+    return like_pattern(value=value, operator=operator)
 
 
 def comparison_bind(
@@ -200,7 +253,9 @@ def comparison_bind(
     )
 
 
-def comparison_clause(left: Any, operator: str, value: Any, escaped: bool) -> Any:
+def comparison_clause(
+    left: Any, operator: str, value: Any, escape: Optional[str]
+) -> Any:
     """
     Compare an SQL expression with a value by a filter operator.
 
@@ -211,16 +266,17 @@ def comparison_clause(left: Any, operator: str, value: Any, escaped: bool) -> An
     :param value: compared value or bind parameter; for ``isnull`` whether the
         expression is null
     :type value: Any
-    :param escaped: whether the value escapes ``LIKE`` wildcards
-    :type escaped: bool
+    :param escape: ``ESCAPE`` character of the ``LIKE`` wildcards in the
+        value, None when nothing is escaped
+    :type escape: Optional[str]
     :return: SQL condition
     :rtype: Any
     """
     if operator == "isnull":
         return left.is_(None) if value else left.isnot(None)
     clause = getattr(left, FILTER_OPERATORS[operator])(value)
-    if escaped:
-        clause.modifiers["escape"] = "\\"
+    if escape is not None:
+        clause.modifiers["escape"] = escape
     return clause
 
 
@@ -311,10 +367,9 @@ class FilterAction(QueryAction):
 
             filter(name__iexact="a_c")  # matches "A_C", not "abc"
 
-        An expression value is wrapped in ``%`` in SQL when the clause is
-        built (see ``like_pattern``), only the wildcards in its string
-        literals are escaped here; the ones its columns produce at runtime
-        stay wildcards.
+        An expression value is escaped and wrapped in ``%`` in SQL when the
+        clause is built (see ``like_value_clause``), always with
+        ``ESCAPE '!'``.
 
         :raises QueryDefinitionError: if contains or icontains is used with
         ormar model instance
@@ -329,14 +384,7 @@ class FilterAction(QueryAction):
                 "You cannot use contains and icontains with instance of the Model"
             )
         if isinstance(self.filter_value, Expression):
-            self.has_escaped_character = any(
-                has_like_wildcards(value=literal)
-                for literal in expression_literals(node=self.filter_value)
-            )
-            if self.has_escaped_character:
-                self.filter_value = replace_literals(
-                    node=self.filter_value, replacement=escape_like_literal
-                )
+            self.has_escaped_character = True
             return
         self.has_escaped_character = has_like_wildcards(value=self.filter_value)
         if self.has_escaped_character:
@@ -345,6 +393,19 @@ class FilterAction(QueryAction):
             self.filter_value = like_pattern(
                 value=self.filter_value, operator=self.operator
             )
+
+    def escape_character(self) -> Optional[str]:
+        """
+        :return: ``ESCAPE`` character of the condition, ``!`` for expression
+            values escaped in SQL, a backslash for strings escaped in Python,
+            None when nothing is escaped
+        :rtype: Optional[str]
+        """
+        if not self.has_escaped_character:
+            return None
+        if isinstance(self.filter_value, Expression):
+            return EXPRESSION_ESCAPE
+        return VALUE_ESCAPE
 
     def bound_value(self) -> Any:
         """
@@ -443,15 +504,14 @@ class FilterAction(QueryAction):
                 slot=binder.slots[id(self)] if binder is not None else None,
                 reference_type=self.aliased_column.type,
             )
-            if self.operator in LIKE_OPERATORS:
-                filter_value = like_pattern(value=filter_value, operator=self.operator)
+            filter_value = like_value_clause(value=filter_value, operator=self.operator)
         elif binder is not None and self.binds_slot():
             filter_value = binder.bind(action=self, value=value)
         return comparison_clause(
             left=self.aliased_column,
             operator=self.operator,
             value=filter_value,
-            escaped=self.has_escaped_character,
+            escape=self.escape_character(),
         )
 
 
@@ -604,8 +664,7 @@ class ExpressionFilterAction(FilterAction):
                 index=index,
                 reference_type=lhs_clause.type,
             )
-            if self.operator in LIKE_OPERATORS:
-                filter_value = like_pattern(value=filter_value, operator=self.operator)
+            filter_value = like_value_clause(value=filter_value, operator=self.operator)
         elif self.binds_slot():
             filter_value = comparison_bind(
                 key=f"{slot}_{next(index)}" if slot is not None else None,
@@ -617,7 +676,7 @@ class ExpressionFilterAction(FilterAction):
             left=lhs_clause,
             operator=self.operator,
             value=filter_value,
-            escaped=self.has_escaped_character,
+            escape=self.escape_character(),
         )
 
 
