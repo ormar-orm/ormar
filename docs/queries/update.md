@@ -82,6 +82,13 @@ await Product.objects.update(each=True, price=F("price") * 2 + F("shipping"))
   column it sets is fine.
 * The database computes the value, so pydantic validators of the field do not run.
 
+Aggregates of related rows are expressions too, e.g. to store a counter
+(see [aggregates of related rows](aggregations.md#aggregates-of-related-rows)):
+
+```python
+await Member.objects.update(each=True, booked=Count("bookings"))
+```
+
 The same expressions update a conflicting row in
 [`create(on_conflict="update", update_values=...)`](create.md#expressions-on-conflict),
 where `ormar.Inserted("field")` reads the value the insert tried to write.

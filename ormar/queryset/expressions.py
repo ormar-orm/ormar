@@ -71,6 +71,7 @@ from sqlalchemy.sql.compiler import SQLCompiler
 from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.functions import Function as SQLFunction
 from sqlalchemy.sql.functions import GenericFunction, ReturnTypeFromArgs, coalesce
+from sqlalchemy.sql.selectable import Alias
 from sqlalchemy.sql.visitors import replacement_traverse
 from sqlalchemy.types import Float, Integer, NullType, Numeric, TypeEngine
 from sqlalchemy.types import to_instance as type_instance
@@ -1332,12 +1333,10 @@ def aggregate_clause(node: Aggregate, slot: Optional[str]) -> Any:
         #     WHERE bookings_1.paid = true AND bookings_1.user = users.id)
 
     The rows are selected from ``aggregate_from``, the filter values named by
-    a ``SlotBinder`` with the prefix ``{slot}_a{number}_``. The related table
-    is then aliased, so a relation of a model to itself compares two tables
-    (on MySQL it becomes a derived table, which an update or delete of the
-    same table may read), and every column pair of the relation correlates
-    the subquery with the queried row. ``Count`` is wrapped in
-    ``coalesce(..., 0)``.
+    a ``SlotBinder`` with the prefix ``{slot}_a{number}_``. The tables are
+    then replaced (see ``AggregateTables``) and every column pair of the
+    relation correlates the subquery with the queried row. ``Count`` is
+    wrapped in ``coalesce(..., 0)``.
 
     :param node: resolved aggregate
     :type node: Aggregate
@@ -1363,27 +1362,14 @@ def aggregate_clause(node: Aggregate, slot: Optional[str]) -> Any:
             else None
         )
         subquery = subquery.where(node.condition.get_text_clause(binder=binder))
-    root_alias: Any = root_table.alias()
-    if (
-        root_table is parent_table
-        and source.parent.ormar_config.database.dialect.name == "mysql"
-    ):  # pragma: no cover
-        # MySQL reads the table an update or delete writes only from a derived
-        # table (error 1093)
-        root_alias = sqlalchemy.select(root_table).subquery()
-    subquery = replacement_traverse(
-        obj=subquery,
-        opts={},
-        replace=lambda element, **kwargs: (
-            root_alias
-            if element is root_table
-            else root_alias.c[element.name]
-            if isinstance(element, sqlalchemy.Column) and element.table is root_table
-            else None
-        ),
+    rules = source.parent.ormar_config.database.rules
+    tables = AggregateTables(
+        root=root_table,
+        parent=parent_table,
+        derived=not rules.subquery_reads_written_table,
     )
-    if correlated is root_table:
-        correlated = root_alias
+    subquery = replacement_traverse(obj=subquery, opts={}, replace=tables.replace)
+    correlated = tables.replaced.get(correlated, correlated)
     subquery = (
         subquery.where(
             *(
@@ -1397,6 +1383,76 @@ def aggregate_clause(node: Aggregate, slot: Optional[str]) -> Any:
     if isinstance(node, Count):
         return coalesce(subquery, sqlalchemy.literal_column(text="0", type_=Integer()))
     return subquery
+
+
+class AggregateTables:
+    """
+    Replaces the tables of an aggregate's subquery before it is correlated:
+    the related table by an alias, so a relation of a model to itself
+    compares two tables, and, where an update or delete may not read the
+    table it writes in a subquery (MySQL error 1093), every table of the
+    queried model, aliased or not, by a derived table of it.
+    """
+
+    def __init__(self, root: Any, parent: Any, derived: bool) -> None:
+        """
+        :param root: table of the related model
+        :type root: Any
+        :param parent: table of the queried model
+        :type parent: Any
+        :param derived: read the queried model's table from derived tables
+        :type derived: bool
+        """
+        self.root = root
+        self.parent = parent
+        self.derived = derived
+        self.replaced: dict[Any, Any] = {}
+
+    def is_replaced(self, table: Any) -> bool:
+        """
+        :param table: table or alias read by the subquery
+        :type table: Any
+        :return: whether the table is replaced
+        :rtype: bool
+        """
+        return table is self.root or (
+            self.derived and isinstance(table, Alias) and table.element is self.parent
+        )
+
+    def replacement(self, table: Any) -> Any:
+        """
+        :param table: replaced table or alias
+        :type table: Any
+        :return: its replacement, the same one for every reference
+        :rtype: Any
+        """
+        if table not in self.replaced:
+            self.replaced[table] = self.root.alias() if table is self.root else table
+            if self.derived and (
+                table is self.parent or isinstance(table, Alias)
+            ):  # pragma: no cover
+                self.replaced[table] = sqlalchemy.select(self.parent).subquery(
+                    name=None if table is self.root else table.name
+                )
+        return self.replaced[table]
+
+    def replace(self, element: Any, **kwargs: Any) -> Any:
+        """
+        :param element: element of the subquery (see ``replacement_traverse``)
+        :type element: Any
+        :param kwargs: options of the traversal
+        :type kwargs: Any
+        :return: the replacement of a replaced table or of its column, None
+            to keep the element
+        :rtype: Any
+        """
+        if isinstance(element, sqlalchemy.Column):
+            if self.is_replaced(table=element.table):
+                return self.replacement(table=element.table).c[element.name]
+            return None
+        if self.is_replaced(table=element):
+            return self.replacement(table=element)
+        return None
 
 
 def aggregate_from(node: Aggregate) -> tuple[Any, Any]:

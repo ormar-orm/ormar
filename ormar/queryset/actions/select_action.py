@@ -1,7 +1,7 @@
 import copy
 import decimal
 import itertools
-from typing import TYPE_CHECKING, Any, Callable, Iterator, cast
+from typing import TYPE_CHECKING, Any, Callable, Iterator, Optional, cast
 
 import sqlalchemy
 
@@ -390,21 +390,56 @@ def aggregate_source(aggregate: Aggregate, model: type["Model"]) -> AggregateSou
         raise QueryDefinitionError(
             f"{name}('{aggregate._path}') has to end in a non-relation field"
         )
-    target = None
-    if rest or aggregate._distinct:
-        key_fields = target_model.ormar_config.pk.fields
-        if aggregate._distinct and len(key_fields) > 1:
-            raise QueryDefinitionError(
-                f"{name}('{aggregate._path}', distinct=True) counts rows of "
-                f"{target_model.get_name(lower=False)}, whose primary key has "
-                f"several columns: count a field instead"
-            )
-        target = SelectAction(
-            select_str="__".join([*rest, key_fields[0]]), model_cls=root
-        )
     return AggregateSource(
-        parent=model, relation=relation_field, root=root, target=target
+        parent=model,
+        relation=relation_field,
+        root=root,
+        target=counted_relation(aggregate=aggregate, root=root, rest=rest),
     )
+
+
+def counted_relation(
+    aggregate: Aggregate, root: type["Model"], rest: list[str]
+) -> Optional[SelectAction]:
+    """
+    Return the column ``Count`` counts for a path ending in a relation: none
+    (``count(*)``) for the related rows, or their primary key when distinct;
+    for a foreign key further on its own column, so the counted model is not
+    joined, or for a foreign key of several columns the first primary key
+    column of the joined model.
+
+    :param aggregate: resolved ``Count``
+    :type aggregate: Aggregate
+    :param root: related model the path starts from
+    :type root: type[Model]
+    :param rest: relations after the first one
+    :type rest: list[str]
+    :raises QueryDefinitionError: if a distinct count would compare several
+        columns
+    :return: counted column, None to count the rows
+    :rtype: Optional[SelectAction]
+    """
+    if rest:
+        source = SelectAction(select_str="__".join(rest), model_cls=root)
+        key = cast(
+            "ForeignKeyField",
+            source.target_model.ormar_config.model_fields[source.field_name],
+        )
+        if len(key.link.pairs) == 1:
+            return source
+        target_model = key.to
+    elif not aggregate._distinct:
+        return None
+    else:
+        target_model = root
+    key_fields = target_model.ormar_config.pk.fields
+    if aggregate._distinct and len(key_fields) > 1:
+        raise QueryDefinitionError(
+            f"{type(aggregate).__name__}('{aggregate._path}', distinct=True) "
+            f"counts rows of {target_model.get_name(lower=False)}, whose primary "
+            f"key has several columns: count a field instead"
+        )
+    return SelectAction(select_str="__".join([*rest, key_fields[0]]), model_cls=root)
 
 
 def resolve_when(

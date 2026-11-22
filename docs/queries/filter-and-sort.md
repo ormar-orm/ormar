@@ -263,6 +263,10 @@ await Track.objects.exclude(
 ).all()
 ```
 
+Aggregates of related rows (`ormar.Count`, `Sum`, `Avg`, `Min`, `Max`) are compared
+the same way, e.g. `filter(Count("tracks", filter={"play_count__gt": 0}) > 10)`; see
+[aggregates of related rows](aggregations.md#aggregates-of-related-rows).
+
 The comparison operators and the lookups `iexact()`, `contains()`,
 `startswith()`, `endswith()` and their `i` variants take a literal or another
 expression as the value. A string is escaped and wrapped in `%` like in

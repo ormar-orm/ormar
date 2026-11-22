@@ -74,6 +74,17 @@ class Category(ormar.Model):
 Category.update_forward_refs()
 
 
+class Person(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="agg_people")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=20)
+    friends = ormar.ManyToMany(ForwardRef("Person"), related_name="friend_of")
+
+
+Person.update_forward_refs()
+
+
 class Library(ormar.Model):
     ormar_config = base_ormar_config.copy(tablename="agg_libraries")
 
@@ -138,6 +149,19 @@ async def categories():
             first = await Category.objects.create(name="first", parent=root)
             await Category.objects.create(name="second", parent=root)
             await Category.objects.create(name="leaf", parent=first)
+            yield
+
+
+@pytest_asyncio.fixture()
+async def people():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            ann = await Person.objects.create(name="ann")
+            bob = await Person.objects.create(name="bob")
+            cyd = await Person.objects.create(name="cyd")
+            await ann.friends.add(bob)
+            await ann.friends.add(cyd)
+            await bob.friends.add(cyd)
             yield
 
 
@@ -467,3 +491,73 @@ async def test_invalid_aggregates(members):
             on_conflict="update",
             update_values={"booked": Count("bookings")},
         )
+
+
+@pytest.mark.asyncio
+async def test_writes_reading_the_written_table_through_the_relation(members):
+    assert await written(Count("bookings", filter={"member__name": "ann"})) == {
+        "ann": 3,
+        "bob": 0,
+        "cyd": 0,
+    }
+    await Member.objects.update(each=True, booked=1)
+    assert await written(Sum("bookings__member__booked")) == {
+        "ann": 3,
+        "bob": 2,
+        "cyd": None,
+    }
+    await Member.objects.filter(
+        Count("bookings", filter={"member__name": "x"}) > 5
+    ).delete()
+    assert await Member.objects.count() == 3
+    await Booking.objects.filter(member__name="bob").delete()
+    await Member.objects.filter(
+        Count("bookings", filter={"member__name": "bob"}) == 0, name="bob"
+    ).delete()
+    assert await names() == ["ann", "cyd"]
+
+
+@pytest.mark.asyncio
+async def test_self_referencing_select_related_and_filter(categories):
+    loaded = (
+        await Category.objects.select_related("children")
+        .filter(Count("children") > 0, children__name="leaf")
+        .all()
+    )
+    assert [category.name for category in loaded] == ["first"]
+    assert [child.name for child in loaded[0].children] == ["leaf"]
+
+
+@pytest.mark.asyncio
+async def test_self_referencing_many_to_many(people):
+    queryset = Person.objects.order_by("name")
+    assert await queryset.filter(Count("friends") > 0).values_list(
+        "name", flatten=True
+    ) == ["ann", "bob"]
+    assert await queryset.filter(Count("friend_of") > 0).values_list(
+        "name", flatten=True
+    ) == ["bob", "cyd"]
+    assert await queryset.filter(
+        Count("friends", filter={"name": "cyd"}) == 1
+    ).values_list("name", flatten=True) == ["ann", "bob"]
+
+
+@pytest.mark.asyncio
+async def test_queryset_proxy(members):
+    gold = await Badge.objects.get(name="gold")
+    assert [
+        member.name for member in await gold.members.filter(Count("bookings") > 2).all()
+    ] == ["ann"]
+    ann = await Member.objects.get(name="ann")
+    assert [
+        badge.name for badge in await ann.badges.filter(Count("members") > 1).all()
+    ] == ["gold"]
+
+
+@pytest.mark.asyncio
+async def test_aggregates_on_both_sides(members):
+    assert await names(Count("bookings") > Count("badges")) == ["ann", "bob"]
+    assert await names(
+        Count("bookings", filter={"status": "active"})
+        == Count("badges", filter={"name": "gold"})
+    ) == ["bob", "cyd"]

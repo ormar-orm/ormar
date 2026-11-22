@@ -323,8 +323,9 @@ await Member.objects.filter(Sum("bookings__training__price") > 500).all()
   a relation counts the related models (`Count("bookings__training",
   distinct=True)` counts distinct trainings).
 * `Sum`, `Avg`, `Min` and `Max` take a path ending in a field and give `NULL` when
-  there are no related rows. `Avg` is a decimal, `Min`, `Max` and `Sum` keep the type
-  of the field.
+  there are no related rows. `Min` and `Max` keep the type of the field, `Avg` is a
+  decimal. The type of `Sum` depends on the database: the sum of an integer field
+  is a decimal on MySQL and a numeric on PostgreSQL for `bigint` fields.
 * Aggregates are not allowed in `update_values` of upserts.
 
 ## QuerysetProxy methods
