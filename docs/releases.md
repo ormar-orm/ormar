@@ -2,6 +2,18 @@
 
 ## 0.31.0
 
+### ✨ Breaking changes
+
+* **Simple literal defaults are set as the column default in the database**
+
+    A `default` of `bool`, `int`, `float`, `Decimal`, or `str` on a `String` field now also gives the column a `DEFAULT` in the database. Before, `ormar.Boolean(default=False)` made a nullable column without a default, so adding it to an existing table left `NULL` in the old rows (and in rows inserted outside ormar). Callables, `Text`, `JSON`, `LargeBinary`, `Enum`, encrypted fields, primary keys and relations are not changed, an explicit `server_default` wins, and nullability stays the same. Runtime behaviour does not change: the field's `server_default` stays `None` and ormar still fills the default in python.
+
+    Only the DDL changes: `create_all()` emits the `DEFAULT`, and new Alembic migrations add it to new columns. Alembic shows a diff for existing columns only with `compare_server_default=True`, see [column defaults](models/migrations.md#column-defaults-compare_server_default).
+
+    ```python
+    is_active: bool = ormar.Boolean(default=False)  # is_active BOOLEAN DEFAULT false
+    ```
+
 ### 🆕 Features
 
 * **`tablename_factory` in `OrmarConfig` and snake case table names** ([#1123](https://github.com/ormar-orm/ormar/issues/1123))

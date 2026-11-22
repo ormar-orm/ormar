@@ -412,7 +412,9 @@ def merged_column(
         index=any(field.index for field in own) or None,
         unique=any(field.unique for field in own) or None,
         default=plain.ormar_default if plain is not None else None,
-        server_default=plain.server_default if plain is not None else None,
+        server_default=(
+            plain.get_column_server_default() if plain is not None else None
+        ),
         comment=plain.comment if plain is not None else None,
     )
 
