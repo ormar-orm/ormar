@@ -331,6 +331,8 @@ You can overwrite this parameter by providing `ormar_config` object's `tablename
 To change the default naming for all models set `tablename_factory` on the base config.
 It is a function that gets the class name and returns the table name, and `copy()`
 passes it on to every model. An explicit `tablename` always wins.
+The factory is passed on only by `copy()`: a model that declares a fresh `OrmarConfig()`
+does not inherit it from an abstract parent model.
 
 `ormar.snake_case_tablename` turns the class name into snake case plus 's'
 (`UserProfile` -> `user_profiles`, `HTTPRequest` -> `http_requests`).
