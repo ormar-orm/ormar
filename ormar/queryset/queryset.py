@@ -69,6 +69,7 @@ from ormar.queryset.utils import (
     get_or_create_with_retry,
     get_relationship_alias_model_and_str,
     normalize_slice,
+    validate_aggregate_joins,
 )
 from ormar.queryset.values_columns import extract_values, values_column_map
 from ormar.queryset.write_statements import (
@@ -1263,6 +1264,22 @@ class QuerySet(Generic[T]):
                 "You can use aggregate functions only on "
                 "existing columns of the target model"
             )
+        select_related = self._select_related
+        for select_action in select_actions:
+            select_related = select_action.update_select_related(
+                select_related=select_related
+            )
+        missing_joins = select_related[len(self._select_related) :]
+        if missing_joins:
+            validate_aggregate_joins(
+                func_name=func_name,
+                source_model=self.model,
+                select_actions=select_actions,
+                added_joins=missing_joins,
+            )
+            return await self.select_related(
+                related=missing_joins
+            )._query_aggr_function(func_name=func_name, columns=columns)
         select_columns = [x.apply_func(func, use_label=True) for x in select_actions]
         wrap = functools.partial(
             aggregate_statement, func_name=func_name, select_columns=select_columns

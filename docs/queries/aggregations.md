@@ -19,6 +19,16 @@ Currently 6 aggregation functions are supported.
     * `QuerysetProxy.min(column)` method
     * `QuerysetProxy.max(columns)` method
 
+`sum`, `avg`, `min` and `max` join the relations of related columns they aggregate
+(e.g. `Author.objects.max("books__year")`), like filters do, so `select_related` is not needed.
+As with `select_related`, a one-to-many or many-to-many join returns one row per related model,
+so the columns of the queried model repeat for each related row and `sum` / `avg` count them once per row.
+
+To not return such inflated results silently, `sum` and `avg` raise `QueryDefinitionError` when a
+one-to-many or many-to-many relation they join themselves would repeat another of their columns,
+e.g. `Author.objects.sum(["rating", "books__year"])`. Call `sum` / `avg` separately for these columns.
+Joins of `select_related` and filters are kept as they are.
+
 
 ## count
 
