@@ -135,7 +135,11 @@ class Comparable:
 
     Values are literals or expressions; ``like`` lookups (``iexact``,
     ``contains``, ``startswith``, ...) take strings, escaped and wrapped in
-    ``%`` like in ``filter(name__icontains=...)``.
+    ``%`` like in ``filter(name__icontains=...)``, or expressions, wrapped in
+    ``%`` in SQL with the wildcards of their value escaped, so it matches
+    literally (``in_()`` takes a list of literals only)::
+
+        Func("unaccent", F("town")).icontains(Func("unaccent", "krakow"))
     """
 
     __hash__ = object.__hash__
