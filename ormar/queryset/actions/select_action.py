@@ -484,6 +484,25 @@ def resolve_when(
     return duplicate
 
 
+def multi_row_relation(model: type["Model"], path: list[str]) -> Optional[str]:
+    """
+    :param model: model the path starts from
+    :type model: type[Model]
+    :param path: relation names leading to the read model
+    :type path: list[str]
+    :return: the first reverse, many to many or through relation of the path,
+        which can match many rows, None when it follows foreign keys only
+    :rtype: Optional[str]
+    """
+    target = model
+    for relation in path:
+        field = target.ormar_config.model_fields[relation]
+        if field.is_multi or field.virtual or field.is_through:
+            return relation
+        target = field.to
+    return None
+
+
 def check_condition_path(
     model: type["Model"], path: list[str], upsert: bool, update: bool, owner: str
 ) -> None:
@@ -509,16 +528,13 @@ def check_condition_path(
     :raises QueryDefinitionError: if the path follows a reverse, many to many
         or through relation, or reads a related model in an update or upsert
     """
-    target = model
-    for relation in path:
-        field = target.ormar_config.model_fields[relation]
-        if field.is_multi or field.virtual or field.is_through:
-            raise QueryDefinitionError(
-                f"{owner} read related models only through foreign "
-                f"keys, '{'__'.join(path)}' follows the reverse or many to many "
-                f"relation '{relation}'"
-            )
-        target = field.to
+    relation = multi_row_relation(model=model, path=path)
+    if relation is not None:
+        raise QueryDefinitionError(
+            f"{owner} read related models only through foreign "
+            f"keys, '{'__'.join(path)}' follows the reverse or many to many "
+            f"relation '{relation}'"
+        )
     if upsert and path:
         raise QueryDefinitionError(
             f"When() conditions in update_values of an upsert read only fields of "

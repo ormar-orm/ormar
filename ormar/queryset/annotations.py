@@ -26,6 +26,7 @@ from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.order_action import OrderAction, order_text_clause
 from ormar.queryset.actions.select_action import (
     SelectAction,
+    multi_row_relation,
     resolve_expression,
 )
 from ormar.queryset.expressions import (
@@ -152,16 +153,13 @@ def check_forward_path(name: str, path: str, column: SelectAction) -> None:
     :raises QueryDefinitionError: if the path follows a reverse, many to many
         or through relation
     """
-    target = column.source_model
-    for relation in column.related_parts:
-        field = target.ormar_config.model_fields[relation]
-        if field.is_multi or field.virtual or field.is_through:
-            raise QueryDefinitionError(
-                f"annotate({name}=...): F('{path}') follows the reverse or many to "
-                f"many relation '{relation}', annotations read related models only "
-                f"through foreign keys; aggregate it with Count(), Sum()..."
-            )
-        target = field.to
+    relation = multi_row_relation(model=column.source_model, path=column.related_parts)
+    if relation is not None:
+        raise QueryDefinitionError(
+            f"annotate({name}=...): F('{path}') follows the reverse or many to "
+            f"many relation '{relation}', annotations read related models only "
+            f"through foreign keys; aggregate it with Count(), Sum()..."
+        )
 
 
 def annotation_clause(annotation: Annotation) -> Any:
