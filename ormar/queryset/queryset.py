@@ -46,7 +46,7 @@ from ormar.queryset.expressions import (
 )
 from ormar.queryset.prefetch import Prefetch
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
-from ormar.queryset.queries.query import Query
+from ormar.queryset.queries.query import Query, matched_rows_clause
 from ormar.queryset.templates import (
     PKS_SLOT,
     SlotBinder,
@@ -610,16 +610,8 @@ class QuerySet(Generic[T]):
     def matched_rows_clause(self, binder: Optional[SlotBinder]) -> Any:
         """
         Return the condition keeping the rows this queryset selects, by primary
-        key, for an update or delete filtering on related models::
-
-            tracks.id IN (SELECT ormar_matched.id FROM (
-                SELECT tracks.id FROM tracks LEFT OUTER JOIN albums AS ... ON ...
-                WHERE <filters>
-            ) AS ormar_matched)
-
-        The select is wrapped in a derived table, as MySQL does not let a
-        statement select from the table it updates or deletes from (error
-        1093). A composite primary key is compared as a tuple.
+        key, for an update or delete filtering on related models (see
+        ``queries.matched_rows_clause``).
 
         :param binder: names filter values for templates, None binds them as
             plain values
@@ -627,23 +619,14 @@ class QuerySet(Generic[T]):
         :return: condition on the primary key columns
         :rtype: Any
         """
-        matched = (
-            Query(
-                model_cls=self.model,
-                filter_clauses=self.filter_clauses,
-                exclude_clauses=self.exclude_clauses,
-                select_related=self._select_related,
-                limit_count=None,
-                offset=None,
-                excludable=self._excludable,
-                order_bys=None,
-                limit_raw_sql=False,
-                binder=binder,
-            )
-            .build_primary_key_select()
-            .subquery("ormar_matched")
+        return matched_rows_clause(
+            model_cls=self.model,
+            filter_clauses=self.filter_clauses,
+            exclude_clauses=self.exclude_clauses,
+            select_related=self._select_related,
+            binder=binder,
+            excludable=self._excludable,
         )
-        return self.model_config.pk.row_value().in_(sqlalchemy.select(*matched.c))
 
     def limit_cache_key(self, limit: Optional[int]) -> tuple:
         """
@@ -1353,7 +1336,9 @@ class QuerySet(Generic[T]):
         the update touches the rows the same filters select in ``all()`` (limit
         and offset do not apply). Expressions may read fields of models reached
         through foreign keys (``position=F("album__rank")``); rows without a
-        related row on such a path are not updated and not counted.
+        related row on such a path are not updated and not counted. ``When``
+        conditions on related fields do not restrict the rows, a row without
+        the related row takes the next branch or the default.
 
         :param each: flag if whole table should be affected if no filter is passed
         :type each: bool
