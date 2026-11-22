@@ -5,7 +5,7 @@ Following methods allow you to insert data into the database.
 * `create(on_conflict=None, conflict_target=None, update_fields=None, update_values=None, **kwargs) -> Optional[Model]`
 * `get_or_create(_defaults: Optional[dict[str, Any]] = None, **kwargs) -> tuple[Model, bool]`
 * `update_or_create(**kwargs) -> Model`
-* `bulk_create(objects: list[Model], on_conflict=None, conflict_target=None, update_fields=None, update_values=None) -> None`
+* `bulk_create(objects: list[Model] | list[dict], on_conflict=None, conflict_target=None, update_fields=None, update_values=None) -> None`
 
 
 * `Model`
@@ -130,11 +130,12 @@ Updates the model, or in case there is no match in database creates a new one.
 
 ## bulk_create
 
-`bulk_create(objects: list["Model"]) -> None`
+`bulk_create(objects: list["Model"] | list[dict]) -> None`
 
 Allows you to create multiple objects at once.
 
-A valid list of `Model` objects needs to be passed.
+A valid list of `Model` objects, or a list of dictionaries of field values, needs to be
+passed.
 
 ```python hl_lines="30-37"
 --8<-- "../docs_src/queries/docs004.py"
@@ -147,6 +148,39 @@ A valid list of `Model` objects needs to be passed.
     inside one transaction, so generated primary keys may not follow the order
     of the passed list. If you need that order, split such objects into separate
     `bulk_create()` calls.
+
+### Rows as dictionaries
+
+Building a model for every row is the main cost of a large `bulk_create()`. Pass
+dictionaries of field values instead and only the column values are validated:
+
+```python
+await Track.objects.bulk_create(
+    [
+        {"title": "Intro", "album": album, "position": 1},
+        {"title": "Outro", "album": album.pk, "position": 2},
+    ]
+)
+```
+
+* values are validated by their field validators, as a model would validate them, and
+  stored as the validator converts them (`"2"` becomes `2`, a date string a `date`);
+  unlike [`update()`](update.md), which validates its values but writes them as passed.
+  A rejected value raises pydantic's `ValidationError`. Bytes fields take `bytes` or a
+  string (a base64 string for `represent_as_base64_str=True`), as a model does;
+* foreign keys take the related model, a dictionary with its primary key or the primary
+  key itself;
+* missing fields get their `default` / default factory, a missing required field raises
+  `ModelPersistenceError`;
+* fields the model does not store in its own table (unknown names, reverse and many to
+  many relations, pydantic-only fields such as `@computed_field`) raise
+  `QueryDefinitionError`, so the output of `model_dump()` cannot always be passed as it
+  is: drop such fields first;
+* no model is built: model validators (`@model_validator`) are not run and no relations
+  are registered.
+
+One call takes either models or dictionaries: mixing them raises `QueryDefinitionError`.
+The conflict handling below works the same for both.
 
 ## Conflict handling
 

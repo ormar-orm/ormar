@@ -12,6 +12,19 @@
     base_ormar_config = ormar.OrmarConfig(..., tablename_factory=ormar.snake_case_tablename)
     ```
 
+* **`bulk_create()` takes dictionaries** ([#2007](https://github.com/ormar-orm/ormar/issues/2007), [#2017](https://github.com/ormar-orm/ormar/pull/2017))
+
+    Rows given as dictionaries of field values skip building the models: only the column values are validated and converted (defaults, foreign keys as a related model or its primary key, field validators, required fields), which roughly halves the time of a 120 row upsert in local timings. Pydantic-only fields (e.g. `@computed_field`) in a row are rejected, so filter `model_dump()` output before passing it. Models and dictionaries cannot be mixed in one call. See [bulk_create](queries/create.md#rows-as-dictionaries).
+
+    ```python
+    await Tag.objects.bulk_create(
+        [{"name": "python", "score": 5}, {"name": "rust", "score": 1}],
+        on_conflict="update",
+        conflict_target=["name"],
+        update_values={"score": F("score") + Inserted("score")},
+    )
+    ```
+
 ### 🐛 Fixes
 
 * **A many to many relation inherited from an abstract model works when the child has no explicit `tablename`** ([#1123](https://github.com/ormar-orm/ormar/issues/1123))

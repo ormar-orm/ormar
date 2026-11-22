@@ -248,6 +248,33 @@ def build_conflict_insert(
     return statement
 
 
+def conflict_target_columns(
+    model_cls: Type[Any], conflict_target: Optional[Sequence[str]]
+) -> Tuple[str, ...]:
+    """
+    Return the columns of the unique key an upsert conflicts on: the columns
+    of the ``conflict_target`` fields, or of the primary key without one::
+
+        conflict_target_columns(model_cls=Tag, conflict_target=["name"])
+        # -> ("name",)
+
+    :param model_cls: inserted model
+    :type model_cls: Type[Any]
+    :param conflict_target: names of the fields of the conflicting unique key
+    :type conflict_target: Optional[Sequence[str]]
+    :return: column names
+    :rtype: Tuple[str, ...]
+    """
+    return (
+        tuple(
+            column
+            for field_name in conflict_target or ()
+            for column in model_cls.get_column_aliases(field_name=field_name)
+        )
+        or model_cls.ormar_config.pk.column_aliases()
+    )
+
+
 def insert_statement(
     model_cls: Type[Any],
     names: Tuple[str, ...],
@@ -303,13 +330,8 @@ def insert_statement(
             names=names,
         )
     pk = config.pk.column_aliases()
-    target = (
-        tuple(
-            column
-            for field_name in conflict_target or ()
-            for column in model_cls.get_column_aliases(field_name=field_name)
-        )
-        or pk
+    target = conflict_target_columns(
+        model_cls=model_cls, conflict_target=conflict_target
     )
     update_names = tuple(
         sorted(

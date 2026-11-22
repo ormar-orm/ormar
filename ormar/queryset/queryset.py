@@ -2071,7 +2071,7 @@ class QuerySet(Generic[T]):
 
     async def bulk_create(
         self,
-        objects: list["T"],
+        objects: Union[list["T"], list[dict[str, Any]]],
         on_conflict: Optional[Literal["ignore", "update"]] = None,
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
@@ -2082,7 +2082,11 @@ class QuerySet(Generic[T]):
 
         Allows you to create multiple objects at once.
 
-        A valid list of `Model` objects needs to be passed.
+        A list of `Model` objects or a list of dictionaries of field values
+        needs to be passed, not both in one call. Dictionaries skip building
+        the models: their values are validated by the field validators,
+        foreign keys take the related model or its pk and missing fields get
+        their defaults (see ``prepare_dict_to_save``).
 
         Objects that provide different sets of fields (e.g. an explicit pk or a
         server_default value) are inserted in separate statements, so generated
@@ -2097,8 +2101,9 @@ class QuerySet(Generic[T]):
 
         Bulk operations do not send signals.
 
-        :param objects: list of ormar models already initialized and ready to save.
-        :type objects: list[Model]
+        :param objects: ormar models already initialized and ready to save, or
+            dictionaries of field values
+        :type objects: Union[list[Model], list[dict[str, Any]]]
         :param on_conflict: ``ignore`` or ``update`` rows conflicting with
             existing ones
         :type on_conflict: Optional[Literal["ignore", "update"]]
@@ -2111,11 +2116,18 @@ class QuerySet(Generic[T]):
         :param update_values: values or expressions set on conflict by field
             name, the same for every row, only with ``update`` (see ``create``)
         :type update_values: Optional[dict[str, Any]]
+        :raises QueryDefinitionError: for models mixed with dictionaries or
+            conflict options without ``on_conflict="update"``
         """
         self.model.verify_writable()
 
         if not objects:
             raise ModelListEmptyError("Bulk create objects are empty!")
+        rows_are_dicts = isinstance(objects[0], dict)
+        if any(isinstance(item, dict) != rows_are_dicts for item in objects):
+            raise QueryDefinitionError(
+                "bulk_create takes either models or dictionaries, not both in one call"
+            )
         if (conflict_target or update_fields or update_values) and (
             on_conflict != "update"
         ):
@@ -2142,12 +2154,16 @@ class QuerySet(Generic[T]):
 
         ready_objects = []
         trusted = self.model.flat_row_model()
-        for i, obj in enumerate(objects):
-            values = dump_for_save(obj=obj) if trusted else obj.model_dump()
-            row = obj.prepare_model_to_save(new_kwargs=values)
-            obj._verify_key_parts_set(row=row)
-            ready_objects.append(row)
-            if i % 100 == 99:  # pragma: no cover
+        items = cast(Sequence[Union["T", dict[str, Any]]], objects)
+        for index, item in enumerate(items):
+            if isinstance(item, dict):
+                ready_objects.append(self.model.prepare_dict_to_save(values=item))
+            else:
+                values = dump_for_save(obj=item) if trusted else item.model_dump()
+                row = item.prepare_model_to_save(new_kwargs=values)
+                item._verify_key_parts_set(row=row)
+                ready_objects.append(row)
+            if index % 100 == 99:  # pragma: no cover
                 await asyncio.sleep(0)
 
         # rows with different key sets (explicit vs omitted pk or server_default)
@@ -2220,8 +2236,9 @@ class QuerySet(Generic[T]):
                 else:
                     await executor.execute_many(query=statement, values=params)
 
-        for obj in objects:
-            obj.set_save_status(True)
+        if not rows_are_dicts:
+            for obj in cast(list["T"], objects):
+                obj.set_save_status(True)
 
     async def bulk_update(  # noqa:  CCR001
         self, objects: list["T"], columns: Optional[list[str]] = None

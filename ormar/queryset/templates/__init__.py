@@ -82,6 +82,7 @@ from ormar.queryset.templates.slots import (
 from ormar.queryset.templates.writes import (
     build_insert,
     build_update_assignment,
+    conflict_target_columns,
     insert_statement,
     insert_template,
     update_values_key,
@@ -100,6 +101,7 @@ __all__ = [
     "aggregate_statement",
     "build_insert",
     "build_update_assignment",
+    "conflict_target_columns",
     "cached_statement",
     "canonical_actions",
     "clauses_cache_key",

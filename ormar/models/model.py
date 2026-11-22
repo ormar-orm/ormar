@@ -12,7 +12,11 @@ from ormar.models import NewBaseModel  # noqa I100
 from ormar.models.model_row import ModelRow
 from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.expressions import Expression, F, expression_leaves
-from ormar.queryset.templates import insert_template, update_values_params
+from ormar.queryset.templates import (
+    conflict_target_columns,
+    insert_template,
+    update_values_params,
+)
 from ormar.queryset.utils import subtract_dict, translate_list_to_dict
 from ormar.queryset.write_statements import (
     DeleteWrite,
@@ -131,36 +135,6 @@ class Model(ModelRow):
         if not row:
             return await self.save()
         return await self.update(_partial=False, **kwargs)
-
-    def _verify_key_parts_set(self, row: dict[str, Any]) -> None:
-        """
-        Checks that every primary key column the database does not generate
-        is set before an insert.
-
-        :raises ModelPersistenceError: if a key part is missing
-        :param row: values about to be inserted, by column name
-        :type row: dict[str, Any]
-        """
-        key = self.ormar_config.pk
-        if key.autoincrement:
-            return
-        model_fields = self.ormar_config.model_fields
-        missing: list[str] = []
-        for column in key.column_aliases():
-            owners = [
-                name
-                for name in self.get_field_names_of_column(column=column)
-                if name in key.fields
-            ]
-            if row.get(column) is None and all(
-                model_fields[name].server_default is None for name in owners
-            ):
-                missing.extend(name for name in owners if name not in missing)
-        if missing:
-            raise ModelPersistenceError(
-                f"{self.__class__.__name__} primary key parts must be set before "
-                f"saving: {missing}"
-            )
 
     async def save(self: T) -> T:
         """
@@ -422,8 +396,9 @@ class Model(ModelRow):
             )
         target = {
             column: self_fields.get(column)
-            for field_name in target_fields
-            for column in self.get_column_aliases(field_name=field_name)
+            for column in conflict_target_columns(
+                model_cls=type(self), conflict_target=target_fields
+            )
         }
         missing = [column for column, value in target.items() if value is None]
         if missing:
