@@ -5,7 +5,7 @@ Following methods allow you to insert data into the database.
 * `create(on_conflict=None, conflict_target=None, update_fields=None, update_values=None, **kwargs) -> Optional[Model]`
 * `get_or_create(_defaults: Optional[dict[str, Any]] = None, **kwargs) -> tuple[Model, bool]`
 * `update_or_create(**kwargs) -> Model`
-* `bulk_create(objects: list[Model] | list[dict], on_conflict=None, conflict_target=None, update_fields=None, update_values=None, *, returning=False) -> None | list[dict]`
+* `bulk_create(objects: list[Model] | list[dict], on_conflict=None, conflict_target=None, update_fields=None, update_values=None) -> None`
 
 
 * `Model`
@@ -130,7 +130,7 @@ Updates the model, or in case there is no match in database creates a new one.
 
 ## bulk_create
 
-`bulk_create(objects: list["Model"] | list[dict], ..., *, returning: bool = False) -> None | list[dict]`
+`bulk_create(objects: list["Model"] | list[dict]) -> None`
 
 Allows you to create multiple objects at once.
 
@@ -181,51 +181,6 @@ await Track.objects.bulk_create(
 
 One call takes either models or dictionaries: mixing them raises `QueryDefinitionError`.
 The conflict handling below works the same for both.
-
-### Returning the written rows
-
-With `returning=True` (dictionaries only) `bulk_create()` returns the inserted or
-updated rows as dictionaries of field values, including the generated primary keys,
-server defaults and the values set on conflict:
-
-```python
-rows = await Tag.objects.bulk_create(
-    [{"name": "python", "score": 5}, {"name": "rust", "score": 1}],
-    on_conflict="update",
-    conflict_target=["name"],
-    update_values={"score": F("score") + Inserted("score")},
-    returning=True,
-)
-# [{"id": 1, "name": "python", "score": 12, ...}, {"id": 7, "name": "rust", ...}]
-```
-
-* Rows skipped by `on_conflict="ignore"` are left out of the result, so it can be
-  shorter than the passed list (empty when every row was skipped).
-* The rows are not guaranteed to follow the order of the passed list: match them by a
-  key.
-* A foreign key is returned as the primary key value of the related row (a tuple for a
-  foreign key stored in several columns). A field with `represent_as_base64_str=True`
-  is returned as the base64 string a model holds.
-* With `on_conflict="update"` every row needs a value for each field of
-  `conflict_target`, like in `create(on_conflict="update")`.
-* With models `returning=True` raises `QueryDefinitionError`: use `create()` or reload
-  them.
-
-PostgreSQL and SQLite return the rows from the insert (`INSERT ... RETURNING`), batched
-into multi-row statements per set of fields. With SQLAlchemy 2.0 an
-`on_conflict="update"` call with `update_values` or `on_update` fields sends the rows
-one at a time instead (SQLAlchemy 2.0 cannot batch an upsert with parameters in its
-`SET` clause); SQLAlchemy 2.1 batches it.
-
-When two rows of one call conflict on the same key with `on_conflict="update"`,
-PostgreSQL rejects the statement (`ON CONFLICT DO UPDATE command cannot affect row a
-second time`), while SQLite applies both and returns two dictionaries for that row: the
-first one holds the values before the second update.
-MySQL has no `RETURNING`: the rows are inserted one by one and each is read back, like
-in `create(on_conflict=...)`, by the primary key or, for `on_conflict="update"`, by the
-`conflict_target` values (`NoMatch` when none matches, see the warning below). A row of
-`on_conflict="ignore"` runs a plain insert and is skipped on a duplicate key error. This
-costs two round trips per row.
 
 ## Conflict handling
 
@@ -306,8 +261,7 @@ passed cannot conflict). It sends `pre_save` and `post_save`, whether the row wa
 inserted or updated.
 
 `bulk_create()` sends no signals, sets no primary keys and marks all passed objects as
-saved, the skipped ones too. To get the stored rows back pass dictionaries with
-[`returning=True`](#returning-the-written-rows).
+saved, the skipped ones too.
 
 ### Expressions on conflict
 
@@ -384,7 +338,6 @@ await Score.objects.bulk_create(
 | `create(on_conflict="update")` | `INSERT ... ON CONFLICT (target) DO UPDATE ... RETURNING` | `ON DUPLICATE KEY UPDATE`, then a select by the target values |
 | `bulk_create(on_conflict="ignore")` | `ON CONFLICT DO NOTHING` | `ON DUPLICATE KEY UPDATE` of the primary key to itself |
 | `bulk_create(on_conflict="update")` | `ON CONFLICT (target) DO UPDATE` | `ON DUPLICATE KEY UPDATE`; `on_update` values and `update_values` literals are set once in user variables (`SET @ormar_on_update_<n>`, `@ormar_u<n>`) and read by all rows |
-| `bulk_create(returning=True)` | the same with `RETURNING` | one insert per row, then a select of the row (a plain insert per row for `ignore`) |
 
 !!!warning
     MySQL has no conflict target: `ON DUPLICATE KEY UPDATE` reacts to a conflict on

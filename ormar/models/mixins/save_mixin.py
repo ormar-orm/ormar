@@ -60,8 +60,9 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         and returns it by column name, like ``prepare_model_to_save`` returns
         the row of a model, without building the model.
 
-        The values are validated and converted by their field validators (as
-        ``update()`` values are), foreign keys take the related model, a
+        The values are validated by their field validators and stored as they
+        convert them (``update()`` keeps the passed values), foreign keys take
+        the related model, a
         dictionary with its pk or the pk itself, and missing fields get their
         defaults. Model validators are not run::
 

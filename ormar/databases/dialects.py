@@ -171,8 +171,7 @@ class DialectRules:
     #: the engine runs in AUTOCOMMIT and only transactions leave it, because
     #: switching a pooled connection into AUTOCOMMIT and back costs round trips
     autocommit_engine: ClassVar[bool] = False
-    #: inserts take RETURNING: a skipping conflict insert returns the written
-    #: primary key, ``bulk_create(returning=True)`` the written rows
+    #: a skipping conflict insert returns the written primary key
     conflict_returning: ClassVar[bool] = True
     #: ``update_returning()`` runs one ``UPDATE ... RETURNING``; without it
     #: the rows are locked, updated and read back by primary key

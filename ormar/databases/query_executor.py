@@ -99,39 +99,6 @@ class QueryExecutor:
             return [tuple(row) for row in result.all()]
         return list(result.mappings().all())
 
-    async def fetch_many(
-        self, query: Executable, values: Sequence[Mapping[str, Any]]
-    ) -> List[Any]:  # pragma: no cover
-        """
-        Execute an ``INSERT ... RETURNING`` for several parameter sets and
-        fetch the returned rows.
-
-        It runs through SQLAlchemy, which sends the parameter sets as
-        multi-row VALUES (insertmanyvalues) and collects the returned rows of
-        every batch. The compiled statement is not cached: SQLAlchemy decides
-        when compiling whether rows can be batched, from the values set in the
-        statement (see ``with_bound_values``), which are not part of its cache
-        key::
-
-            await executor.fetch_many(
-                insert(tags).returning(tags.c.id), [{"name": "a"}, {"name": "b"}]
-            )
-            # -> [{"id": 1}, {"id": 2}]
-
-        :param query: insert with RETURNING
-        :type query: Executable
-        :param values: values for the named bind parameters, one mapping per row
-        :type values: Sequence[Mapping[str, Any]]
-        :return: returned rows as mappings keyed by column name
-        :rtype: List[Any]
-        """
-        result: CursorResult[Any] = await self._connection.execute(
-            statement=query,
-            parameters=list(values),
-            execution_options={"compiled_cache": None},
-        )
-        return list(result.mappings().all())
-
     async def fetch_one(
         self,
         query: Executable,

@@ -87,7 +87,6 @@ from ormar.queryset.templates.writes import (
     insert_template,
     update_values_key,
     update_values_params,
-    with_bound_values,
 )
 
 __all__ = [
@@ -121,5 +120,4 @@ __all__ = [
     "value_binds",
     "value_cache_key",
     "value_params",
-    "with_bound_values",
 ]

@@ -2,7 +2,7 @@ import base64
 import datetime
 import enum
 import uuid
-from typing import Any, Optional, assert_type
+from typing import Any, Optional
 
 import pydantic
 import pytest
@@ -155,12 +155,8 @@ async def test_models_and_dicts_cannot_be_mixed() -> None:
             await Item.objects.bulk_create(
                 [Item(name="b"), {"name": "a"}]  # type: ignore[arg-type]
             )
-        with pytest.raises(QueryDefinitionError, match="not models"):
-            await Item.objects.bulk_create(  # type: ignore[call-overload]
-                [Item(name="b")], returning=True
-            )
         with pytest.raises(ModelListEmptyError):
-            await Item.objects.bulk_create([], returning=True)
+            await Item.objects.bulk_create([])
         with pytest.raises(QueryDefinitionError, match="on_conflict='update'"):
             await Item.objects.bulk_create(
                 [{"name": "a"}], on_conflict="ignore", update_fields=["score"]
@@ -195,120 +191,18 @@ async def test_dict_upsert_ignore_and_update() -> None:
 
 
 @pytest.mark.asyncio
-async def test_returning_inserted_rows() -> None:
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            owner = await Owner.objects.create(name="o")
-            rows = await Item.objects.bulk_create(
-                [
-                    {"name": "a", "owner": owner, "released": "2024-01-02"},
-                    {"name": "b"},
-                    {"id": 1000, "name": "c", "score": 3},
-                ],
-                returning=True,
-            )
-            assert_type(rows, list[dict[str, Any]])
-            by_name = {row["name"]: row for row in rows}
-            assert set(by_name) == {"a", "b", "c"}
-            stored = {item.name: item for item in await Item.objects.all()}
-            for name, row in by_name.items():
-                assert row["id"] == stored[name].id
-                assert row["token"] == stored[name].token
-            assert by_name["c"]["id"] == 1000
-            assert by_name["a"]["owner"] == owner.pk
-            assert by_name["a"]["released"] == datetime.date(2024, 1, 2)
-            assert by_name["b"]["owner"] is None
-            assert by_name["b"]["score"] == 0
-            assert set(by_name["a"]) == {
-                column.name for column in Item.ormar_config.table.columns
-            }
-
-
-@pytest.mark.asyncio
-async def test_returning_leaves_out_ignored_rows() -> None:
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            await Item.objects.bulk_create([{"name": "a", "score": 1}])
-            rows = await Item.objects.bulk_create(
-                [{"name": "a", "score": 5}, {"name": "b", "score": 2}],
-                on_conflict="ignore",
-                returning=True,
-            )
-            assert [(row["name"], row["score"]) for row in rows] == [("b", 2)]
-            # the transaction stays usable after a skipped row
-            assert await Item.objects.count() == 2
-            skipped = await Item.objects.bulk_create(
-                [{"name": "a"}], on_conflict="ignore", returning=True
-            )
-            assert skipped == []
-            repeated = await Item.objects.bulk_create(
-                [{"name": "c", "score": 1}, {"name": "c", "score": 2}],
-                on_conflict="ignore",
-                returning=True,
-            )
-            assert [(row["name"], row["score"]) for row in repeated] == [("c", 1)]
-
-
-@pytest.mark.asyncio
-async def test_returning_upserted_rows() -> None:
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            await Item.objects.bulk_create([{"name": "a", "score": 1}])
-            rows = await Item.objects.bulk_create(
-                [{"name": "a", "score": 10}, {"name": "b", "score": 2}],
-                on_conflict="update",
-                conflict_target=["name"],
-                update_values={"score": F("score") + 100},
-                returning=True,
-            )
-            by_name = {row["name"]: row for row in rows}
-            assert by_name["a"]["score"] == 101 and by_name["a"]["is_dirty"]
-            assert by_name["b"]["score"] == 2 and not by_name["b"]["is_dirty"]
-
-            rows = await Pair.objects.bulk_create(
-                [
-                    {"left_id": 1, "right_id": 1, "value": 1},
-                    {"left_id": 1, "right_id": 2},
-                ],
-                on_conflict="update",
-                returning=True,
-            )
-            assert sorted(
-                (row["left_id"], row["right_id"], row["value"]) for row in rows
-            ) == [(1, 1, 1), (1, 2, 0)]
-
-            rows = await Item.objects.bulk_create(
-                [{"name": "a", "score": 50, "extra": {"kept": True}}],
-                on_conflict="update",
-                conflict_target=["name"],
-                update_fields=["score"],
-                returning=True,
-            )
-            assert [(row["score"], row["extra"]) for row in rows] == [(50, None)]
-
-            with pytest.raises(QueryDefinitionError, match="conflict target"):
-                await Item.objects.bulk_create(
-                    [{"score": 1, "name": "c"}], on_conflict="update", returning=True
-                )
-
-
-@pytest.mark.asyncio
-async def test_returning_multi_column_foreign_key_and_aliases() -> None:
+async def test_dicts_with_multi_column_foreign_key_and_aliases() -> None:
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
             pair = await Pair.objects.create(left_id=1, right_id=2)
-            rows = await Booking.objects.bulk_create(
+            await Booking.objects.bulk_create(
                 [
                     {"pair": pair, "slot": 1},
                     {"pair": {"left_id": 1, "right_id": 2}, "slot": 2},
-                ],
-                returning=True,
+                ]
             )
-            assert sorted((row["pair"], row["slot"]) for row in rows) == [
-                ((1, 2), 1),
-                ((1, 2), 2),
-            ]
             bookings = await Booking.objects.select_related("pair").all()
+            assert sorted(booking.slot for booking in bookings) == [1, 2]
             assert {booking.pair for booking in bookings} == {pair}
 
 
@@ -327,21 +221,16 @@ async def test_dicts_with_bytes_base64_and_enums() -> None:
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
             encoded = base64.b64encode(b"xyz").decode()
-            rows = await Blob.objects.bulk_create(
-                [
-                    {"raw": b"abc", "encoded": encoded, "color": "red"},
-                    {"raw": "text", "encoded": encoded, "color": Color.BLUE},
-                ],
-                returning=True,
-            )
-            blobs = {blob.id: blob for blob in await Blob.objects.all()}
-            for row in rows:
-                blob = blobs[row["id"]]
-                assert row["encoded"] == blob.encoded == encoded
-                assert row["raw"] == blob.raw
-                assert row["color"] == blob.color
-            assert {blob.raw for blob in blobs.values()} == {b"abc", b"text"}
-            assert {blob.color for blob in blobs.values()} == {Color.RED, Color.BLUE}
+            rows: list[dict[str, Any]] = [
+                {"raw": b"abc", "encoded": encoded, "color": "red"},
+                {"raw": "text", "encoded": encoded, "color": Color.BLUE},
+            ]
+            await Blob.objects.bulk_create(rows)
+            blobs = await Blob.objects.all()
+            assert all(blob.encoded == encoded for blob in blobs)
+            assert {blob.__dict__["encoded"] for blob in blobs} == {b"xyz"}
+            assert {blob.raw for blob in blobs} == {b"abc", b"text"}
+            assert {blob.color for blob in blobs} == {Color.RED, Color.BLUE}
             with pytest.raises(pydantic.ValidationError):
                 await Blob.objects.bulk_create(
                     [{"raw": b"a", "encoded": encoded, "color": "green"}]
@@ -350,15 +239,3 @@ async def test_dicts_with_bytes_base64_and_enums() -> None:
             dumped = Blob(raw=b"a", encoded=encoded, color=Color.RED).model_dump()
             with pytest.raises(QueryDefinitionError, match="raw_size"):
                 await Blob.objects.bulk_create([dumped])
-
-
-@pytest.mark.asyncio
-async def test_returning_flag_typed_as_bool() -> None:
-    async with base_ormar_config.database:
-        async with base_ormar_config.database.transaction(force_rollback=True):
-            for flag in (False, True):
-                result = await Item.objects.bulk_create(
-                    [{"name": f"flag {flag}"}], returning=flag
-                )
-                assert_type(result, Optional[list[dict[str, Any]]])
-                assert (result is not None) == flag

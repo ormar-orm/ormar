@@ -4,17 +4,16 @@
 
 ### 🆕 Features
 
-* **`bulk_create()` takes dictionaries and returns the written rows** ([#2007](https://github.com/ormar-orm/ormar/issues/2007), [#2017](https://github.com/ormar-orm/ormar/pull/2017))
+* **`bulk_create()` takes dictionaries** ([#2007](https://github.com/ormar-orm/ormar/issues/2007), [#2017](https://github.com/ormar-orm/ormar/pull/2017))
 
-    Rows given as dictionaries of field values skip building the models: only the column values are validated and converted (defaults, foreign keys as a related model or its primary key, field validators, required fields), which roughly halves the time of a 120 row upsert in local timings. With `returning=True` the inserted or updated rows come back as dictionaries (`INSERT ... RETURNING` on PostgreSQL and SQLite, batched into multi-row statements; with SQLAlchemy 2.0 an upsert with `update_values` or `on_update` fields goes row by row; a read back per row on MySQL); rows skipped by `on_conflict="ignore"` are left out. Pydantic-only fields (e.g. `@computed_field`) in a row are rejected, so filter `model_dump()` output before passing it. Models and dictionaries cannot be mixed in one call, and `returning=True` takes dictionaries only. See [bulk_create](queries/create.md#rows-as-dictionaries).
+    Rows given as dictionaries of field values skip building the models: only the column values are validated and converted (defaults, foreign keys as a related model or its primary key, field validators, required fields), which roughly halves the time of a 120 row upsert in local timings. Pydantic-only fields (e.g. `@computed_field`) in a row are rejected, so filter `model_dump()` output before passing it. Models and dictionaries cannot be mixed in one call. See [bulk_create](queries/create.md#rows-as-dictionaries).
 
     ```python
-    rows = await Tag.objects.bulk_create(
+    await Tag.objects.bulk_create(
         [{"name": "python", "score": 5}, {"name": "rust", "score": 1}],
         on_conflict="update",
         conflict_target=["name"],
         update_values={"score": F("score") + Inserted("score")},
-        returning=True,
     )
     ```
 
