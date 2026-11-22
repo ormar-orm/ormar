@@ -10,7 +10,7 @@ from pydantic.fields import FieldInfo
 from ormar.exceptions import ModelDefinitionError  # noqa: I100, I202
 from ormar.fields import BaseField
 from ormar.models.helpers.rebuild import mark_for_rebuild
-from ormar.warnings import OrmarDeprecatedSince031
+from ormar.warnings import OrmarDefaultChangeSince031
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
@@ -125,11 +125,11 @@ def apply_not_null_defaults(attrs: dict, model_fields: dict, model_name: str) ->
         return model_fields
     if ormar_config.not_null_defaults is None:
         warnings.warn(
-            OrmarDeprecatedSince031(
-                f"Model {model_name}: fields with a literal default "
-                f"({', '.join(field_names)}) will become NOT NULL and non-Optional "
-                f"by default. Set OrmarConfig(not_null_defaults=True) to opt in "
-                f"now, or nullable=True on a field to keep it nullable"
+            OrmarDefaultChangeSince031(
+                get_not_null_defaults_message(
+                    model_name=model_name,
+                    fields=[model_fields[field_name] for field_name in field_names],
+                )
             ),
             stacklevel=3,
         )
@@ -144,6 +144,41 @@ def apply_not_null_defaults(attrs: dict, model_fields: dict, model_name: str) ->
         attrs[field_name] = field
         attrs["__annotations__"][field_name] = get_field_annotation(field=field)
     return updated_fields
+
+
+def get_not_null_defaults_message(model_name: str, fields: list[BaseField]) -> str:
+    """
+    Builds the deprecation message for fields that change under
+    ``not_null_defaults``. Fields with an explicit sql_nullable keep their column
+    setting, so only their pydantic type changes.
+
+    :param model_name: name of the model class
+    :type model_name: str
+    :param fields: fields with a literal default and no explicit nullable
+    :type fields: list[BaseField]
+    :return: deprecation message
+    :rtype: str
+    """
+    not_null_names = [field.name for field in fields if not field.sql_nullable_explicit]
+    optional_names = [field.name for field in fields if field.sql_nullable_explicit]
+    changes = []
+    if not_null_names:
+        changes.append(
+            f"with a literal default ({', '.join(not_null_names)}) are nullable; "
+            f"in Ormar 0.32 they become NOT NULL and non-Optional by default."
+        )
+    if optional_names:
+        changes.append(
+            f"with a literal default and an explicit sql_nullable "
+            f"({', '.join(optional_names)}) are Optional; in Ormar 0.32 they "
+            f"become non-Optional by default."
+        )
+    return (
+        f"Model {model_name}: fields {' Fields '.join(changes)} Set "
+        f"not_null_defaults=True in OrmarConfig to opt in now, "
+        f"not_null_defaults=False to keep the current behaviour, or nullable=True "
+        f"on single fields."
+    )
 
 
 def merge_or_generate_pydantic_config(attrs: dict, name: str) -> None:

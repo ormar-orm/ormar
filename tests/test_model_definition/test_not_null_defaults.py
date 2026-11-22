@@ -46,6 +46,12 @@ class Setting(ormar.Model):
         default=1, nullable=True, sql_nullable=False
     )
     nullable_column: int = ormar.Integer(default=2, sql_nullable=True)
+    secret: typing.Optional[str] = ormar.String(
+        max_length=200,
+        default="hidden",
+        encrypt_secret="secret123",
+        encrypt_backend=ormar.EncryptBackends.FERNET,
+    )
     tags: list[Tag] = ormar.ManyToMany(Tag)
 
 
@@ -84,6 +90,28 @@ class LooseEntry(BaseEntry, AuditMixin):
     id: int = ormar.Integer(primary_key=True)
 
 
+class Keeper(ormar.Model):
+    ormar_config = not_null_config.copy(tablename="nn_keepers")
+
+    id: int = ormar.Integer(primary_key=True)
+    rank: int = ormar.Integer(default=3)
+
+
+class Animal(ormar.Model):
+    ormar_config = not_null_config.copy(tablename="nn_animals")
+
+    id: int = ormar.Integer(primary_key=True)
+    age: int = ormar.Integer(default=1)
+    keeper: typing.Optional[Keeper] = ormar.ForeignKey(Keeper)
+
+
+class Counter(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="nn_counters")
+
+    id: int = ormar.Integer(primary_key=True)
+    hits: int = ormar.Integer(default=0, nullable=False)
+
+
 create_test_database = init_tests(base_ormar_config)
 
 NOT_NULL_FIELDS = ["flag", "count", "ratio", "price", "name"]
@@ -106,7 +134,7 @@ def test_flag_makes_literal_defaults_not_null():
         assert not field.sql_nullable, field_name
         assert not columns[field_name].nullable, field_name
         assert columns[field_name].server_default is not None, field_name
-    for field_name in ["notes", "token", "optional_name"]:
+    for field_name in ["notes", "token", "optional_name", "secret"]:
         assert Setting.ormar_config.model_fields[field_name].nullable, field_name
         assert columns[field_name].nullable, field_name
 
@@ -195,6 +223,7 @@ def test_unset_flag_warns_once_per_model_listing_the_fields():
             stock: int = ormar.Integer(default=0)
             visible: bool = ormar.Boolean(default=True)
             kept: int = ormar.Integer(default=1, nullable=True)
+            loose: int = ormar.Integer(default=2, sql_nullable=True)
 
         class ProductProxy(Product):
             ormar_config = base_ormar_config.copy(metadata=metadata, proxy=True)
@@ -219,11 +248,19 @@ def test_unset_flag_warns_once_per_model_listing_the_fields():
 
     messages = deprecations(caught=caught)
     assert len(messages) == 2
-    assert (
-        "Model Product: fields with a literal default (stock, visible)" in (messages[0])
+    assert messages[0] == (
+        "Model Product: fields with a literal default (stock, visible) are "
+        "nullable; in Ormar 0.32 they become NOT NULL and non-Optional by default. "
+        "Fields with a literal default and an explicit sql_nullable (loose) are "
+        "Optional; in Ormar 0.32 they become non-Optional by default. "
+        "Set not_null_defaults=True in OrmarConfig to opt in now, "
+        "not_null_defaults=False to keep the current behaviour, or nullable=True "
+        "on single fields. Deprecated in Ormar V0.31, the default changes in V0.32."
     )
-    assert "Deprecated in Ormar V0.31 to be removed in V0.32" in messages[0]
-    assert "Model Article: fields with a literal default (ready)" in messages[1]
+    assert messages[1].startswith(
+        "Model Article: fields with a literal default (ready) are nullable; "
+        "in Ormar 0.32 they become NOT NULL and non-Optional by default. Set "
+    )
     assert caught[0].filename == __file__
     assert Product.ormar_config.model_fields["stock"].nullable
     assert Product.ormar_config.table.columns["stock"].nullable
@@ -338,3 +375,34 @@ async def test_added_not_null_column_fills_existing_rows():
         assert row["ratio"] == 0.5
         assert row["price"] == decimal.Decimal("1.50")
         assert row["name"] == "main"
+
+
+@pytest.mark.asyncio
+async def test_load_all_keeps_excluded_not_null_fields():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            keeper = await Keeper(rank=5).save()
+            animal = await Animal(age=4, keeper=keeper).save()
+            animal.age = 7
+
+            await animal.load_all(exclude=["age", "keeper__rank"])
+            assert animal.age == 7
+            assert animal.keeper.id == keeper.id
+            assert animal.keeper.rank is None
+
+            await animal.load_all()
+            assert animal.age == 4
+            assert animal.keeper.rank == 5
+
+            await keeper.load_all(exclude="rank")
+            assert keeper.rank == 5
+            assert keeper.animals[0].age == 4
+
+
+@pytest.mark.asyncio
+async def test_load_all_keeps_excluded_explicit_not_null_field():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            counter = await Counter(hits=2).save()
+            await counter.load_all(exclude="hits")
+            assert counter.hits == 2

@@ -1,5 +1,6 @@
 import builtins
 import warnings
+from collections.abc import MutableSequence
 from typing import TYPE_CHECKING, Any, Literal, Optional, TypeVar, Union, cast
 
 import sqlalchemy
@@ -30,6 +31,39 @@ T = TypeVar("T", bound="Model")
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import ForeignKeyField
     from ormar.models.ormar_config import OrmarConfig
+
+
+def unloaded_not_null_fields(model: "Model", visited: set[int]) -> dict:
+    """
+    Collects NOT NULL fields that were excluded from the query that loaded the
+    model or its related models. Those hold None without validation, so they
+    are left out of the dump that load_all copies back with validation.
+
+    :param model: model loaded from the database
+    :type model: Model
+    :param visited: ids of models already collected, to stop on relation cycles
+    :type visited: set[int]
+    :return: nested exclude dictionary with the unloaded NOT NULL fields
+    :rtype: dict
+    """
+    visited.add(id(model))
+    unloaded: dict = {
+        field_name: ...
+        for field_name, field in model.ormar_config.model_fields.items()
+        if not field.is_relation
+        and not field.nullable
+        and field_name not in model.model_fields_set
+    }
+    for relation_name in model.extract_related_names():
+        related = getattr(model, relation_name)
+        related_models = related if isinstance(related, MutableSequence) else [related]
+        for related_model in related_models:
+            if related_model is None or id(related_model) in visited:
+                continue
+            nested = unloaded_not_null_fields(model=related_model, visited=visited)
+            if nested:
+                unloaded.setdefault(relation_name, {}).update(nested)
+    return unloaded
 
 
 class Model(ModelRow):
@@ -823,6 +857,9 @@ class Model(ModelRow):
 
         If follow=True is set it loads also related models of related models.
 
+        Fields excluded with ``exclude`` are set to None, except NOT NULL fields,
+        which keep their current values.
+
         To not get stuck in an infinite loop as related models also keep a relation
         to parent model visited models set is kept.
 
@@ -864,6 +901,10 @@ class Model(ModelRow):
             queryset = queryset.order_by(order_by)
         instance = await queryset.select_related(relations).get(pk=self.persisted_key)
         self._orm.clear()
-        self.update_from_dict(instance.model_dump())
+        self.update_from_dict(
+            instance.model_dump(
+                exclude=unloaded_not_null_fields(model=instance, visited=set())
+            )
+        )
         self._reset_change_tracking()
         return self

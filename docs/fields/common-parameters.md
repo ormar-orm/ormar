@@ -78,6 +78,13 @@ User(is_active=None)  # ValidationError
 * Callables, `Text`, `JSON`, `Enum`, `UUID`, dates, encrypted fields, primary keys and relations
   are not affected.
 
+!!!note
+    Excluding such a field from a query with `fields()` / `exclude_fields()` still gives `None`
+    in a non-`Optional` field, as for any other `NOT NULL` field (see
+    [selecting columns](../queries/select-columns.md)), so the rule that a field has to be
+    nullable to be excluded still applies. `load_all(exclude=...)` keeps the current value of
+    excluded `NOT NULL` fields.
+
 !!!warning
     Without the flag (`not_null_defaults=None`) the fields stay nullable and each model with
     such fields emits one `DeprecationWarning` listing them: **in 0.32 the default changes to
