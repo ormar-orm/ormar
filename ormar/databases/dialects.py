@@ -85,19 +85,10 @@ def conflict_updates(
         :type element: Any
         :param kwargs: traversal options, unused
         :type kwargs: Any
-        :raises QueryDefinitionError: for the expanding parameter of an
-            ``in`` filter
         :return: the user variable of a bind parameter, None keeps the element
         :rtype: Any
         """
         if isinstance(element, BindParameter):
-            if element.expanding:
-                raise QueryDefinitionError(
-                    "update_values of a MySQL bulk_create() of several rows read "
-                    "their values from user variables, which hold no lists: "
-                    "use ormar.or_() of equalities instead of an in filter in "
-                    "When() conditions"
-                )
             return sqlalchemy.literal_column(
                 variables.get(element.key, f"@{element.key}"), type_=element.type
             )
@@ -151,9 +142,17 @@ def update_assignment(
     :type on_update: Tuple[str, ...]
     :param value_binds: bind parameters of the ``update_values`` columns
     :type value_binds: Tuple[BindParameter, ...]
+    :raises QueryDefinitionError: for the list of an ``in`` filter in a
+        ``When`` condition, which a user variable cannot hold
     :return: assignment statement
     :rtype: Executable
     """
+    if any(bind.expanding for bind in value_binds):
+        raise QueryDefinitionError(
+            "update_values of a MySQL bulk_create() of several rows read their "
+            "values from user variables, which hold no lists: use ormar.or_() of "
+            "equalities instead of an in filter in When() conditions"
+        )
     binds = [
         sqlalchemy.bindparam(key=f"ormar_on_update_{index}", type_=table.c[name].type)
         for index, name in enumerate(on_update)

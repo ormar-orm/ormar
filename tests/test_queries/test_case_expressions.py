@@ -5,14 +5,13 @@ import pytest_asyncio
 
 import ormar
 from ormar import Case, F, Func, Greatest, Inserted, When
-from ormar.databases.dialects import MysqlRules
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.select_action import resolve_expression
 from ormar.queryset.expressions import expression_key
 from ormar.queryset.templates import template_cache_for
-from ormar.queryset.templates.writes import build_conflict_insert
+from ormar.queryset.templates.writes import build_update_assignment
 from tests.lifespan import init_tests
-from tests.settings import create_config
+from tests.settings import DATABASE_URL, create_config
 
 base_ormar_config = create_config()
 
@@ -223,6 +222,7 @@ async def test_null_only_cases_are_typed(players):
     assert await codes(nothing == F("score")) == []
     assert await codes(nothing.in_([1, 2])) == []
     assert await codes(nothing.in_([])) == []
+    assert await codes(nothing.in_([None, 1])) == []
     assert await codes(nothing.startswith("a")) == []
     assert await codes(nothing.isnull(True)) == everyone
     assert await codes(nothing == None) == everyone  # noqa: E711
@@ -416,16 +416,25 @@ def test_mysql_batches_take_no_in_conditions():
         update_values={"rank": Case(When(code__in=["a-1"], then=1), default=0)},
     )[1]
     with pytest.raises(QueryDefinitionError, match="ormar.or_"):
-        build_conflict_insert(
-            table=Player.ormar_config.table,
-            names=("code", "name"),
-            rules=MysqlRules(backend_name="mysql"),
-            on_conflict="update",
-            target=("code",),
-            update_names=(),
-            on_update=("revision",),
-            returning=(),
-            model=Player,
-            update_values=update_values,
-            update_variables=True,
+        build_update_assignment(
+            model=Player, on_update=("revision",), update_values=update_values
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not DATABASE_URL.startswith("mysql"),
+    reason="only MySQL reads the update values of a batch from user variables",
+)
+async def test_mysql_bulk_upsert_rejects_in_conditions(players):  # pragma: no cover
+    rows = [Player(code="a-1", name="Ann"), Player(code="b-2", name="Bob")]
+    with pytest.raises(QueryDefinitionError, match="ormar.or_"):
+        await Player.objects.bulk_create(
+            rows,
+            on_conflict="update",
+            conflict_target=["code"],
+            update_values={
+                "rank": Case(When(score__in=[1, 8], then=Inserted("score")), default=-2)
+            },
+        )
+    assert await column("rank") == {"a-1": None, "b-2": None, "c-3": None, "d-4": None}

@@ -662,15 +662,25 @@ class ExpressionFilterAction(FilterAction):
         """
         :return: the shape of the filtered expression (see ``expression_key``)
             and, for a ``Case`` whose values are all None compared by ``in``,
-            the type of the first listed value it is cast to (see
+            the type of the first listed value that is not None, which it is
+            cast to (see
             ``null_case_type``)
         :rtype: tuple[Any, ...]
         """
         key = ("lhs", expression_key(node=self.lhs))
         if is_null_case(node=self.lhs) and self.operator == "in":
-            items = list(self.bound_value())
-            return (*key, type(items[0]) if items else None)
+            return (*key, type(self.first_compared_value()))
         return key
+
+    def first_compared_value(self) -> Any:
+        """
+        :return: the compared literal, for ``in`` the first listed one that is
+            not None, None if there is none
+        :rtype: Any
+        """
+        value = self.bound_value()
+        listed = value if self.operator == "in" else [value]
+        return next((item for item in listed if item is not None), None)
 
     def value_type(self, lhs_type: Any) -> Any:
         """
@@ -749,10 +759,10 @@ class ExpressionFilterAction(FilterAction):
                 inserted=inserted,
             ).type
         else:
-            items = list(value) if self.operator == "in" else [value]
-            if self.operator == "isnull" or not items or items[0] is None:
+            compared = self.first_compared_value()
+            if self.operator == "isnull" or compared is None:
                 return None
-            value_type = sqlalchemy.literal(value=items[0]).type
+            value_type = sqlalchemy.literal(value=compared).type
         if isinstance(value_type, NullType):
             raise QueryDefinitionError(
                 "A Case() whose values are all None is compared with a value of "

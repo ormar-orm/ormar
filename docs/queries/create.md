@@ -333,7 +333,9 @@ newer = When(valid_from__lt=Inserted("valid_from"), then=Inserted("amount"))
 
 A field a condition reads cannot be set by the same upsert (here `valid_from`), as
 MySQL would read the new value: keep such fields out of `update_fields` and
-`update_values`.
+`update_values`. A multi-row `bulk_create()` on MySQL takes no `in` filters in `When`
+conditions (its values are read from user variables, see below): use
+`ormar.or_()` of equalities instead.
 
 | | PostgreSQL, SQLite | MySQL |
 |---|---|---|
