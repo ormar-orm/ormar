@@ -13,6 +13,7 @@ from ormar.queryset.expressions import (
     F,
     Function,
     Inserted,
+    JsonPath,
     When,
     expression_conditions,
     expression_leaves,
@@ -78,8 +79,8 @@ def expression_columns(
     :param upsert: the expression is a value of an upsert's ``update_values``
     :type upsert: bool
     :raises QueryDefinitionError: if a path does not lead to a non-relation
-        field, an upsert reads a related model or ``Inserted`` is used outside
-        an upsert
+        field, an upsert reads a related model, ``Inserted`` is used outside
+        an upsert or a JSON path is not valid (see ``check_json_path``)
     :return: resolved field actions by field path
     :rtype: dict[str, SelectAction]
     """
@@ -90,8 +91,8 @@ def expression_columns(
                 f"Inserted('{leaf._path}') is only allowed in update_values of "
                 f"create() and bulk_create() with on_conflict='update'"
             )
-        if isinstance(leaf, (F, Inserted)) and leaf._path not in columns:
-            name = type(leaf).__name__
+        if isinstance(leaf, (F, Inserted, JsonPath)) and leaf._path not in columns:
+            name = type(leaf._field if isinstance(leaf, JsonPath) else leaf).__name__
             try:
                 column = SelectAction(select_str=leaf._path, model_cls=model)
                 field = column.target_model.ormar_config.model_fields.get(
@@ -110,7 +111,30 @@ def expression_columns(
                     f"of an upsert read only fields of the inserted model"
                 )
             columns[leaf._path] = column
+        if isinstance(leaf, JsonPath):
+            check_json_path(leaf=leaf, column=columns[leaf._path])
     return columns
+
+
+def check_json_path(leaf: JsonPath, column: SelectAction) -> None:
+    """
+    :param leaf: JSON path read by an expression
+    :type leaf: JsonPath
+    :param column: resolved field of the path
+    :type column: SelectAction
+    :raises QueryDefinitionError: if the field is not an ``ormar.JSON`` field
+        or the path has no cast
+    """
+    if not isinstance(column.column.type, sqlalchemy.JSON):
+        raise QueryDefinitionError(
+            f"F('{leaf._path}')[...] reads a JSON path, but '{leaf._path}' is "
+            f"not an ormar.JSON field"
+        )
+    if leaf._cast_name is None:
+        raise QueryDefinitionError(
+            f"The JSON path {list(leaf._keys)} of '{leaf._path}' needs a cast: "
+            f"as_string(), as_integer(), as_float() or as_boolean()"
+        )
 
 
 def resolve_expression(

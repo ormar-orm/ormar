@@ -159,6 +159,10 @@ You can pass `timezone=True` for timezone aware database column.
 * Sqlalchemy column: `sqlalchemy.JSON`  
 * Type (used for pydantic): `pydantic.Json` 
 
+Values inside a JSON field can be filtered on and read in `update()` values with
+`F("field")["key"].as_string()` and the other casts, see
+[filtering on JSON fields](../queries/filter-and-sort.md#filtering-on-json-fields).
+
 ### LargeBinary
 
 `LargeBinary(max_length)` has a required `max_length` parameter.  

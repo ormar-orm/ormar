@@ -51,6 +51,15 @@
     )
     ```
 
+* **Filtering on JSON paths** (part of [#548](https://github.com/ormar-orm/ormar/issues/548))
+
+    `F("info")["address"]["street"]` and `Publisher.info["tags"][0]` read a value inside an `ormar.JSON` field with each database's JSON operators, cast with `as_string()`, `as_integer()`, `as_float()` or `as_boolean()` (required). A JSON path is an expression: compare it like `F()` expressions, use it as a filter value and in `update()` values; paths through foreign keys are joined. A missing key reads as `NULL`. See [filtering on JSON fields](queries/filter-and-sort.md#filtering-on-json-fields).
+
+    ```python
+    await Publisher.objects.filter(F("info")["city"].as_string() == "Warsaw").all()
+    await Author.objects.filter(F("publisher__info")["staff"].as_integer() > 10).all()
+    ```
+
 ### 🐛 Fixes
 
 * **Several filter groups in one `filter()` keep each other's joins**

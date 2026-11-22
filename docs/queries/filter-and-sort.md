@@ -368,6 +368,44 @@ await Player.objects.filter(
 A literal value of a branch is bound with the type of the filtered field, else of
 the first expression among the values.
 
+### Filtering on JSON fields
+
+Index an `ormar.JSON` field with object keys and array indexes, `F("info")["city"]`
+or `Publisher.info["city"]`, nested as `["address"]["street"]` or `["tags"][0]`,
+and cast the value to the type it is compared as: `as_string()`, `as_integer()`,
+`as_float()` or `as_boolean()`. The cast is required, as the dialects disagree on
+how an uncast JSON value compares. The path is read with the native JSON operators
+(`->>` / `#>>` on PostgreSQL, `JSON_EXTRACT` on SQLite and MySQL) and then cast, so
+`["staff"].as_string()` of a number `12` is `"12"` on every database:
+
+```python
+from ormar import F
+
+# WHERE CAST(publishers.info ->> 'city' AS VARCHAR) = 'Warsaw'
+await Publisher.objects.filter(F("info")["city"].as_string() == "Warsaw").all()
+await Publisher.objects.filter(Publisher.info["staff"].as_integer() > 10).all()
+await Publisher.objects.filter(F("info")["tags"][0].as_string().in_(["sea", "sky"])).all()
+
+# fields of related models are joined like in filter(publisher__name="alpha")
+await Author.objects.filter(F("publisher__info")["active"].as_boolean() == True).all()
+
+# a JSON path is an expression: a filter value and a value of update()
+await Publisher.objects.filter(city=F("info")["city"].as_string()).all()
+await Publisher.objects.update(each=True, staff=F("info")["staff"].as_integer())
+```
+
+The comparisons and lookups are the ones of [filtering on expressions](#filtering-on-expressions).
+A missing key and a JSON `null` read as `NULL`, so `isnull(True)` matches both and
+`!=` matches neither. A value that does not fit the cast differs per database:
+`as_integer()` of `"abc"` raises an error on PostgreSQL and reads as `0` on SQLite
+and MySQL, of `4.7` it raises, gives `4` or `5`. Cast to the type the path stores
+(`as_float()` reads integers too).
+
+Keys are non-negative array indexes or strings without `"`, `\`, `{`, `}` or commas,
+without surrounding whitespace and other than `null`, which the JSON path syntax of
+some database does not read literally. A JSON path is read only: it cannot be the
+target of `update()`, which writes whole columns.
+
 ### exclude
 
 `exclude(*args, **kwargs) -> QuerySet`

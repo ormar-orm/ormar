@@ -1,10 +1,10 @@
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions import OrderAction
 from ormar.queryset.actions.filter_action import METHODS_TO_OPERATORS
 from ormar.queryset.clause import FilterGroup, NullsOrdering
-from ormar.queryset.expressions import Expression, F
+from ormar.queryset.expressions import Expression, F, JsonPath
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import BaseField, Model
@@ -96,6 +96,15 @@ class FieldAccessor(Expression):
                 "Only non-relation fields can be used in expressions"
             )
         return F(path=self._access_chain)
+
+    def __getitem__(self, key: Union[str, int]) -> JsonPath:
+        """
+        :param key: object key or array index in a JSON field
+        :type key: Union[str, int]
+        :return: the value at the key, like ``F("field")[key]``
+        :rtype: JsonPath
+        """
+        return self._node()[key]
 
     def _select_operator(self, op: str, other: Any) -> FilterGroup:
         self._check_field()
