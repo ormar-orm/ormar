@@ -1,13 +1,26 @@
+import itertools
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 import sqlalchemy
 from sqlalchemy import TextClause
+from sqlalchemy.sql import operators as sql_operators
+from sqlalchemy.sql.elements import BindParameter
 
 import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.query_action import QueryAction
 from ormar.queryset.actions.select_action import SelectAction, expression_columns
-from ormar.queryset.expressions import Expression, expression_clause
+from ormar.queryset.expressions import (
+    Combined,
+    Expression,
+    Func,
+    Function,
+    expression_clause,
+    expression_key,
+    expression_literals,
+    expression_params,
+    slot_literals,
+)
 
 if TYPE_CHECKING:  # pragma: nocover
     from ormar import ForeignKeyField, Model
@@ -48,7 +61,129 @@ METHODS_TO_OPERATORS = {
     "isnull": "isnull",
     "in": "in",
 }
+# SQLAlchemy operators of ormar's filter operator methods, used to type bound
+# values exactly like a plain ``column <op> value`` comparison would.
+COMPARISON_OPERATORS = {
+    "__eq__": sql_operators.eq,
+    "__ne__": sql_operators.ne,
+    "like": sql_operators.like_op,
+    "ilike": sql_operators.ilike_op,
+    "in_": sql_operators.in_op,
+    "__gt__": sql_operators.gt,
+    "__ge__": sql_operators.ge,
+    "__lt__": sql_operators.lt,
+    "__le__": sql_operators.le,
+}
 ESCAPE_CHARACTERS = ["%", "_"]
+LIKE_OPERATORS = (
+    "contains",
+    "icontains",
+    "startswith",
+    "istartswith",
+    "endswith",
+    "iendswith",
+)
+
+
+def has_like_wildcards(value: Any) -> bool:
+    """
+    :param value: filter value
+    :type value: Any
+    :return: whether the value is a string holding ``%`` or ``_``
+    :rtype: bool
+    """
+    return isinstance(value, str) and any(
+        character in value for character in ESCAPE_CHARACTERS
+    )
+
+
+def escape_like(value: str) -> str:
+    """
+    Escape the ``LIKE`` wildcards ``%`` and ``_`` with a backslash, matched
+    by the ``ESCAPE '\\'`` clause ``comparison_clause`` adds.
+
+    :param value: searched text
+    :type value: str
+    :return: text matching itself in ``LIKE``
+    :rtype: str
+    """
+    for character in ESCAPE_CHARACTERS:
+        value = value.replace(character, f"\\{character}")
+    return value
+
+
+def like_pattern(value: str, operator: str) -> str:
+    """
+    Wrap a searched text in ``%`` for a ``LIKE`` lookup::
+
+        like_pattern(value="ab", operator="icontains")  # -> "%ab%"
+        like_pattern(value="ab", operator="startswith")  # -> "ab%"
+
+    :param value: searched text, already escaped
+    :type value: str
+    :param operator: ``contains``, ``startswith`` or ``endswith`` lookup
+    :type operator: str
+    :return: ``LIKE`` pattern
+    :rtype: str
+    """
+    prefix = "%" if "start" not in operator else ""
+    suffix = "%" if "end" not in operator else ""
+    return f"{prefix}{value}{suffix}"
+
+
+def comparison_bind(
+    key: Optional[str], value: Any, operator: str, compared_type: Any
+) -> BindParameter:
+    """
+    Build the bind parameter of a compared value the way SQLAlchemy builds
+    the one of ``column <op> value``: typed after ``compared_type`` (its bind
+    processing for dates, JSON, enums and so on) and expanding for ``in``,
+    rendering one placeholder per item of the list given on each call.
+
+    :param key: name of the parameter, None for an anonymous one
+    :type key: Optional[str]
+    :param value: compared value
+    :type value: Any
+    :param operator: filter operator
+    :type operator: str
+    :param compared_type: type the value is compared to, None for the type of
+        the value itself
+    :type compared_type: Any
+    :return: bind parameter
+    :rtype: BindParameter
+    """
+    return BindParameter(
+        key=key,
+        value=value,
+        unique=key is None,
+        expanding=operator == "in",
+        _compared_to_operator=COMPARISON_OPERATORS[FILTER_OPERATORS[operator]],
+        _compared_to_type=compared_type,
+    )
+
+
+def comparison_clause(left: Any, operator: str, value: Any, escaped: bool) -> Any:
+    """
+    Compare an SQL expression with a value by a filter operator.
+
+    :param left: filtered column or expression
+    :type left: Any
+    :param operator: filter operator
+    :type operator: str
+    :param value: compared value or bind parameter; for ``isnull`` whether the
+        expression is null
+    :type value: Any
+    :param escaped: whether the value escapes ``LIKE`` wildcards
+    :type escaped: bool
+    :return: SQL condition
+    :rtype: Any
+    """
+    if operator == "isnull":
+        return left.is_(None) if value else left.isnot(None)
+    clause = getattr(left, FILTER_OPERATORS[operator])(value)
+    if escaped:
+        clause.modifiers["escape"] = "\\"
+    return clause
 
 
 def split_filter_key(key: str) -> tuple[str, list[str]]:
@@ -123,12 +258,6 @@ class FilterAction(QueryAction):
             select_related = column.update_select_related(select_related=select_related)
         return select_related
 
-    def has_escaped_characters(self) -> bool:
-        """Check if value is a string that contains characters to escape"""
-        return isinstance(self.filter_value, str) and any(
-            c for c in ESCAPE_CHARACTERS if c in self.filter_value
-        )
-
     def _split_value_into_parts(self, query_str: str) -> None:
         self.operator, path = split_filter_key(key=query_str)
         self.field_name = path[-1]
@@ -146,49 +275,23 @@ class FilterAction(QueryAction):
 
         :raises QueryDefinitionError: if contains or icontains is used with
         ormar model instance
-        :return: escaped value and flag if escaping is needed
-        :rtype: tuple[Any, bool]
         """
         self.has_escaped_character = False
-        if self.operator == "iexact":
-            self.has_escaped_character = self.has_escaped_characters()
-            if self.has_escaped_character:
-                self._escape_chars()
-        elif self.operator in [
-            "contains",
-            "icontains",
-            "startswith",
-            "istartswith",
-            "endswith",
-            "iendswith",
-        ]:
-            if isinstance(self.filter_value, ormar.Model):
-                raise QueryDefinitionError(
-                    "You cannot use contains and icontains with instance of the Model"
-                )
-            self.has_escaped_character = self.has_escaped_characters()
-            if self.has_escaped_character:
-                self._escape_chars()
-            self._prefix_suffix_quote()
-
-    def _escape_chars(self) -> None:
-        """Actually replaces chars to escape in value"""
-        for char in ESCAPE_CHARACTERS:
-            self.filter_value = self.filter_value.replace(char, f"\\{char}")
-
-    def _prefix_suffix_quote(self) -> None:
-        """
-        Adds % to the beginning of the value if operator checks for containment and not
-        starts with.
-
-        Adds % to the end of the value if operator checks for containment and not
-        end with.
-        :return:
-        :rtype:
-        """
-        prefix = "%" if "start" not in self.operator else ""
-        sufix = "%" if "end" not in self.operator else ""
-        self.filter_value = f"{prefix}{self.filter_value}{sufix}"
+        if self.operator != "iexact" and self.operator not in LIKE_OPERATORS:
+            return
+        if self.operator in LIKE_OPERATORS and isinstance(
+            self.filter_value, ormar.Model
+        ):
+            raise QueryDefinitionError(
+                "You cannot use contains and icontains with instance of the Model"
+            )
+        self.has_escaped_character = has_like_wildcards(value=self.filter_value)
+        if self.has_escaped_character:
+            self.filter_value = escape_like(value=self.filter_value)
+        if self.operator in LIKE_OPERATORS:
+            self.filter_value = like_pattern(
+                value=self.filter_value, operator=self.operator
+            )
 
     def bound_value(self) -> Any:
         """
@@ -237,6 +340,35 @@ class FilterAction(QueryAction):
             and not isinstance(value, bool)
         )
 
+    def cache_key(self) -> tuple[Any, ...]:
+        """
+        Return the filtered side of the action for template cache keys (see
+        ``templates.action_cache_key``): the field path and the table alias of
+        its joined relation.
+
+        :return: hashable key of the filtered side
+        :rtype: tuple[Any, ...]
+        """
+        return (self.query_str, self.table_prefix)
+
+    def slot_params(self, slot: str) -> dict[str, Any]:
+        """
+        Return the values the action binds in a template, keyed like the
+        parameters ``get_text_clause`` names for ``slot``::
+
+            filter(name="a")  # -> {"ormar_p0": "a"}
+            filter(score__lt=F("limit") + 1)  # -> {"ormar_p0_0": 1}
+            filter(name=None)  # -> {}
+
+        :param slot: slot name of the action
+        :type slot: str
+        :return: values by bind parameter name
+        :rtype: dict[str, Any]
+        """
+        if not self.binds_slot():
+            return {}
+        return expression_params(value=self.bound_value(), slot=slot)
+
     def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
         """
         Escapes characters if it's required.
@@ -250,25 +382,186 @@ class FilterAction(QueryAction):
         :rtype: sqlalchemy.sql.elements.TextClause
         """
         value = self.bound_value()
-        op_attr = FILTER_OPERATORS[self.operator]
-        if self.operator == "isnull":
-            op_attr = "is_" if value else "isnot"
-            filter_value = None
-        elif isinstance(value, Expression):
+        filter_value = value
+        if isinstance(value, Expression):
             filter_value = expression_clause(
                 node=value,
                 columns=self.expression_columns,
                 slot=binder.slots[id(self)] if binder is not None else None,
                 reference_type=self.aliased_column.type,
             )
-        else:
-            filter_value = value
-            if binder is not None and self.binds_slot():
-                filter_value = binder.bind(action=self, value=value)
-        clause = getattr(self.aliased_column, op_attr)(filter_value)
-        if self.has_escaped_character:
-            clause.modifiers["escape"] = "\\"
-        return clause
+        elif binder is not None and self.binds_slot():
+            filter_value = binder.bind(action=self, value=value)
+        return comparison_clause(
+            left=self.aliased_column,
+            operator=self.operator,
+            value=filter_value,
+            escaped=self.has_escaped_character,
+        )
+
+
+class ExpressionFilterAction(FilterAction):
+    """
+    Filter whose filtered side is an expression instead of a field, created
+    by the comparisons of ``Comparable``::
+
+        filter(Func("lower", F("album__name")) == "malibu")
+        # -> WHERE lower(albums.name) = :ormar_p0_0
+
+    The fields the expression reads are joined like the fields of an
+    expression value. In templates the literals of both sides share the
+    ``{slot}_{k}`` names, the filtered side first.
+    """
+
+    def __init__(
+        self, lhs: Expression, operator: str, value: Any, model_cls: type["Model"]
+    ) -> None:
+        """
+        :param lhs: filtered expression
+        :type lhs: Expression
+        :param operator: filter operator
+        :type operator: str
+        :param value: compared value, a literal or an expression
+        :type value: Any
+        :param model_cls: queried model
+        :type model_cls: type[Model]
+        :raises QueryDefinitionError: if the expression reads a relation or a
+            missing field, or an expression value is used with other operators
+            than comparisons
+        """
+        self.lhs = lhs._node()
+        self.lhs_columns = expression_columns(node=self.lhs, model=model_cls)
+        super().__init__(filter_str=operator, value=value, model_cls=model_cls)
+
+    def _split_value_into_parts(self, query_str: str) -> None:
+        """
+        The action filters no field, its query string is the operator only.
+
+        :param query_str: filter operator
+        :type query_str: str
+        """
+        self.operator = query_str
+
+    def _determine_filter_target_table(self) -> None:
+        """The action has no own relation path, its fields resolve their own."""
+
+    def path_actions(self) -> list[QueryAction]:
+        """
+        :return: the fields both sides read, each resolving one relation path
+            to a joined table
+        :rtype: list[QueryAction]
+        """
+        return [*self.lhs_columns.values(), *self.expression_columns.values()]
+
+    def update_select_related(self, select_related: list[str]) -> list[str]:
+        """
+        Add the joins of the fields both sides read.
+
+        :param select_related: list of relation join strings
+        :type select_related: list[str]
+        :return: list of relation joins with implied joins from filter added
+        :rtype: list[str]
+        """
+        for column in self.path_actions():
+            select_related = column.update_select_related(select_related=select_related)
+        return select_related
+
+    def cache_key(self) -> tuple[Any, ...]:
+        """
+        :return: the shape of the filtered expression (see ``expression_key``)
+        :rtype: tuple[Any, ...]
+        """
+        return ("lhs", expression_key(node=self.lhs))
+
+    def value_type(self, lhs_type: Any) -> Any:
+        """
+        Return the type a literal value is bound with: the type of the
+        filtered expression, unless that type comes from a ``Func`` without
+        ``type_``, whose result type is only guessed from its first argument
+        (``Func("upper", F("uid")) == "AB"`` and
+        ``Coalesce(Func("upper", F("uid")), F("name")) == "AB"`` bind a
+        string, not a UUID). The type comes from the left operand of
+        arithmetic and the first expression argument of ``Greatest``,
+        ``Least`` and ``Coalesce``.
+
+        :param lhs_type: SQL type of the filtered expression
+        :type lhs_type: Any
+        :return: type to compare the value to, None for the value's own type
+        :rtype: Any
+        """
+        node: Any = self.lhs
+        while isinstance(node, (Combined, Function)) and not isinstance(node, Func):
+            node = (
+                node._left
+                if isinstance(node, Combined)
+                else next(
+                    argument
+                    for argument in node._arguments
+                    if isinstance(argument, Expression)
+                )
+            )
+        if isinstance(node, Func) and node._type is None:
+            return None
+        return lhs_type
+
+    def slot_params(self, slot: str) -> dict[str, Any]:
+        """
+        Return the literals of the filtered expression, then the value or the
+        literals of an expression value, named in the order
+        ``get_text_clause`` builds them.
+
+        :param slot: slot name of the action
+        :type slot: str
+        :return: values by bind parameter name
+        :rtype: dict[str, Any]
+        """
+        literals = expression_literals(node=self.lhs)
+        value = self.bound_value()
+        if isinstance(value, Expression):
+            literals += expression_literals(node=value)
+        elif self.binds_slot():
+            literals.append(value)
+        return slot_literals(literals=literals, slot=slot)
+
+    def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
+        """
+        Build the filtered expression and the value with one counter of
+        literals, then compare them.
+
+        :param binder: names the bound literals for statement templates, if
+            given
+        :type binder: Optional[SlotBinder]
+        :return: the condition
+        :rtype: TextClause
+        """
+        slot = binder.slots[id(self)] if binder is not None else None
+        index = itertools.count()
+        lhs_clause = expression_clause(
+            node=self.lhs, columns=self.lhs_columns, slot=slot, index=index
+        )
+        value = self.bound_value()
+        filter_value = value
+        if isinstance(value, Expression):
+            filter_value = expression_clause(
+                node=value,
+                columns=self.expression_columns,
+                slot=slot,
+                index=index,
+                reference_type=lhs_clause.type,
+            )
+        elif self.binds_slot():
+            filter_value = comparison_bind(
+                key=f"{slot}_{next(index)}" if slot is not None else None,
+                value=value,
+                operator=self.operator,
+                compared_type=self.value_type(lhs_type=lhs_clause.type),
+            )
+        return comparison_clause(
+            left=lhs_clause,
+            operator=self.operator,
+            value=filter_value,
+            escaped=self.has_escaped_character,
+        )
 
 
 class KeyInFilterAction(FilterAction):

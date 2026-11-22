@@ -24,12 +24,10 @@ from typing import (
 )
 
 import sqlalchemy
-from sqlalchemy.sql import operators
 from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.sqltypes import TupleType
 
-from ormar.queryset.actions.filter_action import FILTER_OPERATORS
-from ormar.queryset.expressions import expression_params
+from ormar.queryset.actions.filter_action import comparison_bind
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.queryset.actions.filter_action import FilterAction
@@ -52,21 +50,6 @@ PK_SLOT = "ormar_pk"
 PKS_SLOT = "ormar_pks"
 
 
-# SQLAlchemy operators of ormar's filter operator methods, used to type bound
-# values exactly like a plain ``column <op> value`` comparison would.
-COMPARISON_OPERATORS = {
-    "__eq__": operators.eq,
-    "__ne__": operators.ne,
-    "like": operators.like_op,
-    "ilike": operators.ilike_op,
-    "in_": operators.in_op,
-    "__gt__": operators.gt,
-    "__ge__": operators.ge,
-    "__lt__": operators.lt,
-    "__le__": operators.le,
-}
-
-
 def template_params(
     actions: List["FilterAction"], limit: Optional[int], offset: Optional[int]
 ) -> Dict[str, Any]:
@@ -77,6 +60,7 @@ def template_params(
         Author.objects.filter(name="a", score__gt=5).limit(10)
         # -> {"ormar_p0": "a", "ormar_p1": 5, "ormar_limit": 10}
 
+    Each action collects its own values (see ``FilterAction.slot_params``).
     Actions whose value is written into the SQL text (see
     ``FilterAction.binds_slot``) get no entry, but still use up their index,
     so the names of the other slots do not depend on those values. The offset
@@ -94,10 +78,7 @@ def template_params(
     """
     params = {}
     for index, action in enumerate(actions):
-        if action.binds_slot():
-            params.update(
-                expression_params(value=action.bound_value(), slot=f"ormar_p{index}")
-            )
+        params.update(action.slot_params(slot=f"ormar_p{index}"))
     if limit is not None:
         params[LIMIT_SLOT] = limit
     if offset:
@@ -192,11 +173,8 @@ class SlotBinder:
         """
         Return the named bind parameter for a filter action's value.
 
-        The parameter is built the way SQLAlchemy builds the bind of
-        ``column <op> value``: it is compared to the column's type, so the value
-        gets the column's bind processing (dates, JSON, enums and so on), and
-        an ``in`` filter is expanding, so it renders one placeholder per item of
-        the list it is given on each call.
+        The parameter is compared to the column's type (see
+        ``comparison_bind``).
 
         :param action: filter action the value belongs to
         :type action: FilterAction
@@ -205,13 +183,11 @@ class SlotBinder:
         :return: named bind parameter
         :rtype: BindParameter
         """
-        operator = COMPARISON_OPERATORS[FILTER_OPERATORS[action.operator]]
-        return BindParameter(
+        return comparison_bind(
             key=self.slots[id(action)],
             value=value,
-            expanding=action.operator == "in",
-            _compared_to_operator=operator,
-            _compared_to_type=action.column.type,
+            operator=action.operator,
+            compared_type=action.column.type,
         )
 
     def bind_key_in(

@@ -20,15 +20,33 @@ the insert tried to write::
         },
     )
 
+``F()``, arithmetic and functions can also be the filtered side, compared
+with ``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=`` or the lookup methods of
+``Comparable``, which return filter groups like ``ormar.and_()``::
+
+    Member.objects.filter(Func("lower", F("nick")) == "ann")
+    Member.objects.filter(Func("lower", F("team__name")).icontains("red"))
+    Slot.objects.exclude((F("capacity") - F("taken")) < 2)
+
 ``Model.field`` accessors are expressions themselves, ``F("path")`` names a
-field by its path. Expression classes define only dunders and underscored
-names, so they never shadow a field reached through a ``FieldAccessor``.
+field by its path. ``Expression`` defines only dunders and underscored names,
+so it never shadows a field reached through a ``FieldAccessor``, which has
+lookup methods of its own instead of ``Comparable``.
 """
 
 import itertools
 import operator
 import re
-from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Iterator,
+    Mapping,
+    NamedTuple,
+    Optional,
+    cast,
+)
 
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import operators as sql_operators
@@ -39,10 +57,12 @@ from sqlalchemy.sql.functions import GenericFunction, ReturnTypeFromArgs, coales
 from sqlalchemy.types import Float, TypeEngine
 from sqlalchemy.types import to_instance as type_instance
 
+import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.queryset.actions.query_action import QueryAction
+    from ormar.queryset.clause import FilterGroup
 
 
 class Expression:
@@ -87,7 +107,118 @@ class Expression:
         return self._combine(op=operator.mul, other=other)
 
 
-class F(Expression):
+class ExpressionFilter(NamedTuple):
+    """
+    Comparison of an expression with a value, resolved by ``FilterGroup`` into
+    an ``ExpressionFilterAction``.
+
+    :ivar lhs: the filtered expression
+    :ivar operator: filter operator (``exact``, ``icontains``, ...)
+    :ivar value: compared value, a literal or an expression
+    """
+
+    lhs: Expression
+    operator: str
+    value: Any
+
+
+class Comparable:
+    """
+    Comparisons and lookups of ``F``, arithmetic and functions, each returning
+    a ``FilterGroup`` taken by ``filter()``, ``exclude()``, ``get()`` and
+    composed with ``ormar.and_()``, ``ormar.or_()`` and ``~``::
+
+        Func("lower", F("name")) == "abc"
+        Greatest(F("home"), F("away")) >= 3
+        Func("lower", F("town")).icontains("war")
+        Coalesce(F("nick"), F("name")).in_(["ann", "bob"])
+
+    Values are literals or expressions; ``like`` lookups (``iexact``,
+    ``contains``, ``startswith``, ...) take strings, escaped and wrapped in
+    ``%`` like in ``filter(name__icontains=...)``.
+    """
+
+    __hash__ = object.__hash__
+
+    def _compare(self, operator: str, value: Any) -> "FilterGroup":
+        """
+        :param operator: filter operator
+        :type operator: str
+        :param value: compared value
+        :type value: Any
+        :return: group holding the comparison
+        :rtype: FilterGroup
+        """
+        return ormar.queryset.clause.FilterGroup(
+            _expression_filters=[
+                ExpressionFilter(
+                    lhs=cast(Expression, self), operator=operator, value=value
+                )
+            ]
+        )
+
+    def __eq__(self, other: Any) -> "FilterGroup":  # type: ignore[override]
+        """SQL ``expression = other`` (``IS NULL`` for None)"""
+        return self._compare(operator="exact", value=other)
+
+    def __ne__(self, other: Any) -> "FilterGroup":  # type: ignore[override]
+        """SQL ``expression != other`` (``IS NOT NULL`` for None)"""
+        return self._compare(operator="ne", value=other)
+
+    def __lt__(self, other: Any) -> "FilterGroup":
+        """SQL ``expression < other``"""
+        return self._compare(operator="lt", value=other)
+
+    def __le__(self, other: Any) -> "FilterGroup":
+        """SQL ``expression <= other``"""
+        return self._compare(operator="lte", value=other)
+
+    def __gt__(self, other: Any) -> "FilterGroup":
+        """SQL ``expression > other``"""
+        return self._compare(operator="gt", value=other)
+
+    def __ge__(self, other: Any) -> "FilterGroup":
+        """SQL ``expression >= other``"""
+        return self._compare(operator="gte", value=other)
+
+    def in_(self, other: Any) -> "FilterGroup":
+        """SQL ``expression IN (<values>)``"""
+        return self._compare(operator="in", value=other)
+
+    def iexact(self, other: Any) -> "FilterGroup":
+        """SQL ``expression = other`` case-insensitive"""
+        return self._compare(operator="iexact", value=other)
+
+    def contains(self, other: Any) -> "FilterGroup":
+        """SQL ``expression LIKE '%other%'``"""
+        return self._compare(operator="contains", value=other)
+
+    def icontains(self, other: Any) -> "FilterGroup":
+        """SQL ``expression LIKE '%other%'`` case-insensitive"""
+        return self._compare(operator="icontains", value=other)
+
+    def startswith(self, other: Any) -> "FilterGroup":
+        """SQL ``expression LIKE 'other%'``"""
+        return self._compare(operator="startswith", value=other)
+
+    def istartswith(self, other: Any) -> "FilterGroup":
+        """SQL ``expression LIKE 'other%'`` case-insensitive"""
+        return self._compare(operator="istartswith", value=other)
+
+    def endswith(self, other: Any) -> "FilterGroup":
+        """SQL ``expression LIKE '%other'``"""
+        return self._compare(operator="endswith", value=other)
+
+    def iendswith(self, other: Any) -> "FilterGroup":
+        """SQL ``expression LIKE '%other'`` case-insensitive"""
+        return self._compare(operator="iendswith", value=other)
+
+    def isnull(self, other: bool) -> "FilterGroup":
+        """SQL ``expression IS NULL`` (``IS NOT NULL`` for False)"""
+        return self._compare(operator="isnull", value=other)
+
+
+class F(Comparable, Expression):
     """
     Field by its path from the queried model: ``F("capacity")``, or in filters
     also a field of a related model (``filter(taken__lt=F("owner__limit"))``).
@@ -117,7 +248,7 @@ class Inserted(Expression):
         self._path = path
 
 
-class Combined(Expression):
+class Combined(Comparable, Expression):
     """Two operands combined with an arithmetic operator."""
 
     def __init__(
@@ -136,7 +267,7 @@ class Combined(Expression):
         self._right = right
 
 
-class Function(Expression):
+class Function(Comparable, Expression):
     """
     SQL function of expressions and literals. ``Greatest``, ``Least`` and
     ``Coalesce`` take two or more arguments, at least one of them an
@@ -407,11 +538,33 @@ def expression_params(value: Any, slot: str) -> dict[str, Any]:
     """
     if not isinstance(value, Expression):
         return {slot: value}
-    literals = [
+    return slot_literals(literals=expression_literals(node=value), slot=slot)
+
+
+def expression_literals(node: Any) -> list[Any]:
+    """
+    :param node: expression node
+    :type node: Any
+    :return: literals of the expression in the order ``expression_clause``
+        names them
+    :rtype: list[Any]
+    """
+    return [
         leaf
-        for leaf in expression_leaves(node=value)
+        for leaf in expression_leaves(node=node)
         if not isinstance(leaf, (F, Inserted))
     ]
+
+
+def slot_literals(literals: list[Any], slot: str) -> dict[str, Any]:
+    """
+    :param literals: bound literals in build order
+    :type literals: list[Any]
+    :param slot: name of the slot
+    :type slot: str
+    :return: literals named ``{slot}_{k}``
+    :rtype: dict[str, Any]
+    """
     return {f"{slot}_{index}": literal for index, literal in enumerate(literals)}
 
 

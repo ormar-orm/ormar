@@ -155,5 +155,3 @@ def test_function_arguments():
         Coalesce(F("refunded"), None)
     with pytest.raises(QueryDefinitionError, match="None or bool"):
         Greatest(F("uses"), True)
-    with pytest.raises(TypeError):
-        Greatest(F("uses"), 1) < 3

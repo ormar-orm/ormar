@@ -33,7 +33,21 @@
     await Member.objects.update(each=True, email=Func("lower", F("email")))
     ```
 
+* **Filtering on expressions**
+
+    `F()`, arithmetic and functions can be the filtered side: compare them with `==`, `!=`, `<`, `<=`, `>`, `>=` or `in_()`, `iexact()`, `(i)contains()`, `(i)startswith()`, `(i)endswith()` and `isnull()`. Each comparison is a filter group for `filter()`, `exclude()`, `get()`, `ormar.and_()` / `or_()` and `~`; related fields are joined automatically. See [filtering on expressions](queries/filter-and-sort.md#filtering-on-expressions).
+
+    ```python
+    await Player.objects.filter(Func("lower", F("team__name")).icontains("red")).all()
+    ```
+
+    Comparisons of `F()` and expressions now return filters: `F("a") == x` used to be `False`, `F("a") < x` raised `TypeError`.
+
 ### 🐛 Fixes
+
+* **Several filter groups in one `filter()` keep each other's joins**
+
+    `filter(Team.players.score > 7, Team.name == "Red")` kept only the joins of the last group, so a relation filtered in an earlier group was cross joined instead of joined. Every group's joins are kept now.
 
 * **A many to many relation inherited from an abstract model works when the child has no explicit `tablename`** ([#1123](https://github.com/ormar-orm/ormar/issues/1123))
 

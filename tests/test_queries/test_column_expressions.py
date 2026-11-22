@@ -325,14 +325,9 @@ def test_expression_operands():
     with pytest.raises(QueryDefinitionError):
         F("taken") - True
     with pytest.raises(TypeError):
-        F("taken") < F("capacity")
-    with pytest.raises(TypeError):
         1 + F("taken")
     with pytest.raises(TypeError):
         F("taken") / 2
-    assert (F("taken") == 5) is False
-    with pytest.raises(QueryDefinitionError):
-        Slot.objects.filter(F("taken") == 5)
 
 
 @pytest.mark.asyncio

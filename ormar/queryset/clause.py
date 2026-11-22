@@ -7,6 +7,7 @@ from sqlalchemy import ColumnElement
 import ormar  # noqa I100
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.filter_action import (
+    ExpressionFilterAction,
     FilterAction,
     KeyInFilterAction,
     KeyNullFilterAction,
@@ -16,6 +17,7 @@ from ormar.queryset.actions.filter_action import (
 if TYPE_CHECKING:  # pragma no cover
     from ormar import ForeignKeyField, Model
     from ormar.models.primary_key import PrimaryKey
+    from ormar.queryset.expressions import ExpressionFilter
     from ormar.queryset.templates import SlotBinder
 
 
@@ -34,7 +36,8 @@ class NullsOrdering(str, Enum):
 class FilterGroup:
     """
     Filter groups are used in complex queries condition to group and and or
-    clauses in where condition
+    clauses in where condition. Besides keyword filters a group holds the
+    comparisons of expressions (``Func("lower", F("name")) == "abc"``).
     """
 
     def __init__(
@@ -42,6 +45,7 @@ class FilterGroup:
         *args: Any,
         _filter_type: FilterType = FilterType.AND,
         _exclude: bool = False,
+        _expression_filters: Optional[list["ExpressionFilter"]] = None,
         **kwargs: Any,
     ) -> None:
         self.filter_type = _filter_type
@@ -50,6 +54,7 @@ class FilterGroup:
         self._resolved = False
         self.is_source_model_filter = False
         self._kwargs_dict = kwargs
+        self._expression_filters = _expression_filters or []
         self.actions: list[FilterAction] = []
 
     def __and__(self, other: "FilterGroup") -> "FilterGroup":
@@ -91,6 +96,15 @@ class FilterGroup:
         own_filter_clauses, select_related = qryclause.prepare_filter(
             _own_only=True, **self._kwargs_dict
         )
+        for expression_filter in self._expression_filters:
+            action = ExpressionFilterAction(
+                lhs=expression_filter.lhs,
+                operator=expression_filter.operator,
+                value=expression_filter.value,
+                model_cls=model_cls,
+            )
+            select_related = action.update_select_related(select_related=select_related)
+            own_filter_clauses.append(action)
         self.actions = own_filter_clauses
         filter_clauses = filter_clauses + own_filter_clauses
         self._resolved = True
