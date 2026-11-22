@@ -216,6 +216,7 @@ def literal_values(
             node=values[name],
             columns=expression_columns(node=values[name], model=model),
             slot=None,
+            reference_type=table.c[name].type,
         )
         if isinstance(values[name], Expression)
         else values[name]

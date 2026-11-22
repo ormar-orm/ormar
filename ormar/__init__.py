@@ -86,6 +86,7 @@ from ormar.models import (
 from ormar.queryset import (
     Coalesce,
     F,
+    Func,
     Greatest,
     Inserted,
     Least,
@@ -167,6 +168,7 @@ __all__ = [
     "and_",
     "Coalesce",
     "F",
+    "Func",
     "Greatest",
     "Inserted",
     "Least",

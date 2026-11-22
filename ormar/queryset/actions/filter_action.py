@@ -259,6 +259,7 @@ class FilterAction(QueryAction):
                 node=value,
                 columns=self.expression_columns,
                 slot=binder.slots[id(self)] if binder is not None else None,
+                reference_type=self.aliased_column.type,
             )
         else:
             filter_value = value

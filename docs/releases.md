@@ -25,6 +25,14 @@
     )
     ```
 
+* **`ormar.Func` calls any SQL function in expressions**
+
+    `Func(name, *arguments)` works wherever `Greatest` / `Least` / `Coalesce` do: in filter values, `update()` and upsert `update_values`. Arguments are fields, expressions or literals; a dotted name calls a function in a schema. See [functions](queries/update.md#functions).
+
+    ```python
+    await Member.objects.update(each=True, email=Func("lower", F("email")))
+    ```
+
 ### 🐛 Fixes
 
 * **A many to many relation inherited from an abstract model works when the child has no explicit `tablename`** ([#1123](https://github.com/ormar-orm/ormar/issues/1123))

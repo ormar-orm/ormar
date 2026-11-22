@@ -103,7 +103,10 @@ class WriteStatement(abc.ABC):
             if isinstance(self.values[name], Expression):
                 columns = expression_columns(node=self.values[name], model=self.model)
                 assignments[self.table.c[name]] = expression_clause(
-                    node=self.values[name], columns=columns, slot=f"ormar_v{index}"
+                    node=self.values[name],
+                    columns=columns,
+                    slot=f"ormar_v{index}",
+                    reference_type=self.table.c[name].type,
                 )
                 for column in columns.values():
                     self.join_conditions.update(

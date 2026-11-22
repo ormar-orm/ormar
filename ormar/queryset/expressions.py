@@ -5,6 +5,7 @@ database, used as filter values and as values of ``QuerySet.update()``::
     Slot.objects.filter(taken__lt=F("capacity"))
     Slot.objects.filter(id=1).update(taken=Slot.taken + 1)
     Member.objects.filter(id=1).update(read_id=Greatest(F("read_id"), 10))
+    Member.objects.filter(name=Func("lower", F("nick")))
     Player.objects.update(each=True, score=Random())
 
 and in ``update_values`` of upserts, where ``Inserted("path")`` is the value
@@ -26,14 +27,16 @@ names, so they never shadow a field reached through a ``FieldAccessor``.
 
 import itertools
 import operator
+import re
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Mapping, Optional
 
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import operators as sql_operators
 from sqlalchemy.sql.compiler import SQLCompiler
 from sqlalchemy.sql.elements import BindParameter
+from sqlalchemy.sql.functions import Function as SQLFunction
 from sqlalchemy.sql.functions import GenericFunction, ReturnTypeFromArgs, coalesce
-from sqlalchemy.types import Float
+from sqlalchemy.types import Float, TypeEngine
 
 from ormar.exceptions import QueryDefinitionError
 
@@ -144,16 +147,11 @@ class Function(Expression):
         """
         :param arguments: expressions and literals
         :type arguments: Any
-        :raises QueryDefinitionError: if there are less than two arguments, none
-            of them is an expression or a literal is None or a bool
+        :raises QueryDefinitionError: if the arguments break the arity rules of
+            the function or a literal is None or a bool
         """
+        self._check_arity(arguments=arguments)
         name = type(self).__name__
-        if len(arguments) < 2:
-            raise QueryDefinitionError(f"{name}() takes at least two arguments")
-        if not any(isinstance(argument, Expression) for argument in arguments):
-            raise QueryDefinitionError(
-                f"{name}() needs a field or an expression among its arguments"
-            )
         if any(
             argument is None or isinstance(argument, bool) for argument in arguments
         ):
@@ -162,6 +160,64 @@ class Function(Expression):
             argument._node() if isinstance(argument, Expression) else argument
             for argument in arguments
         )
+
+    def _check_arity(self, arguments: tuple[Any, ...]) -> None:
+        """
+        Require two or more arguments, at least one of them an expression.
+
+        :param arguments: expressions and literals
+        :type arguments: tuple[Any, ...]
+        :raises QueryDefinitionError: if there are less than two arguments or
+            none of them is an expression
+        """
+        name = type(self).__name__
+        if len(arguments) < 2:
+            raise QueryDefinitionError(f"{name}() takes at least two arguments")
+        if not any(isinstance(argument, Expression) for argument in arguments):
+            raise QueryDefinitionError(
+                f"{name}() needs a field or an expression among its arguments"
+            )
+
+
+FUNCTION_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+
+
+class Func(Function):
+    """
+    Any SQL function by its name, of any number of arguments, expressions or
+    literals: ``Func("lower", F("name"))``, ``Func("replace", F("code"), "-",
+    "")``, ``Func("now")``. A dotted name calls a function in a schema
+    (``Func("extensions.unaccent", F("town"))``).
+
+    Literal arguments are typed after the first expression argument, or with
+    none after the column the function is compared with or written to; the
+    function returns the type of that same argument or column.
+    """
+
+    def __init__(self, name: str, *arguments: Any) -> None:
+        """
+        :param name: SQL name of the function, optionally schema qualified
+        :type name: str
+        :param arguments: expressions and literals
+        :type arguments: Any
+        :raises QueryDefinitionError: if the name is not a plain or dotted SQL
+            identifier or a literal is None or a bool
+        """
+        if not isinstance(name, str) or not FUNCTION_NAME.match(name):
+            raise QueryDefinitionError(
+                f"Func() takes an SQL function name made of letters, digits and "
+                f"underscores, optionally schema qualified with dots, got {name!r}"
+            )
+        self._sql_name = name
+        super().__init__(*arguments)
+
+    def _check_arity(self, arguments: tuple[Any, ...]) -> None:
+        """
+        Accept any number of arguments, literal only ones included.
+
+        :param arguments: expressions and literals
+        :type arguments: tuple[Any, ...]
+        """
 
 
 class Greatest(Function):
@@ -298,6 +354,7 @@ def expression_key(node: Any) -> Any:
 
         F("a") + 1  # -> (operator.add, ("f", "a"), int)
         Greatest(F("a"), 0)  # -> ("greatest", (("f", "a"), int))
+        Func("lower", F("a"))  # -> ("lower", (("f", "a"),))
         Random()  # -> ("random",)
         Inserted("a")  # -> ("inserted", "a")
 
@@ -352,6 +409,7 @@ def expression_clause(
     slot: Optional[str],
     index: Optional[Iterator[int]] = None,
     inserted: Any = None,
+    reference_type: Optional[TypeEngine] = None,
 ) -> Any:
     """
     Build the SQL of an expression, reading each field from the aliased column
@@ -363,6 +421,10 @@ def expression_clause(
     ``Inserted`` fields are read from ``inserted``, the row a conflicting
     insert tried to write (only upserts resolve them, see
     ``expression_columns``).
+
+    ``reference_type`` is the type of the column the expression is compared
+    with or written to; it types the literals of functions without an
+    expression argument (``Func("upper", "abc")``).
 
     :param node: expression node
     :type node: Any
@@ -376,6 +438,8 @@ def expression_clause(
     :param inserted: columns of the inserted row (``excluded`` or MySQL
         ``inserted``) of an upsert
     :type inserted: Any
+    :param reference_type: type of the compared or written column
+    :type reference_type: Optional[TypeEngine]
     :return: SQL expression
     :rtype: Any
     """
@@ -388,15 +452,30 @@ def expression_clause(
     index = index or itertools.count()
     if isinstance(node, Function):
         return function_clause(
-            node=node, columns=columns, slot=slot, index=index, inserted=inserted
+            node=node,
+            columns=columns,
+            slot=slot,
+            index=index,
+            inserted=inserted,
+            reference_type=reference_type,
         )
     left = expression_clause(
-        node=node._left, columns=columns, slot=slot, index=index, inserted=inserted
+        node=node._left,
+        columns=columns,
+        slot=slot,
+        index=index,
+        inserted=inserted,
+        reference_type=reference_type,
     )
     right = node._right
     if isinstance(right, Expression):
         right = expression_clause(
-            node=right, columns=columns, slot=slot, index=index, inserted=inserted
+            node=right,
+            columns=columns,
+            slot=slot,
+            index=index,
+            inserted=inserted,
+            reference_type=reference_type,
         )
     elif slot is not None:
         right = BindParameter(
@@ -414,12 +493,16 @@ def function_clause(
     slot: Optional[str],
     index: Iterator[int],
     inserted: Any = None,
+    reference_type: Optional[TypeEngine] = None,
 ) -> Any:
     """
     Build the SQL of a function. Literal arguments are bound like the literals
     of ``expression_clause``: named ``{slot}_{k}`` in order and typed from the
     first expression argument and the literal, so ``Greatest(F("count"), 2.5)``
-    binds a float.
+    binds a float; without an expression argument from ``reference_type``.
+
+    Functions of ``SQL_FUNCTIONS`` keep their dialect specific SQL, any other
+    name is called as is, returning the type its literals are bound with.
 
     :param node: function node
     :type node: Function
@@ -431,6 +514,8 @@ def function_clause(
     :type index: Iterator[int]
     :param inserted: columns of the inserted row of an upsert
     :type inserted: Any
+    :param reference_type: type of the compared or written column
+    :type reference_type: Optional[TypeEngine]
     :return: SQL function call
     :rtype: Any
     """
@@ -446,10 +531,13 @@ def function_clause(
                 slot=slot,
                 index=index,
                 inserted=inserted,
+                reference_type=reference_type,
             )
         else:
             literal_keys[position] = f"{slot}_{next(index)}" if slot else None
-    reference_type = next(iter(expression_clauses.values())).type
+    argument_type = next(
+        (clause.type for clause in expression_clauses.values()), reference_type
+    )
     arguments = [
         expression_clauses[position]
         if position in expression_clauses
@@ -458,8 +546,14 @@ def function_clause(
             value=argument,
             unique=literal_keys[position] is None,
             _compared_to_operator=sql_operators.eq,
-            _compared_to_type=reference_type,
+            _compared_to_type=argument_type,
         )
         for position, argument in enumerate(node._arguments)
     ]
-    return SQL_FUNCTIONS[node._sql_name](*arguments)
+    dialect_function = SQL_FUNCTIONS.get(node._sql_name.lower())
+    if dialect_function is not None:
+        return dialect_function(*arguments)
+    *packagenames, name = node._sql_name.split(".")
+    return SQLFunction(
+        name, *arguments, type_=argument_type, packagenames=tuple(packagenames)
+    )
