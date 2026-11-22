@@ -26,7 +26,6 @@ from ormar.relations.aliases import alias_for
 if TYPE_CHECKING:  # pragma no cover
     from ormar import BaseField, Model
     from ormar.databases.connection import DatabaseConnection
-    from ormar.queryset.actions.select_action import SelectAction
 
 T = TypeVar("T")
 
@@ -513,79 +512,6 @@ def get_relationship_alias_model_and_str(
     relation_str = "__".join(related_parts)
     table_prefix = alias_for("__".join(table_path_parts))
     return table_prefix, target_model, relation_str, is_through
-
-
-def to_many_relation_paths(
-    source_model: type["Model"], relation_paths: list[str]
-) -> set[str]:
-    """
-    Returns the prefixes of relation paths that end on a relation holding many
-    models (reverse foreign key or many to many), e.g. ``{"posts",
-    "posts__categories"}`` for ``["posts__author", "posts__categories"]``
-    from ``Author``.
-
-    :param source_model: model from which the relation paths start
-    :type source_model: type[Model]
-    :param relation_paths: dunder relation paths
-    :type relation_paths: list[str]
-    :return: dunder paths of the relations holding many models
-    :rtype: set[str]
-    """
-    many_paths: set[str] = set()
-    for relation_path in relation_paths:
-        target_model = source_model
-        path_parts: list[str] = []
-        for relation in relation_path.split("__"):
-            related_field = target_model.ormar_config.model_fields[relation]
-            path_parts.append(relation)
-            if related_field.kind.many:
-                many_paths.add("__".join(path_parts))
-            target_model = related_field.to
-    return many_paths
-
-
-def validate_aggregate_joins(
-    func_name: str,
-    source_model: type["Model"],
-    select_actions: list["SelectAction"],
-    added_joins: list[str],
-) -> None:
-    """
-    Checks that relations joined only for ``sum()`` / ``avg()`` columns do not
-    repeat the rows of other aggregated columns.
-
-    A reverse foreign key or many to many join returns one row per related
-    model, so a column whose path does not go through that relation would be
-    counted once per related row, e.g. ``rating`` in
-    ``Author.objects.sum(["rating", "posts__score"])``.
-
-    :param func_name: aggregate function name
-    :type func_name: str
-    :param source_model: queried model
-    :type source_model: type[Model]
-    :param select_actions: aggregated columns
-    :type select_actions: list[SelectAction]
-    :param added_joins: relation paths joined for the aggregated columns
-    :type added_joins: list[str]
-    :raises QueryDefinitionError: if a column is not under a joined relation
-        holding many models
-    """
-    if func_name not in ["sum", "avg"]:
-        return
-    many_paths = to_many_relation_paths(
-        source_model=source_model, relation_paths=added_joins
-    )
-    for select_action in select_actions:
-        for many_path in sorted(many_paths):
-            related_str = select_action.related_str
-            if related_str != many_path and not related_str.startswith(
-                f"{many_path}__"
-            ):
-                raise QueryDefinitionError(
-                    f"{func_name}('{select_action.query_str}') would count each "
-                    f"row once per related model joined for '{many_path}'. "
-                    f"Call {func_name}() separately for these columns."
-                )
 
 
 def resolve_implicit_through_relation(

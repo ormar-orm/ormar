@@ -45,6 +45,7 @@ from ormar.queryset.queries.prefetch_query import PrefetchQuery
 from ormar.queryset.queries.query import Query
 from ormar.queryset.templates import (
     PKS_SLOT,
+    AggregateColumn,
     SlotBinder,
     StatementTemplate,
     aggregate_statement,
@@ -69,7 +70,6 @@ from ormar.queryset.utils import (
     get_or_create_with_retry,
     get_relationship_alias_model_and_str,
     normalize_slice,
-    validate_aggregate_joins,
 )
 from ormar.queryset.values_columns import extract_values, values_column_map
 from ormar.queryset.write_statements import (
@@ -1250,7 +1250,24 @@ class QuerySet(Generic[T]):
             return int(result) if result is not None else 0
 
     async def _query_aggr_function(self, func_name: str, columns: list) -> Any:
-        func = getattr(sqlalchemy.func, func_name)
+        """
+        Runs the aggregate function ``func_name`` on ``columns``, joining the
+        relations of related columns first.
+
+        ``sum`` and ``avg`` of a query with joins aggregate each column over the
+        distinct rows it is read from, so a row repeated by a one-to-many or
+        many-to-many join is counted once. ``max`` and ``min`` do not depend on
+        repeated rows and read the joined select directly.
+
+        :param func_name: aggregate function name
+        :type func_name: str
+        :param columns: dunder paths of the aggregated columns
+        :type columns: list
+        :raises QueryDefinitionError: if a column does not exist or ``sum`` /
+            ``avg`` get a non numeric column
+        :return: aggregated value, or values by column if several were passed
+        :rtype: Any
+        """
         select_actions = [
             SelectAction(select_str=column, model_cls=self.model) for column in columns
         ]
@@ -1271,18 +1288,22 @@ class QuerySet(Generic[T]):
             )
         missing_joins = select_related[len(self._select_related) :]
         if missing_joins:
-            validate_aggregate_joins(
-                func_name=func_name,
-                source_model=self.model,
-                select_actions=select_actions,
-                added_joins=missing_joins,
-            )
             return await self.select_related(
                 related=missing_joins
             )._query_aggr_function(func_name=func_name, columns=columns)
-        select_columns = [x.apply_func(func, use_label=True) for x in select_actions]
+        aggregate_columns = [
+            AggregateColumn(
+                label=select_action.result_label,
+                column_name=select_action.get_text_clause().name,
+                row_key_names=select_action.row_key_names(),
+            )
+            for select_action in select_actions
+        ]
         wrap = functools.partial(
-            aggregate_statement, func_name=func_name, select_columns=select_columns
+            aggregate_statement,
+            func_name=func_name,
+            columns=aggregate_columns,
+            distinct_rows=func_name in ["sum", "avg"] and bool(self._select_related),
         )
         template = self.build_select_template(
             variant=("aggregate", func_name, tuple(columns)), wrap=wrap
