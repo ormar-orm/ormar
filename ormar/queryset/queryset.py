@@ -70,6 +70,7 @@ from ormar.queryset.utils import (
     get_or_create_with_retry,
     get_relationship_alias_model_and_str,
     normalize_slice,
+    to_many_relation_paths,
 )
 from ormar.queryset.values_columns import extract_values, values_column_map
 from ormar.queryset.write_statements import (
@@ -1254,10 +1255,10 @@ class QuerySet(Generic[T]):
         Runs the aggregate function ``func_name`` on ``columns``, joining the
         relations of related columns first.
 
-        ``sum`` and ``avg`` of a query with joins aggregate each column over the
-        distinct rows it is read from, so a row repeated by a one-to-many or
-        many-to-many join is counted once. ``max`` and ``min`` do not depend on
-        repeated rows and read the joined select directly.
+        ``sum`` and ``avg`` aggregate a column repeated by a one-to-many or
+        many-to-many join outside of its relation path over the distinct rows
+        it is read from, so each of them is counted once. ``max`` and ``min``
+        do not depend on repeated rows and read the joined select directly.
 
         :param func_name: aggregate function name
         :type func_name: str
@@ -1291,19 +1292,27 @@ class QuerySet(Generic[T]):
             return await self.select_related(
                 related=missing_joins
             )._query_aggr_function(func_name=func_name, columns=columns)
+        many_paths = (
+            to_many_relation_paths(
+                source_model=self.model, relation_paths=self._select_related
+            )
+            if func_name in ["sum", "avg"]
+            else set()
+        )
         aggregate_columns = [
             AggregateColumn(
                 label=select_action.result_label,
                 column_name=select_action.get_text_clause().name,
-                row_key_names=select_action.row_key_names(),
+                row_key_names=(
+                    select_action.row_key_names()
+                    if select_action.repeated_by(many_paths=many_paths)
+                    else ()
+                ),
             )
             for select_action in select_actions
         ]
         wrap = functools.partial(
-            aggregate_statement,
-            func_name=func_name,
-            columns=aggregate_columns,
-            distinct_rows=func_name in ["sum", "avg"] and bool(self._select_related),
+            aggregate_statement, func_name=func_name, columns=aggregate_columns
         )
         template = self.build_select_template(
             variant=("aggregate", func_name, tuple(columns)), wrap=wrap

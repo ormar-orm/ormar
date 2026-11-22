@@ -51,6 +51,25 @@ class SelectAction(QueryAction):
         rel_prefix = f"{self.related_str}__" if self.related_str else ""
         return f"{rel_prefix}{self.field_name}"
 
+    def repeated_by(self, many_paths: set[str]) -> bool:
+        """
+        Checks if a join of a relation holding many models repeats the rows the
+        column is read from, which is the case for every such relation that is
+        not on the column's own relation path, e.g. ``"articles"`` for
+        ``rating`` but not for ``articles__score`` from ``Writer``.
+
+        :param many_paths: dunder paths of the joined relations holding many
+            models
+        :type many_paths: set[str]
+        :return: whether some of the joins repeat the column's rows
+        :rtype: bool
+        """
+        return any(
+            self.related_str != many_path
+            and not self.related_str.startswith(f"{many_path}__")
+            for many_path in many_paths
+        )
+
     def row_key_names(self) -> tuple[str, ...]:
         """
         Returns the labels of the primary key columns of the queried model and of

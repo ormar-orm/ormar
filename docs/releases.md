@@ -6,7 +6,7 @@
 
 * **`sum()` and `avg()` count each row once when the query joins a reverse or many to many relation**
 
-    A reverse foreign key or many to many join (from `select_related()`, a filter or a related column) returns one row per related model, and `sum()` / `avg()` counted the repeated rows: `Writer.objects.select_related("articles").sum("rating")` added the rating of a writer with 2 articles twice. Each column is now aggregated over the distinct rows of the model it is read from, so own fields count once per queried row, related fields once per related row, and fields reached through foreign keys only once per queried row (`Article.objects.sum("writer__rating")`). Results of such queries were inflated before and change now. `max()` and `min()` are not affected.
+    A reverse foreign key or many to many join (from `select_related()`, a filter or a related column) returns one row per related model, and `sum()` / `avg()` counted the repeated rows: `Writer.objects.select_related("articles").sum("rating")` added the rating of a writer with 2 articles twice. Each column repeated by such a join is now aggregated over its distinct rows: own fields count once per queried row, related fields once per row of the relation path (for a many to many relation, once per link, e.g. `Article.objects.sum("topics__priority")`), and fields reached through foreign keys only once per queried row (`Article.objects.sum("writer__rating")`). With `limit()` / `offset()` each limited row counts once. Results of such queries were inflated before and change now. `max()` and `min()` are not affected.
 
 ### 🆕 Features
 

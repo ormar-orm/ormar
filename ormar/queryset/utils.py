@@ -514,6 +514,35 @@ def get_relationship_alias_model_and_str(
     return table_prefix, target_model, relation_str, is_through
 
 
+def to_many_relation_paths(
+    source_model: type["Model"], relation_paths: list[str]
+) -> set[str]:
+    """
+    Returns the prefixes of relation paths that end on a relation holding many
+    models (reverse foreign key or many to many), e.g. ``{"posts",
+    "posts__categories"}`` for ``["posts__author", "posts__categories"]``
+    from ``Author``.
+
+    :param source_model: model from which the relation paths start
+    :type source_model: type[Model]
+    :param relation_paths: dunder relation paths
+    :type relation_paths: list[str]
+    :return: dunder paths of the relations holding many models
+    :rtype: set[str]
+    """
+    many_paths: set[str] = set()
+    for relation_path in relation_paths:
+        target_model = source_model
+        path_parts: list[str] = []
+        for relation in relation_path.split("__"):
+            related_field = target_model.ormar_config.model_fields[relation]
+            path_parts.append(relation)
+            if related_field.kind.many:
+                many_paths.add("__".join(path_parts))
+            target_model = related_field.to
+    return many_paths
+
+
 def resolve_implicit_through_relation(
     related_parts: list,
     relation: str,

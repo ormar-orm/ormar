@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import ForwardRef, Optional
 
 import pytest
 import pytest_asyncio
@@ -60,6 +60,17 @@ class Crate(ormar.Model):
     warehouse: Optional[Warehouse] = ormar.ForeignKey(Warehouse, related_name="crates")
 
 
+class Person(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="aggd_people")
+
+    id: int = ormar.Integer(primary_key=True, name="person_id")
+    age: int = ormar.Integer()
+    parent = ormar.ForeignKey(ForwardRef("Person"), related_name="children")
+
+
+Person.update_forward_refs()
+
+
 create_test_database = init_tests(base_ormar_config)
 
 
@@ -69,6 +80,8 @@ async def cleanup():
     async with base_ormar_config.database:
         for model in (ArticleTopic, Article, Topic, Writer, Crate, Warehouse):
             await model.objects.delete(each=True)
+        await Person.objects.update(each=True, parent=None)
+        await Person.objects.delete(each=True)
 
 
 async def sample_data() -> dict:
@@ -194,12 +207,15 @@ async def test_many_to_many_and_through_fields(func_name, expected):
         querysets = [
             Article.objects,
             Article.objects.select_related(["writer", "topics"]),
+            Article.objects.select_related(["writer__articles", "topics"]),
         ]
         for queryset in querysets:
             sort_order = await aggregate(
                 queryset, func_name, "topics__articletopic__sort_order"
             )
             assert sort_order == expected["sort"]
+            priority = await aggregate(queryset, func_name, "topics__priority")
+            assert priority == {"sum": 9, "avg": 3}[func_name]
         writer_queryset = Writer.objects.select_related("articles")
         sort_order = await aggregate(
             writer_queryset, func_name, "articles__topics__articletopic__sort_order"
@@ -350,15 +366,12 @@ async def test_null_values_are_skipped(func_name, expected_bonus, expected_score
         assert await aggregate(nobody, func_name, "bonus") is None
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "func_name, expected",
-    [
-        ("max", {"rating": 8, "articles__score": 9, "articles__topics__priority": 4}),
-        ("min", {"rating": 5, "articles__score": 3, "articles__topics__priority": 1}),
-    ],
-)
-async def test_max_and_min_read_joined_rows_directly(func_name, expected, monkeypatch):
+@pytest.fixture()
+def recorded_statements(monkeypatch):
+    """
+    Records ``(function name, SQL)`` of every aggregate statement built, with
+    the template caches of the models cleared so that each call builds one.
+    """
     statements = []
     original_statement = queryset_module.aggregate_statement
 
@@ -368,7 +381,22 @@ async def test_max_and_min_read_joined_rows_directly(func_name, expected, monkey
         return statement
 
     monkeypatch.setattr(queryset_module, "aggregate_statement", record_statement)
-    template_cache_for(model_cls=Writer).clear()
+    for model in (Writer, Article, Topic):
+        template_cache_for(model_cls=model).clear()
+    return statements
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "func_name, expected",
+    [
+        ("max", {"rating": 8, "articles__score": 9, "articles__topics__priority": 4}),
+        ("min", {"rating": 5, "articles__score": 3, "articles__topics__priority": 1}),
+    ],
+)
+async def test_max_and_min_read_joined_rows_directly(
+    func_name, expected, recorded_statements
+):
     async with base_ormar_config.database:
         await sample_data()
         columns = list(expected)
@@ -376,6 +404,98 @@ async def test_max_and_min_read_joined_rows_directly(func_name, expected, monkey
         assert await aggregate(queryset, func_name, columns) == expected
         assert await aggregate(Writer.objects, func_name, columns) == expected
         await aggregate(queryset, "sum", columns)
-    assert {recorded_func for recorded_func, _ in statements} == {func_name, "sum"}
-    for recorded_func, statement in statements:
+    recorded_funcs = {recorded_func for recorded_func, _ in recorded_statements}
+    assert recorded_funcs == {func_name, "sum"}
+    for recorded_func, statement in recorded_statements:
         assert ("DISTINCT" in statement) == (recorded_func == "sum")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("func_name", ["sum", "avg"])
+async def test_joins_not_repeating_rows_skip_distinct(func_name, recorded_statements):
+    """
+    Forward joins and to-many joins on the aggregated column's own path do not
+    repeat its rows, so the joined select is aggregated directly.
+    """
+    async with base_ormar_config.database:
+        instances = await sample_data()
+        await aggregate(
+            Article.objects.select_related("writer"),
+            func_name,
+            ["score", "writer__rating"],
+        )
+        await aggregate(instances["writer"].articles, func_name, "score")
+        await aggregate(Writer.objects, func_name, "articles__score")
+        await aggregate(Writer.objects, func_name, "articles__topics__priority")
+        assert recorded_statements
+        assert all("DISTINCT" not in sql for _, sql in recorded_statements)
+        recorded_statements.clear()
+        result = await aggregate(
+            Writer.objects, func_name, ["rating", "articles__score"]
+        )
+        assert result == {
+            "rating": {"sum": 18, "avg": 6}[func_name],
+            "articles__score": {"sum": 18, "avg": 6}[func_name],
+        }
+        assert all(sql.count("DISTINCT") == 1 for _, sql in recorded_statements)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "func_name, expected",
+    [
+        ("sum", {"first_two": 10, "last_two": 13, "score": 18}),
+        ("avg", {"first_two": 5, "last_two": 6.5, "score": 6}),
+    ],
+    ids=["sum", "avg"],
+)
+async def test_limit_and_offset_count_each_limited_row_once(func_name, expected):
+    async with base_ormar_config.database:
+        await sample_data()
+        queryset = Writer.objects.select_related("articles").order_by("id")
+        first_two = queryset.limit(2)
+        assert await aggregate(first_two, func_name, "rating") == expected["first_two"]
+        result = await aggregate(first_two, func_name, ["rating", "articles__score"])
+        assert result == {
+            "rating": expected["first_two"],
+            "articles__score": expected["score"],
+        }
+        last_two = queryset.offset(1).limit(2)
+        assert await aggregate(last_two, func_name, "rating") == expected["last_two"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "func_name, expected",
+    [
+        (
+            "sum",
+            {"age": 110, "children": 100, "grandchildren": 70, "parent": 40},
+        ),
+        ("avg", {"age": 22, "children": 25, "grandchildren": 35, "parent": 10}),
+    ],
+    ids=["sum", "avg"],
+)
+async def test_self_referencing_relation(func_name, expected):
+    async with base_ormar_config.database:
+        root = await Person(age=10).save()
+        first_child = await Person(age=10, parent=root).save()
+        await Person(age=20, parent=root).save()
+        await Person(age=30, parent=first_child).save()
+        await Person(age=40, parent=first_child).save()
+        queryset = Person.objects.select_related("children")
+        assert await aggregate(queryset, func_name, "age") == expected["age"]
+        result = await aggregate(Person.objects, func_name, ["age", "children__age"])
+        assert result == {"age": expected["age"], "children__age": expected["children"]}
+        nested_queryset = Person.objects.select_related("children__children")
+        result = await aggregate(
+            nested_queryset, func_name, ["children__age", "children__children__age"]
+        )
+        assert result == {
+            "children__age": expected["children"],
+            "children__children__age": expected["grandchildren"],
+        }
+        assert (
+            await aggregate(Person.objects, func_name, "parent__age")
+            == (expected["parent"])
+        )
