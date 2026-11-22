@@ -60,8 +60,8 @@ def value_cache_key(action: "FilterAction") -> Any:
 def action_cache_key(action: "FilterAction") -> Tuple[Any, ...]:
     """
     Return everything about a filter action that changes the SQL text: the
-    field path, the table alias of the joined relation, the operator, the
-    kind of value (see ``value_cache_key``) and whether LIKE needs an ``ESCAPE``
+    filtered side (see ``FilterAction.cache_key``), the operator, the kind of
+    value (see ``value_cache_key``) and whether LIKE needs an ``ESCAPE``
     clause for ``%`` or ``_`` in the value.
 
     :param action: filter action
@@ -70,8 +70,7 @@ def action_cache_key(action: "FilterAction") -> Tuple[Any, ...]:
     :rtype: Tuple[Any, ...]
     """
     return (
-        action.query_str,
-        action.table_prefix,
+        action.cache_key(),
         action.operator,
         value_cache_key(action=action),
         action.has_escaped_character,

@@ -358,7 +358,7 @@ class QuerySet(Generic[T]):
                     )
                 _, select_related = group.resolve(
                     model_cls=self.model,
-                    select_related=self._select_related,
+                    select_related=select_related,
                     filter_clauses=self.filter_clauses,
                 )
                 filter_groups.append(group)

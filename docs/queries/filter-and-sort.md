@@ -235,6 +235,47 @@ Expressions can also use the functions `ormar.Greatest`, `ormar.Least`,
 await Track.objects.filter(play_count__gt=Greatest(F("position"), 10)).all()
 ```
 
+### Filtering on expressions
+
+`F()`, arithmetic and functions can also be the filtered side. Compare them with
+`==`, `!=`, `<`, `<=`, `>`, `>=` or the lookup methods `in_()`, `iexact()`,
+`contains()`, `icontains()`, `startswith()`, `istartswith()`, `endswith()`,
+`iendswith()` and `isnull()`. Each comparison is a filter group, like
+`ormar.and_()`: pass it to `filter()`, `exclude()`, `get()` and the other
+methods taking filters, or combine it with `ormar.or_()`, `&`, `|` and `~`.
+
+```python
+from ormar import F, Func, Greatest
+
+# WHERE lower(tracks.name) = 'the bird'
+await Track.objects.filter(Func("lower", F("name")) == "the bird").all()
+
+# fields of related models are joined like in filter(album__name="Malibu")
+await Track.objects.filter(Func("lower", F("album__name")).icontains("mali")).all()
+
+# arithmetic and functions on both sides
+await Track.objects.filter((F("play_count") - F("skips")) > 10).all()
+await Track.objects.filter(Greatest(F("position"), F("play_count")) >= F("album__rank")).all()
+
+# combined with other filters
+await Track.objects.exclude(
+    ormar.or_(Func("lower", F("name")).startswith("intro"), position=1)
+).all()
+```
+
+The value is a literal or another expression. The lookups `iexact()`,
+`contains()`, `startswith()`, `endswith()` and their variants take strings,
+escaped and wrapped in `%` like `filter(name__icontains=...)`.
+
+A literal value is bound with the type of the filtered expression. A `Func`
+without `type_` is the exception: it is bound with the type of its own value,
+so `Func("upper", F("uid")) == "AB12"` compares text even though `uid` is a UUID
+column. Pass `type_` when the value needs the column's conversion.
+
+The comparisons work on `F()`, arithmetic and functions only. A field accessor
+(`Model.field`) has comparisons of its own (see Python style filters), so wrap
+it in a function to filter on an expression of it: `Func("lower", Track.name) == "a"`.
+
 ### exclude
 
 `exclude(*args, **kwargs) -> QuerySet`
