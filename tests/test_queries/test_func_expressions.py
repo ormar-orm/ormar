@@ -1,7 +1,9 @@
-from typing import Optional
+import uuid
+from typing import Any, Optional
 
 import pytest
 import pytest_asyncio
+import sqlalchemy
 from sqlalchemy.dialects import mysql, postgresql, sqlite
 
 import ormar
@@ -31,6 +33,8 @@ class Player(ormar.Model):
     name: str = ormar.String(max_length=20, default="")
     nick: str = ormar.String(max_length=20, default="")
     score: int = ormar.Integer(default=0)
+    uid: uuid.UUID = ormar.UUID(default=uuid.uuid4)
+    label: str = ormar.String(max_length=40, default="")
     team: Optional[Team] = ormar.ForeignKey(Team, nullable=True)
 
 
@@ -54,14 +58,17 @@ async def column(name: str) -> dict:
     return dict(rows)
 
 
-def compiled(node: Func, dialect: object) -> str:
-    clause = expression_clause(
+def function_of(node: Func) -> Any:
+    return expression_clause(
         node=node,
         columns=expression_columns(node=node, model=Player),
         slot="ormar_v0",
         reference_type=Player.ormar_config.table.c["name"].type,
     )
-    return str(clause.compile(dialect=dialect))
+
+
+def compiled(node: Func, dialect: object) -> str:
+    return str(function_of(node=node).compile(dialect=dialect))
 
 
 @pytest.mark.asyncio
@@ -85,6 +92,22 @@ async def test_func_of_literals_takes_the_target_type(players):
         assert (await column("name"))["a-1"] == text.upper()
     await Player.objects.filter(code="b-2").update(score=Func("abs", -7))
     assert (await column("score"))["b-2"] == 7
+
+
+@pytest.mark.asyncio
+async def test_func_literals_take_their_own_type(players):
+    await Player.objects.update(each=True, label=Func("replace", F("uid"), "-", ""))
+    uids = await column("uid")
+    assert await column("label") == {code: uid.hex for code, uid in uids.items()}
+    by_uid = Player.objects.filter(label=Func("replace", F("uid"), "-", ""))
+    assert await by_uid.count() == 2
+
+
+@pytest.mark.asyncio
+async def test_func_with_return_type(players):
+    length = Func("length", F("name"), type_=sqlalchemy.Integer)
+    await Player.objects.update(each=True, score=length * 2)
+    assert await column("score") == {"a-1": 6, "b-2": 6}
 
 
 @pytest.mark.asyncio
@@ -142,6 +165,14 @@ def test_func_keys_include_the_name():
         (("f", "name"),),
     )
     assert expression_key(node=Func("now")) == ("now", ())
+    typed = Func("length", F("name"), type_=sqlalchemy.Integer)
+    assert expression_key(node=typed) != expression_key(node=Func("length", F("name")))
+    assert expression_key(node=typed) == expression_key(
+        node=Func("length", F("name"), type_=sqlalchemy.Integer())
+    )
+    assert expression_key(node=typed) != expression_key(
+        node=Func("length", F("name"), type_=sqlalchemy.BigInteger)
+    )
 
 
 def test_func_compiles_per_dialect():
@@ -157,13 +188,28 @@ def test_func_compiles_per_dialect():
         "greatest(func_players.score, %s)"
     )
     assert compiled(node=Func("now"), dialect=postgresql.dialect()) == "now()"
-    assert compiled(node=Func("upper", "abc"), dialect=postgresql.dialect()) == (
-        "upper(%(ormar_v0_0)s::VARCHAR)"
+    literal_only = function_of(node=Func("upper", "abc"))
+    assert isinstance(literal_only.type, sqlalchemy.String)
+    assert literal_only.type.length == 20
+    assert [argument.type.length for argument in literal_only.clauses] == [20]
+    by_value = function_of(node=Func("replace", F("uid"), "-", ""))
+    assert [type(argument.type) for argument in by_value.clauses][1:] == [
+        sqlalchemy.String,
+        sqlalchemy.String,
+    ]
+    assert isinstance(
+        function_of(node=Func("length", F("name"), type_=sqlalchemy.Integer)).type,
+        sqlalchemy.Integer,
+    )
+    assert isinstance(
+        function_of(node=Func("greatest", F("score"), 0, type_=sqlalchemy.Float)).type,
+        sqlalchemy.Float,
     )
 
 
 @pytest.mark.parametrize(
-    "name", ["", "1abc", "lower()", "a b", "a..b", "a.", ".a", "a;drop", None]
+    "name",
+    ["", "1abc", "lower()", "a b", "a..b", "a.", ".a", "a;drop", "lower\n", None],
 )
 def test_func_rejects_invalid_names(name):
     with pytest.raises(QueryDefinitionError, match="SQL function name"):

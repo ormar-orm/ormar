@@ -143,9 +143,13 @@ await Member.objects.filter(name=Func("upper", F("nick"))).all()
 * The name is passed to the database as is: letters, digits and underscores, with
   dots for a schema qualified function (`Func("extensions.unaccent", F("town"))`).
   `Func("greatest", ...)` and `Func("least", ...)` compile like `Greatest` / `Least`.
-* The result has the type of the first field or expression argument. Without one
-  (`Func("upper", "abc")`), the literals and the result take the type of the column
-  that is written or compared.
+* Literal arguments are typed by their own value. Without a field or expression
+  argument (`Func("upper", "abc")`), the literals take the type of the column that
+  is written or compared.
+* The result has the type of the first field or expression argument, else of that
+  column. Pass `type_` (a SQLAlchemy type class or instance) when the function
+  returns something else, e.g. to use it in arithmetic:
+  `Func("length", F("name"), type_=sqlalchemy.Integer) * 2`.
 
 `ormar.Random()` is a random float from 0 (inclusive) to 1 (exclusive), drawn by
 the database for each row:

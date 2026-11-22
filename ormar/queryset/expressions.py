@@ -37,6 +37,7 @@ from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.functions import Function as SQLFunction
 from sqlalchemy.sql.functions import GenericFunction, ReturnTypeFromArgs, coalesce
 from sqlalchemy.types import Float, TypeEngine
+from sqlalchemy.types import to_instance as type_instance
 
 from ormar.exceptions import QueryDefinitionError
 
@@ -137,11 +138,13 @@ class Combined(Expression):
 
 class Function(Expression):
     """
-    SQL function of two or more arguments, at least one of them an expression;
-    the others may be literals.
+    SQL function of expressions and literals. ``Greatest``, ``Least`` and
+    ``Coalesce`` take two or more arguments, at least one of them an
+    expression; ``Func`` takes any number.
     """
 
     _sql_name = ""
+    _type: Optional[TypeEngine] = None
 
     def __init__(self, *arguments: Any) -> None:
         """
@@ -179,7 +182,7 @@ class Function(Expression):
             )
 
 
-FUNCTION_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+FUNCTION_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
 
 
 class Func(Function):
@@ -189,26 +192,30 @@ class Func(Function):
     "")``, ``Func("now")``. A dotted name calls a function in a schema
     (``Func("extensions.unaccent", F("town"))``).
 
-    Literal arguments are typed after the first expression argument, or with
-    none after the column the function is compared with or written to; the
-    function returns the type of that same argument or column.
+    Literal arguments are typed by their own value, or, when no argument is an
+    expression, after the column the function is compared with or written
+    to. The function returns ``type_`` if given, else the type of the first
+    expression argument, else the type of that column.
     """
 
-    def __init__(self, name: str, *arguments: Any) -> None:
+    def __init__(self, name: str, *arguments: Any, type_: Optional[Any] = None) -> None:
         """
         :param name: SQL name of the function, optionally schema qualified
         :type name: str
         :param arguments: expressions and literals
         :type arguments: Any
+        :param type_: SQLAlchemy type (class or instance) the function returns
+        :type type_: Optional[Any]
         :raises QueryDefinitionError: if the name is not a plain or dotted SQL
             identifier or a literal is None or a bool
         """
-        if not isinstance(name, str) or not FUNCTION_NAME.match(name):
+        if not isinstance(name, str) or not FUNCTION_NAME.fullmatch(name):
             raise QueryDefinitionError(
                 f"Func() takes an SQL function name made of letters, digits and "
                 f"underscores, optionally schema qualified with dots, got {name!r}"
             )
         self._sql_name = name
+        self._type = type_instance(type_) if type_ is not None else None
         super().__init__(*arguments)
 
     def _check_arity(self, arguments: tuple[Any, ...]) -> None:
@@ -355,6 +362,8 @@ def expression_key(node: Any) -> Any:
         F("a") + 1  # -> (operator.add, ("f", "a"), int)
         Greatest(F("a"), 0)  # -> ("greatest", (("f", "a"), int))
         Func("lower", F("a"))  # -> ("lower", (("f", "a"),))
+        Func("length", F("a"), type_=Integer)
+        # -> ("length", (("f", "a"),), (Integer, "Integer()"))
         Random()  # -> ("random",)
         Inserted("a")  # -> ("inserted", "a")
 
@@ -370,10 +379,13 @@ def expression_key(node: Any) -> Any:
             expression_key(node=node._right),
         )
     if isinstance(node, Function):
-        return (
+        function_key = (
             node._sql_name,
             tuple(expression_key(node=argument) for argument in node._arguments),
         )
+        if node._type is None:
+            return function_key
+        return (*function_key, (type(node._type), repr(node._type)))
     if isinstance(node, Random):
         return ("random",)
     if isinstance(node, Inserted):
@@ -500,9 +512,14 @@ def function_clause(
     of ``expression_clause``: named ``{slot}_{k}`` in order and typed from the
     first expression argument and the literal, so ``Greatest(F("count"), 2.5)``
     binds a float; without an expression argument from ``reference_type``.
+    ``Func`` binds literals next to an expression argument with the type of
+    their own value, as its arguments need not share a type
+    (``Func("replace", F("uid"), "-", "")`` on a UUID column).
 
     Functions of ``SQL_FUNCTIONS`` keep their dialect specific SQL, any other
-    name is called as is, returning the type its literals are bound with.
+    name is called as is. Either returns the ``type_`` of a ``Func`` if set,
+    else the generic one returns the type of the first expression argument or
+    ``reference_type``.
 
     :param node: function node
     :type node: Function
@@ -538,6 +555,9 @@ def function_clause(
     argument_type = next(
         (clause.type for clause in expression_clauses.values()), reference_type
     )
+    literal_type = (
+        None if isinstance(node, Func) and expression_clauses else argument_type
+    )
     arguments = [
         expression_clauses[position]
         if position in expression_clauses
@@ -546,14 +566,19 @@ def function_clause(
             value=argument,
             unique=literal_keys[position] is None,
             _compared_to_operator=sql_operators.eq,
-            _compared_to_type=argument_type,
+            _compared_to_type=literal_type,
         )
         for position, argument in enumerate(node._arguments)
     ]
     dialect_function = SQL_FUNCTIONS.get(node._sql_name.lower())
     if dialect_function is not None:
-        return dialect_function(*arguments)
+        if node._type is None:
+            return dialect_function(*arguments)
+        return dialect_function(*arguments, type_=node._type)
     *packagenames, name = node._sql_name.split(".")
     return SQLFunction(
-        name, *arguments, type_=argument_type, packagenames=tuple(packagenames)
+        name,
+        *arguments,
+        type_=node._type if node._type is not None else argument_type,
+        packagenames=tuple(packagenames),
     )
