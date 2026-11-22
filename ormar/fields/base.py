@@ -44,6 +44,8 @@ class BaseField(FieldInfo):  # type: ignore[misc]
         self.autoincrement_explicit: bool = kwargs.pop("autoincrement_explicit", False)
         self.nullable: bool = kwargs.pop("nullable", False)
         self.sql_nullable: bool = kwargs.pop("sql_nullable", False)
+        self.nullable_explicit: bool = kwargs.pop("nullable_explicit", False)
+        self.sql_nullable_explicit: bool = kwargs.pop("sql_nullable_explicit", False)
         self.index: bool = kwargs.pop("index", False)
         self.unique: bool = kwargs.pop("unique", False)
 
@@ -356,22 +358,35 @@ class BaseField(FieldInfo):  # type: ignore[misc]
     def get_column_server_default(self) -> Any:
         """
         Returns the server default of the database column: the explicit
-        server_default when set, otherwise one derived from a simple literal
-        default (bool, int, float, Decimal, or str on a String column) so that
-        rows added outside ormar, and existing rows when the column is added,
-        get the default too. The field's own server_default stays unchanged.
+        server_default when set, otherwise the one derived from a simple literal
+        default (see get_literal_server_default) so that rows added outside
+        ormar, and existing rows when the column is added, get the default too.
+        The field's own server_default stays unchanged.
 
         :return: server default passed to sqlalchemy.Column
         :rtype: Any
         """
+        if self.server_default is not None:
+            return self.server_default
+        return self.get_literal_server_default()
+
+    def get_literal_server_default(self) -> Any:
+        """
+        Derives a server default from a simple literal default: bool, int,
+        float, Decimal, or str on a String (not Text) column. Primary keys,
+        relations and encrypted fields never get one.
+
+        :return: derived server default or None if the default is not a literal
+        :rtype: Any
+        """
         default = self.ormar_default
         if (
-            self.server_default is not None
-            or default is None
+            default is None
             or self.primary_key
             or self.is_relation
+            or self.encrypt_secret
         ):
-            return self.server_default
+            return None
         field_type = self.__type__
         if field_type is bool and type(default) is bool:
             return sqlalchemy.text("true" if default else "false")

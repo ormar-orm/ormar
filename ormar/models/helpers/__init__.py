@@ -6,6 +6,7 @@ from ormar.models.helpers.models import (
     populate_default_options_values,
 )
 from ormar.models.helpers.pydantic import (
+    apply_not_null_defaults,
     get_potential_fields,
     get_pydantic_base_orm_config,
     merge_or_generate_pydantic_config,
@@ -28,6 +29,7 @@ from ormar.models.helpers.sqlalchemy import (
 from ormar.models.helpers.validation import modify_schema_example
 
 __all__ = [
+    "apply_not_null_defaults",
     "building_schemas",
     "mark_for_rebuild",
     "rebuild_model",

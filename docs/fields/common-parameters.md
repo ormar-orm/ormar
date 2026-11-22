@@ -26,7 +26,8 @@ Used both in sql and pydantic (changes pk field to optional for autoincrement).
 
 Automatically changed to True if user provide one of the following:
 
-* `default` value or function is provided
+* `default` value or function is provided (a literal default stays not null with
+  [`not_null_defaults`](#not-null-literal-defaults-not_null_defaults))
 * `server_default` value or function is provided
 * `autoincrement` is set on `Integer` `primary_key` field
 
@@ -44,6 +45,46 @@ If you want to set different setting for pydantic and the database see `sql_null
     
     If you change the `ForeignKey` column to `nullable=False`, it becomes required.
     
+
+### NOT NULL literal defaults (`not_null_defaults`)
+
+A field with a simple literal `default` (`bool`, `int`, `float`, `Decimal`, or `str` on a
+`String` field, the ones that also get a column default, see [default](#default)) is nullable
+today. With `OrmarConfig(not_null_defaults=True)` such a field becomes `nullable=False` and
+`sql_nullable=False`: the column is `NOT NULL DEFAULT ...` and the pydantic type is not
+`Optional`, but the field is still optional to pass because of the default.
+
+```python
+base_ormar_config = ormar.OrmarConfig(..., not_null_defaults=True)
+
+
+class User(ormar.Model):
+    ormar_config = base_ormar_config.copy()
+
+    id: int = ormar.Integer(primary_key=True)
+    is_active: bool = ormar.Boolean(default=False)  # is_active BOOLEAN DEFAULT false NOT NULL
+    nickname: Optional[str] = ormar.String(max_length=20, default="-", nullable=True)
+
+
+User()  # is_active=False
+User(is_active=None)  # ValidationError
+```
+
+* An explicit `nullable` always wins: `nullable=True` keeps the field `Optional` and the column
+  nullable, `nullable=True, sql_nullable=False` keeps it `Optional` in pydantic with a
+  `NOT NULL` column. An explicit `sql_nullable` (without `nullable`) keeps the column setting.
+* `copy()` passes the flag on, and each concrete model applies its own config, also to fields
+  inherited from abstract models and mixins.
+* Callables, `Text`, `JSON`, `Enum`, `UUID`, dates, encrypted fields, primary keys and relations
+  are not affected.
+
+!!!warning
+    Without the flag (`not_null_defaults=None`) the fields stay nullable and each model with
+    such fields emits one `DeprecationWarning` listing them: **in 0.32 the default changes to
+    `True`**. Set `not_null_defaults=True` to opt in now, `not_null_defaults=False` to keep the
+    old behaviour without the warning, or `nullable=True` on single fields. Switching an existing
+    project on needs a migration, see
+    [NOT NULL literal defaults](../models/migrations.md#not-null-literal-defaults-not_null_defaults).
 
 ## sql_nullable
 

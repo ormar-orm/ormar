@@ -87,6 +87,8 @@ class ModelFieldFactory:
 
         overwrite_pydantic_type = kwargs.pop("overwrite_pydantic_type", None)
 
+        nullable_explicit = nullable is not None
+        sql_nullable_explicit = sql_nullable is not None
         nullable = is_field_nullable(
             nullable, default, server_default
         ) or is_auto_primary_key(primary_key, autoincrement)
@@ -115,6 +117,8 @@ class ModelFieldFactory:
             nullable=nullable,
             annotation=field_type,
             sql_nullable=sql_nullable,
+            nullable_explicit=nullable_explicit,
+            sql_nullable_explicit=sql_nullable_explicit,
             index=kwargs.pop("index", False),
             unique=kwargs.pop("unique", False),
             autoincrement=autoincrement,

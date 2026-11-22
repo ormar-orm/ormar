@@ -64,6 +64,7 @@ class OrmarConfig:
         exclude_parent_fields: list[str]
         constraints: list[TableConstraint]
         partial_updates: Optional[bool]
+        not_null_defaults: Optional[bool]
 
     def __init__(
         self,
@@ -83,6 +84,7 @@ class OrmarConfig:
         view: bool = False,
         partial_updates: Optional[bool] = None,
         tablename_factory: Optional[Callable[[str], str]] = None,
+        not_null_defaults: Optional[bool] = None,
     ) -> None:
         self.pk = None  # type: ignore
         self.metadata = metadata  # type: ignore
@@ -109,6 +111,7 @@ class OrmarConfig:
         self.queryset_class = queryset_class
         self.table: sqlalchemy.Table = None  # type: ignore
         self.partial_updates = partial_updates
+        self.not_null_defaults = not_null_defaults
 
     def copy(
         self,
@@ -128,6 +131,7 @@ class OrmarConfig:
         view: Optional[bool] = None,
         partial_updates: Union[bool, None, PydanticUndefinedType] = PydanticUndefined,
         tablename_factory: Optional[Callable[[str], str]] = None,
+        not_null_defaults: Optional[bool] = None,
     ) -> "OrmarConfig":
         # PydanticUndefined distinguishes "omitted" (inherit parent schema)
         # from an explicit ``schema=None`` (clear schema).
@@ -162,6 +166,11 @@ class OrmarConfig:
                 else partial_updates
             ),
             tablename_factory=tablename_factory or self.tablename_factory,
+            not_null_defaults=(
+                not_null_defaults
+                if not_null_defaults is not None
+                else self.not_null_defaults
+            ),
         )
 
     def resolve_tablename(self, class_name: str) -> str:
