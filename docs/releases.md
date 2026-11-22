@@ -10,7 +10,7 @@
 
     Only the DDL changes: `create_all()` emits the `DEFAULT`, and new Alembic migrations add it to new columns. Alembic shows a diff for existing columns only with `compare_server_default=True`, see [column defaults](models/migrations.md#column-defaults-compare_server_default).
 
-    A literal default that does not fit the column (a string longer than `max_length`, a number out of range) now fails at `CREATE TABLE` on MySQL and at `ADD COLUMN` on PostgreSQL instead of only when the row is saved.
+    A literal default that does not fit the column (a string longer than `max_length`, an `Integer` / `SmallInteger` out of range) now fails at `CREATE TABLE` on MySQL and at `ADD COLUMN` on PostgreSQL instead of only when a row is saved. An out of range `Decimal` default still fails only on insert.
 
     ```python
     is_active: bool = ormar.Boolean(default=False)  # is_active BOOLEAN DEFAULT false

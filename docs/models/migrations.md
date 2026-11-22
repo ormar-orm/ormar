@@ -360,6 +360,16 @@ revision adds the `DEFAULT` to those columns (it does not change existing rows).
 already `NULL` need an explicit backfill, e.g.
 `op.execute("UPDATE users SET is_active = false WHERE is_active IS NULL")`.
 
+Against SQLite Alembic renders the `Boolean` default as `sa.text('(false)')`, which works the
+same.
+
+!!!warning
+    With `compare_server_default=True` Alembic's PostgreSQL comparison raises an error for a
+    `String` default containing `'` (Alembic quotes it without escaping), and SQLite or MySQL may
+    report changes for some `String` defaults that did not change. Leave
+    `compare_server_default` off, or pass a custom `compare_server_default` callable that skips
+    those columns.
+
 !!!note
     SQLite cannot change the default of an existing column with `ALTER TABLE`, so pass
     `render_as_batch=True` to `context.configure(...)` there: Alembic then recreates the table.

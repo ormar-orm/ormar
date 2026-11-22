@@ -65,6 +65,7 @@ class Gadget(ormar.Model):
     percent: str = ormar.String(max_length=20, default="50%% off :name %s")
     multiline: str = ormar.String(max_length=20, default="first\nsecond")
     accented: str = ormar.String(max_length=20, default="zażółć 🙂")
+    lone_percent: str = ormar.String(max_length=20, default="100%")
 
 
 class Excluded(ormar.Model):
@@ -146,6 +147,7 @@ DERIVED_DEFAULTS = {
     "percent": "50%% off :name %s",
     "multiline": "first\nsecond",
     "accented": "zażółć 🙂",
+    "lone_percent": "100%",
 }
 
 
@@ -267,6 +269,8 @@ async def test_added_column_fills_existing_rows():
         await connection.run_sync(legacy_metadata.drop_all)
         await connection.run_sync(legacy_metadata.create_all)
         await connection.execute(legacy_table.insert(), [{"id": 1}, {"id": 2}])
+        # the column DDL comes from the dialect compiler directly; how alembic
+        # renders these defaults is not covered as alembic is not a test dependency
         for field_name in DERIVED_DEFAULTS:
             await connection.execute(
                 AddColumn(

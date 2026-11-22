@@ -393,7 +393,7 @@ class BaseField(FieldInfo):  # type: ignore[misc]
             and type(default) is str
             and not isinstance(self.column_type, sqlalchemy.Text)
         ):
-            return sqlalchemy.literal(default, type_=sqlalchemy.String())
+            return default
         return None
 
     def _get_encrypted_column(self, name: str) -> sqlalchemy.Column:
