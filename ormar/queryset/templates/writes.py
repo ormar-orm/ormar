@@ -20,11 +20,12 @@ from typing import (
     Sequence,
     Tuple,
     Type,
+    cast,
 )
 
 import sqlalchemy
 from sqlalchemy.sql import Executable, visitors
-from sqlalchemy.sql.elements import BindParameter
+from sqlalchemy.sql.elements import BindParameter, ClauseElement
 
 from ormar.databases.dialects import update_assignment
 from ormar.queryset.actions.select_action import expression_columns
@@ -42,7 +43,9 @@ if TYPE_CHECKING:  # pragma: no cover
     from ormar.databases.dialects import DialectRules
 
 
-def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:
+def build_insert(
+    table: sqlalchemy.Table, names: Tuple[str, ...], returning: Tuple[str, ...] = ()
+) -> Executable:
     """
     Build an insert of the given columns with named value binds::
 
@@ -55,10 +58,18 @@ def build_insert(table: sqlalchemy.Table, names: Tuple[str, ...]) -> Executable:
     :type table: sqlalchemy.Table
     :param names: written column names, sorted
     :type names: Tuple[str, ...]
+    :param returning: columns of the written row to return, if any
+    :type returning: Tuple[str, ...]
     :return: insert statement
     :rtype: Executable
     """
-    return table.insert().values(value_binds(table=table, names=names))
+    statement = table.insert().values(value_binds(table=table, names=names))
+    if not returning:
+        return statement
+    # bulk_create(returning=True) on databases with RETURNING only
+    return statement.returning(  # pragma: no cover
+        *(table.c[name] for name in returning)
+    )
 
 
 def update_value_clauses(
@@ -248,6 +259,33 @@ def build_conflict_insert(
     return statement
 
 
+def conflict_target_columns(
+    model_cls: Type[Any], conflict_target: Optional[Sequence[str]]
+) -> Tuple[str, ...]:
+    """
+    Return the columns of the unique key an upsert conflicts on: the columns
+    of the ``conflict_target`` fields, or of the primary key without one::
+
+        conflict_target_columns(model_cls=Tag, conflict_target=["name"])
+        # -> ("name",)
+
+    :param model_cls: inserted model
+    :type model_cls: Type[Any]
+    :param conflict_target: names of the fields of the conflicting unique key
+    :type conflict_target: Optional[Sequence[str]]
+    :return: column names
+    :rtype: Tuple[str, ...]
+    """
+    return (
+        tuple(
+            column
+            for field_name in conflict_target or ()
+            for column in model_cls.get_column_aliases(field_name=field_name)
+        )
+        or model_cls.ormar_config.pk.column_aliases()
+    )
+
+
 def insert_statement(
     model_cls: Type[Any],
     names: Tuple[str, ...],
@@ -297,19 +335,15 @@ def insert_statement(
     if not on_conflict:
         return cached_statement(
             model_cls=model_cls,
-            key=("insert", names),
+            key=("insert", names, returning) if returning else ("insert", names),
             builder=build_insert,
             table=config.table,
             names=names,
+            returning=returning,
         )
     pk = config.pk.column_aliases()
-    target = (
-        tuple(
-            column
-            for field_name in conflict_target or ()
-            for column in model_cls.get_column_aliases(field_name=field_name)
-        )
-        or pk
+    target = conflict_target_columns(
+        model_cls=model_cls, conflict_target=conflict_target
     )
     update_names = tuple(
         sorted(
@@ -356,6 +390,52 @@ def insert_statement(
         model=model_cls,
         update_values=update_values,
         **conflict,
+    )
+
+
+def with_bound_values(
+    statement: Executable, values: Mapping[str, Any]
+) -> Executable:  # pragma: no cover
+    """
+    Return a copy of an upsert with the values bound after its VALUES clause
+    (``on_update`` values, ``update_values`` literals) set in the statement,
+    so they are the same for every row::
+
+        with_bound_values(statement=upsert, values={"ormar_u0": 1})
+        # ... DO UPDATE SET score = :ormar_u0 (bound to 1) RETURNING ...
+
+    SQLAlchemy sends an upsert with RETURNING and parameters in its SET clause
+    one row at a time, as they could differ per row; with the values set in the
+    statement it batches the rows into multi-row VALUES.
+
+    :param statement: cached upsert
+    :type statement: Executable
+    :param values: bound values by parameter name
+    :type values: Mapping[str, Any]
+    :return: upsert with the values bound
+    :rtype: Executable
+    """
+    if not values:
+        return statement
+
+    def bind_value(element: Any, **kwargs: Any) -> Any:
+        """
+        :param element: element of the statement
+        :type element: Any
+        :param kwargs: traversal options, unused
+        :type kwargs: Any
+        :return: the parameter with its value, None keeps the element
+        :rtype: Any
+        """
+        if isinstance(element, BindParameter) and element.key in values:
+            return sqlalchemy.bindparam(
+                key=element.key, value=values[element.key], type_=element.type
+            )
+        return None
+
+    return cast(
+        Executable,
+        visitors.replacement_traverse(cast(ClauseElement, statement), {}, bind_value),
     )
 
 

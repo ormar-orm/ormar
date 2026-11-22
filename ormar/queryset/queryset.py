@@ -17,6 +17,7 @@ from typing import (
 )
 
 import sqlalchemy
+from sqlalchemy.exc import IntegrityError
 
 import ormar  # noqa I100
 from ormar import MultipleMatches, NoMatch
@@ -52,6 +53,7 @@ from ormar.queryset.templates import (
     cached_statement,
     canonical_actions,
     clauses_cache_key,
+    conflict_target_columns,
     count_statement,
     excludable_cache_key,
     exists_statement,
@@ -63,6 +65,7 @@ from ormar.queryset.templates import (
     update_values_key,
     update_values_params,
     value_params,
+    with_bound_values,
 )
 from ormar.queryset.utils import (
     extract_access_chains,
@@ -109,6 +112,7 @@ def dump_for_save(obj: "Model") -> dict:
 
 if TYPE_CHECKING:  # pragma no cover
     from ormar import Model
+    from ormar.databases.query_executor import QueryExecutor
     from ormar.models import T
     from ormar.models.excludable import ExcludableItems, Slot
     from ormar.models.ormar_config import OrmarConfig
@@ -2069,20 +2073,50 @@ class QuerySet(Generic[T]):
             return await instance._save(on_conflict=on_conflict)
         return await instance.save()
 
+    @overload
     async def bulk_create(
         self,
-        objects: list["T"],
+        objects: list[dict[str, Any]],
         on_conflict: Optional[Literal["ignore", "update"]] = None,
         conflict_target: Optional[list[str]] = None,
         update_fields: Optional[list[str]] = None,
         update_values: Optional[dict[str, Any]] = None,
-    ) -> None:
+        *,
+        returning: Literal[True],
+    ) -> list[dict[str, Any]]: ...
+
+    @overload
+    async def bulk_create(
+        self,
+        objects: Union[list["T"], list[dict[str, Any]]],
+        on_conflict: Optional[Literal["ignore", "update"]] = None,
+        conflict_target: Optional[list[str]] = None,
+        update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
+        *,
+        returning: Literal[False] = False,
+    ) -> None: ...
+
+    async def bulk_create(  # noqa: CCR001
+        self,
+        objects: Union[list["T"], list[dict[str, Any]]],
+        on_conflict: Optional[Literal["ignore", "update"]] = None,
+        conflict_target: Optional[list[str]] = None,
+        update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
+        *,
+        returning: bool = False,
+    ) -> Optional[list[dict[str, Any]]]:
         """
         Performs a bulk create in one database session to speed up the process.
 
         Allows you to create multiple objects at once.
 
-        A valid list of `Model` objects needs to be passed.
+        A list of `Model` objects or a list of dictionaries of field values
+        needs to be passed, not both in one call. Dictionaries skip building
+        the models: their values are validated by the field validators,
+        foreign keys take the related model or its pk and missing fields get
+        their defaults (see ``prepare_dict_to_save``).
 
         Objects that provide different sets of fields (e.g. an explicit pk or a
         server_default value) are inserted in separate statements, so generated
@@ -2095,10 +2129,16 @@ class QuerySet(Generic[T]):
         ``update_values`` are given), ``update_values`` and fields with
         ``on_update``. Skipped objects are marked as saved too.
 
+        With ``returning=True`` (dictionaries only) the inserted or updated rows
+        are returned as dictionaries of field values; rows skipped by
+        ``on_conflict="ignore"`` are left out. PostgreSQL and SQLite return them
+        from the insert, MySQL inserts the rows one by one and reads each back.
+
         Bulk operations do not send signals.
 
-        :param objects: list of ormar models already initialized and ready to save.
-        :type objects: list[Model]
+        :param objects: ormar models already initialized and ready to save, or
+            dictionaries of field values
+        :type objects: Union[list[Model], list[dict[str, Any]]]
         :param on_conflict: ``ignore`` or ``update`` rows conflicting with
             existing ones
         :type on_conflict: Optional[Literal["ignore", "update"]]
@@ -2111,11 +2151,28 @@ class QuerySet(Generic[T]):
         :param update_values: values or expressions set on conflict by field
             name, the same for every row, only with ``update`` (see ``create``)
         :type update_values: Optional[dict[str, Any]]
+        :param returning: return the written rows, only for dictionaries
+        :type returning: bool
+        :raises QueryDefinitionError: for models mixed with dictionaries,
+            ``returning`` with models, conflict options without
+            ``on_conflict="update"`` or, with ``returning``, a row without a
+            value for a field of the conflict target
+        :return: the written rows with ``returning``, else None
+        :rtype: Optional[list[dict[str, Any]]]
         """
         self.model.verify_writable()
 
         if not objects:
             raise ModelListEmptyError("Bulk create objects are empty!")
+        rows_are_dicts = isinstance(objects[0], dict)
+        if any(isinstance(item, dict) != rows_are_dicts for item in objects):
+            raise QueryDefinitionError(
+                "bulk_create takes either models or dictionaries, not both in one call"
+            )
+        if returning and not rows_are_dicts:
+            raise QueryDefinitionError(
+                "bulk_create(returning=True) takes dictionaries, not models"
+            )
         if (conflict_target or update_fields or update_values) and (
             on_conflict != "update"
         ):
@@ -2140,15 +2197,29 @@ class QuerySet(Generic[T]):
             **conflict_params,
         }
 
-        ready_objects = []
-        trusted = self.model.flat_row_model()
-        for i, obj in enumerate(objects):
-            values = dump_for_save(obj=obj) if trusted else obj.model_dump()
-            row = obj.prepare_model_to_save(new_kwargs=values)
-            obj._verify_key_parts_set(row=row)
-            ready_objects.append(row)
-            if i % 100 == 99:  # pragma: no cover
-                await asyncio.sleep(0)
+        ready_objects = await self._prepare_bulk_rows(objects=objects)
+        database = self.model_config.database
+        rules = database.rules
+        target = conflict_target_columns(
+            model_cls=self.model, conflict_target=conflict_target
+        )
+        if returning and on_conflict == "update":
+            missing = sorted(
+                {
+                    column
+                    for row in ready_objects
+                    for column in target
+                    if row.get(column) is None
+                }
+            )
+            if missing:
+                raise QueryDefinitionError(
+                    f"on_conflict='update' with returning=True needs a value for "
+                    f"every field of the conflict target, missing: {missing}"
+                )
+        # MySQL has no RETURNING: rows are inserted one by one and read back,
+        # a row skipped by ``ignore`` fails its plain insert with a duplicate key
+        read_back = returning and not rules.conflict_returning
 
         # rows with different key sets (explicit vs omitted pk or server_default)
         # need different inserts, so each key set runs its own insert template;
@@ -2157,9 +2228,8 @@ class QuerySet(Generic[T]):
         rows_by_keys: dict[frozenset[str], list[dict]] = {}
         for row in ready_objects:
             rows_by_keys.setdefault(frozenset(row), []).append(row)
-        database = self.model_config.database
         several_statements = len(rows_by_keys) > 1 or (
-            len(ready_objects) > 1 and not database.atomic_execute_many
+            len(ready_objects) > 1 and (returning or not database.atomic_execute_many)
         )
         on_update_columns = tuple(sorted(on_update))
         # MySQL drivers turn executemany into one multi-row VALUES and leave
@@ -2167,9 +2237,11 @@ class QuerySet(Generic[T]):
         # and update_values literals from user variables set once before it
         update_variables = (
             bool(update_params)
-            and not database.rules.execute_many_with_trailing_binds
+            and not rules.execute_many_with_trailing_binds
+            and not read_back
             and any(len(rows) > 1 for rows in rows_by_keys.values())
         )
+        written_rows: list[Any] = []
         async with database.get_query_executor(
             transactional=several_statements
         ) as executor:
@@ -2203,10 +2275,17 @@ class QuerySet(Generic[T]):
                 statement = insert_statement(
                     model_cls=self.model,
                     names=names,
-                    on_conflict=on_conflict,
+                    on_conflict=(
+                        None if read_back and on_conflict == "ignore" else on_conflict
+                    ),
                     conflict_target=conflict_target,
                     update_fields=update_fields,
                     on_update=on_update_columns,
+                    returning=(
+                        tuple(column.name for column in self.table.columns)
+                        if returning and not read_back
+                        else ()
+                    ),
                     update_values=conflict_values,
                     update_variables=update_variables,
                 )
@@ -2215,13 +2294,133 @@ class QuerySet(Generic[T]):
                     {**value_params(names=names, values=row), **bound_updates}
                     for row in rows
                 ]
-                if len(rows) == 1:
+                if read_back:  # pragma: no cover
+                    written_rows.extend(
+                        await self._insert_and_read_back(
+                            executor=executor,
+                            statement=statement,
+                            rows=rows,
+                            params=params,
+                            on_conflict=on_conflict,
+                            target=target,
+                        )
+                    )
+                elif returning:  # pragma: no cover
+                    written_rows.extend(
+                        await executor.fetch_many(
+                            query=with_bound_values(
+                                statement=statement, values=bound_updates
+                            ),
+                            values=params,
+                        )
+                    )
+                elif len(rows) == 1:
                     await executor.execute(query=statement, params=params[0])
                 else:
                     await executor.execute_many(query=statement, values=params)
 
-        for obj in objects:
+        if rows_are_dicts:
+            if not returning:
+                return None
+            return [
+                self.model.translate_row_to_fields(row=dict(row))
+                for row in written_rows
+            ]
+        for obj in cast(list["T"], objects):
             obj.set_save_status(True)
+        return None
+
+    async def _prepare_bulk_rows(
+        self, objects: Sequence[Union["T", dict[str, Any]]]
+    ) -> list[dict]:
+        """
+        Return the rows ``bulk_create`` inserts, by column name: the dump of
+        each model, or each validated dictionary (see ``prepare_dict_to_save``).
+
+        :param objects: models or dictionaries of field values
+        :type objects: Sequence[Union[Model, dict[str, Any]]]
+        :return: rows to insert by column name
+        :rtype: list[dict]
+        """
+        ready_objects = []
+        trusted = self.model.flat_row_model()
+        for index, item in enumerate(objects):
+            if isinstance(item, dict):
+                ready_objects.append(self.model.prepare_dict_to_save(values=item))
+            else:
+                values = dump_for_save(obj=item) if trusted else item.model_dump()
+                row = item.prepare_model_to_save(new_kwargs=values)
+                item._verify_key_parts_set(row=row)
+                ready_objects.append(row)
+            if index % 100 == 99:  # pragma: no cover
+                await asyncio.sleep(0)
+        return ready_objects
+
+    async def _insert_and_read_back(
+        self,
+        executor: "QueryExecutor",
+        statement: Any,
+        rows: list[dict],
+        params: list[dict],
+        on_conflict: Optional[Literal["ignore", "update"]],
+        target: tuple[str, ...],
+    ) -> list[Any]:  # pragma: no cover
+        """
+        Insert the rows one by one and read each written row back, for
+        ``bulk_create(returning=True)`` on databases without RETURNING (MySQL),
+        the way ``create(on_conflict=...)`` does there: an updated row is read
+        back by its ``conflict_target`` values, an inserted one by its primary
+        key, and a row whose plain insert fails with a duplicate key under
+        ``on_conflict="ignore"`` is skipped.
+
+        :param executor: executor of the open session
+        :type executor: QueryExecutor
+        :param statement: insert of the rows' columns
+        :type statement: Any
+        :param rows: rows by column name
+        :type rows: list[dict]
+        :param params: bound values of each row
+        :type params: list[dict]
+        :param on_conflict: ``ignore`` or ``update`` conflicting rows
+        :type on_conflict: Optional[Literal["ignore", "update"]]
+        :param target: columns of the conflict target
+        :type target: tuple[str, ...]
+        :raises NoMatch: if no row matches the conflict target values after
+            the write (see ``create(on_conflict="update")``)
+        :return: the written rows
+        :rtype: list[Any]
+        """
+        rules = self.model_config.database.rules
+        pk_columns = self.model_config.pk.column_aliases()
+        written_rows = []
+        for row, row_params in zip(rows, params):
+            try:
+                inserted_pk = await executor.execute(query=statement, params=row_params)
+            except IntegrityError as error:
+                if on_conflict != "ignore" or not rules.is_duplicate_key(error=error):
+                    raise
+                continue
+            key_columns = target if on_conflict == "update" else pk_columns
+            key_values = {column: row.get(column) for column in key_columns}
+            if None in key_values.values() and len(key_columns) == 1:
+                key_values = {key_columns[0]: inserted_pk}
+            stored = await executor.fetch_one(
+                query=sqlalchemy.select(self.table).where(
+                    *(
+                        self.table.c[column] == value
+                        for column, value in key_values.items()
+                    )
+                )
+            )
+            if stored is None:
+                raise NoMatch(
+                    f"The row was written, but no row matches {key_values} when "
+                    f"read back: the conflict was on another unique key, or the "
+                    f"database stored different values (rounded floats or "
+                    f"datetimes)"
+                )
+            written_rows.append(stored)
+        return written_rows
 
     async def bulk_update(  # noqa:  CCR001
         self, objects: list["T"], columns: Optional[list[str]] = None

@@ -596,7 +596,7 @@ asyncio.run(cleanup_database())
 *  `first(*args, **kwargs): -> Model`
 *  `update(each: bool = False, **kwargs) -> int`
 *  `update_or_create(**kwargs) -> Model`
-*  `bulk_create(objects: list[Model]) -> None`
+*  `bulk_create(objects: list[Model] | list[dict], returning: bool = False) -> None | list[dict]`
 *  `bulk_update(objects: list[Model], columns: list[str] = None) -> None`
 *  `delete(*args, each: bool = False, **kwargs) -> int`
 *  `all(*args, **kwargs) -> list[Optional[Model]]`

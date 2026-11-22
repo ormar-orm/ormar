@@ -50,10 +50,91 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         new_kwargs = cls._remove_pk_from_kwargs(new_kwargs)
         new_kwargs = cls._remove_not_ormar_fields(new_kwargs)
         new_kwargs = cls.substitute_models_with_pks(new_kwargs)
+        return cls._prepare_column_values(new_kwargs=new_kwargs)
+
+    @classmethod
+    def prepare_dict_to_save(cls, values: dict) -> dict:
+        """
+        Validates a row passed to ``bulk_create`` as a dictionary of field names
+        and returns it by column name, like ``prepare_model_to_save`` returns
+        the row of a model, without building the model.
+
+        The values are validated and converted by their field validators (as
+        ``update()`` values are), foreign keys take the related model, a
+        dictionary with its pk or the pk itself, and missing fields get their
+        defaults. Model validators are not run::
+
+            Book.prepare_dict_to_save(values={"title": "t", "author": 1})
+            # -> {"title": "t", "author": 1, "year": None}
+
+        :raises QueryDefinitionError: for a field the model does not store in
+            its table (unknown, reverse or many to many relation)
+        :raises ModelPersistenceError: for a missing required field or primary
+            key part
+        :raises ValidationError: for a value its field rejects
+        :param values: values of the row by field name
+        :type values: dict
+        :return: values of the row by column name
+        :rtype: dict
+        """
+        stored_fields, required_fields = cls._dict_row_fields()
+        unknown = [name for name in values if name not in stored_fields]
+        if unknown:
+            raise QueryDefinitionError(
+                f"bulk_create rows name fields {cls.__name__} does not store in "
+                f"its table: {unknown}"
+            )
+        missing = [name for name in required_fields if name not in values]
+        if missing:
+            raise ModelPersistenceError(
+                f"bulk_create rows miss required fields of {cls.__name__}: {missing}"
+            )
+        new_kwargs = cls.validate_update_values(values, use_validated=True)
+        new_kwargs = cls._remove_pk_from_kwargs(new_kwargs)
+        row = cls._prepare_column_values(new_kwargs=new_kwargs)
+        cls._verify_key_parts_set(row=row)
+        return row
+
+    @classmethod
+    def _dict_row_fields(cls) -> tuple[frozenset[str], tuple[str, ...]]:
+        """
+        Returns the names of the fields a ``bulk_create`` dictionary row may
+        set (fields stored in the model's own table) and of the required ones
+        among them, computed once per class.
+
+        :return: names of the stored fields and of the required fields
+        :rtype: tuple[frozenset[str], tuple[str, ...]]
+        """
+        cached = cls.__dict__.get("_dict_row_field_names")
+        if cached is not None:
+            return cast(tuple[frozenset[str], tuple[str, ...]], cached)
+        stored_fields = frozenset(
+            (cls.extract_db_own_fields() - cls.extract_through_names())
+            | cls._extract_db_related_names()
+        )
+        required_fields = tuple(
+            name
+            for name, info in cls.model_fields.items()  # type: ignore[attr-defined]
+            if name in stored_fields and info.is_required()
+        )
+        type.__setattr__(cls, "_dict_row_field_names", (stored_fields, required_fields))
+        return stored_fields, required_fields
+
+    @classmethod
+    def _prepare_column_values(cls, new_kwargs: dict) -> dict:
+        """
+        Populates the default values of a row about to be inserted, converts
+        bytes represented as strings back and translates field names into
+        column names.
+
+        :param new_kwargs: values of the row by field name
+        :type new_kwargs: dict
+        :return: values of the row by column name
+        :rtype: dict
+        """
         new_kwargs = cls.populate_default_values(new_kwargs)
         new_kwargs = cls.reconvert_str_to_bytes(new_kwargs)
-        new_kwargs = cls.translate_columns_to_aliases(new_kwargs)
-        return new_kwargs
+        return cls.translate_columns_to_aliases(new_kwargs)
 
     @classmethod
     def prepare_model_to_update(cls, new_kwargs: dict) -> dict:
@@ -68,6 +149,36 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         new_kwargs = cls.reconvert_str_to_bytes(new_kwargs)
         new_kwargs = cls.translate_columns_to_aliases(new_kwargs)
         return new_kwargs
+
+    @classmethod
+    def _verify_key_parts_set(cls, row: dict[str, Any]) -> None:
+        """
+        Checks that every primary key column the database does not generate
+        is set before an insert.
+
+        :raises ModelPersistenceError: if a key part is missing
+        :param row: values about to be inserted, by column name
+        :type row: dict[str, Any]
+        """
+        key = cls.ormar_config.pk
+        if key.autoincrement:
+            return
+        model_fields = cls.ormar_config.model_fields
+        missing: list[str] = []
+        for column in key.column_aliases():
+            owners = [
+                name
+                for name in cls.get_field_names_of_column(column=column)
+                if name in key.fields
+            ]
+            if row.get(column) is None and all(
+                model_fields[name].server_default is None for name in owners
+            ):
+                missing.extend(name for name in owners if name not in missing)
+        if missing:
+            raise ModelPersistenceError(
+                f"{cls.__name__} primary key parts must be set before saving: {missing}"
+            )
 
     @classmethod
     def _remove_not_ormar_fields(cls, new_kwargs: dict) -> dict:
@@ -324,7 +435,9 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         return new_kwargs
 
     @classmethod
-    def validate_update_values(cls, new_kwargs: dict) -> dict:
+    def validate_update_values(
+        cls, new_kwargs: dict, use_validated: bool = False
+    ) -> dict:
         """
         Receives dictionary of values about to be set by a queryset update,
         validates them and converts them into column values, the same way
@@ -334,10 +447,14 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
           pk itself and are replaced with the validated pk value
         * json fields accept a json string or a value to be dumped and are
           replaced with the parsed value
-        * other fields are validated with their own validators
+        * other fields are validated with their own validators, and keep the
+          passed value unless ``use_validated`` is set
 
         :param new_kwargs: dictionary of values about to be used for the update
         :type new_kwargs: dict
+        :param use_validated: replace other values with the validated ones,
+            as a model holds them (``bulk_create`` dictionary rows)
+        :type use_validated: bool
         :return: dictionary of column values about to be used for the update
         :rtype: dict
         """
@@ -353,9 +470,12 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
             elif key in cls._json_fields:
                 validated[key] = validators[key].validate_python(encode_json(value))
             else:
-                if key in validators:
+                converted = (
                     validators[key].validate_python(value)
-                validated[key] = value
+                    if key in validators
+                    else value
+                )
+                validated[key] = converted if use_validated else value
         cls.merge_relation_values(target=validated, relation_values=related_values)
         return validated
 

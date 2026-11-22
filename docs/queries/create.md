@@ -5,7 +5,7 @@ Following methods allow you to insert data into the database.
 * `create(on_conflict=None, conflict_target=None, update_fields=None, update_values=None, **kwargs) -> Optional[Model]`
 * `get_or_create(_defaults: Optional[dict[str, Any]] = None, **kwargs) -> tuple[Model, bool]`
 * `update_or_create(**kwargs) -> Model`
-* `bulk_create(objects: list[Model], on_conflict=None, conflict_target=None, update_fields=None, update_values=None) -> None`
+* `bulk_create(objects: list[Model] | list[dict], on_conflict=None, conflict_target=None, update_fields=None, update_values=None, *, returning=False) -> None | list[dict]`
 
 
 * `Model`
@@ -130,11 +130,12 @@ Updates the model, or in case there is no match in database creates a new one.
 
 ## bulk_create
 
-`bulk_create(objects: list["Model"]) -> None`
+`bulk_create(objects: list["Model"] | list[dict], ..., *, returning: bool = False) -> None | list[dict]`
 
 Allows you to create multiple objects at once.
 
-A valid list of `Model` objects needs to be passed.
+A valid list of `Model` objects, or a list of dictionaries of field values, needs to be
+passed.
 
 ```python hl_lines="30-37"
 --8<-- "../docs_src/queries/docs004.py"
@@ -147,6 +148,72 @@ A valid list of `Model` objects needs to be passed.
     inside one transaction, so generated primary keys may not follow the order
     of the passed list. If you need that order, split such objects into separate
     `bulk_create()` calls.
+
+### Rows as dictionaries
+
+Building a model for every row is the main cost of a large `bulk_create()`. Pass
+dictionaries of field values instead and only the column values are validated:
+
+```python
+await Track.objects.bulk_create(
+    [
+        {"title": "Intro", "album": album, "position": 1},
+        {"title": "Outro", "album": album.pk, "position": 2},
+    ]
+)
+```
+
+* values are validated and converted by their field validators (`"2"` becomes `2`, a
+  date string a `date`), as in [`update()`](update.md), and a rejected value raises
+  pydantic's `ValidationError`;
+* foreign keys take the related model, a dictionary with its primary key or the primary
+  key itself;
+* missing fields get their `default` / default factory, a missing required field raises
+  `ModelPersistenceError`;
+* fields the model does not store in its own table (unknown names, reverse and many to
+  many relations) raise `QueryDefinitionError`;
+* no model is built: model validators (`@model_validator`) are not run and no relations
+  are registered.
+
+One call takes either models or dictionaries: mixing them raises `QueryDefinitionError`.
+The conflict handling below works the same for both.
+
+### Returning the written rows
+
+With `returning=True` (dictionaries only) `bulk_create()` returns the inserted or
+updated rows as dictionaries of field values, including the generated primary keys,
+server defaults and the values set on conflict:
+
+```python
+rows = await Tag.objects.bulk_create(
+    [{"name": "python", "score": 5}, {"name": "rust", "score": 1}],
+    on_conflict="update",
+    conflict_target=["name"],
+    update_values={"score": F("score") + Inserted("score")},
+    returning=True,
+)
+# [{"id": 1, "name": "python", "score": 12, ...}, {"id": 7, "name": "rust", ...}]
+```
+
+* Rows skipped by `on_conflict="ignore"` are left out of the result, so it can be
+  shorter than the passed list (empty when every row was skipped).
+* The rows are not guaranteed to follow the order of the passed list: match them by a
+  key.
+* A foreign key is returned as the primary key value of the related row (a tuple for a
+  foreign key stored in several columns).
+* With `on_conflict="update"` every row needs a value for each field of
+  `conflict_target`, like in `create(on_conflict="update")`.
+* With models `returning=True` raises `QueryDefinitionError`: use `create()` or reload
+  them.
+
+PostgreSQL and SQLite return the rows from the insert (`INSERT ... RETURNING`), still in
+one statement per set of fields. On PostgreSQL two rows of one call must not update the
+same existing row (`ON CONFLICT DO UPDATE command cannot affect row a second time`).
+MySQL has no `RETURNING`: the rows are inserted one by one and each is read back, like
+in `create(on_conflict=...)`, by the primary key or, for `on_conflict="update"`, by the
+`conflict_target` values (`NoMatch` when none matches, see the warning below). A row of
+`on_conflict="ignore"` runs a plain insert and is skipped on a duplicate key error. This
+costs two round trips per row.
 
 ## Conflict handling
 
@@ -227,7 +294,8 @@ passed cannot conflict). It sends `pre_save` and `post_save`, whether the row wa
 inserted or updated.
 
 `bulk_create()` sends no signals, sets no primary keys and marks all passed objects as
-saved, the skipped ones too.
+saved, the skipped ones too. To get the stored rows back pass dictionaries with
+[`returning=True`](#returning-the-written-rows).
 
 ### Expressions on conflict
 
@@ -304,6 +372,7 @@ await Score.objects.bulk_create(
 | `create(on_conflict="update")` | `INSERT ... ON CONFLICT (target) DO UPDATE ... RETURNING` | `ON DUPLICATE KEY UPDATE`, then a select by the target values |
 | `bulk_create(on_conflict="ignore")` | `ON CONFLICT DO NOTHING` | `ON DUPLICATE KEY UPDATE` of the primary key to itself |
 | `bulk_create(on_conflict="update")` | `ON CONFLICT (target) DO UPDATE` | `ON DUPLICATE KEY UPDATE`; `on_update` values and `update_values` literals are set once in user variables (`SET @ormar_on_update_<n>`, `@ormar_u<n>`) and read by all rows |
+| `bulk_create(returning=True)` | the same with `RETURNING` | one insert per row, then a select of the row (a plain insert per row for `ignore`) |
 
 !!!warning
     MySQL has no conflict target: `ON DUPLICATE KEY UPDATE` reacts to a conflict on
