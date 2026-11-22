@@ -1,3 +1,4 @@
+import enum
 import uuid
 from typing import Optional
 
@@ -30,6 +31,19 @@ class Snippet(ormar.Model):
     name: str = ormar.String(max_length=20)
     code: str = ormar.String(max_length=20)
     number: int = ormar.Integer(default=0)
+
+
+class Shade(str, enum.Enum):
+    red = "red"
+    blue = "blue"
+
+
+class Paint(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="exprfilter_paints")
+
+    id: int = ormar.Integer(primary_key=True)
+    name: str = ormar.String(max_length=20)
+    shade: Shade = ormar.Enum(enum_class=Shade)
 
 
 class Player(ormar.Model):
@@ -387,6 +401,17 @@ async def test_column_values_match_literally(players):
     ):
         await Snippet.objects.create(name=name, code=code)
     assert await snippet_names(name__contains=F("code")) == ["50%", "p!q\\r", "ya_cy"]
+
+
+@pytest.mark.asyncio
+async def test_like_lookups_take_enum_expression_values(players):
+    await Paint.objects.create(name="dark red", shade=Shade.red)
+    await Paint.objects.create(name="blue", shade=Shade.blue)
+    await Paint.objects.create(name="red", shade=Shade.blue)
+    by_shade = Paint.objects.filter(name__contains=F("shade")).order_by("name")
+    assert await by_shade.values_list("name", flatten=True) == ["blue", "dark red"]
+    by_shade = Paint.objects.filter(name__iexact=F("shade"))
+    assert await by_shade.values_list("name", flatten=True) == ["blue"]
 
 
 @pytest.mark.asyncio

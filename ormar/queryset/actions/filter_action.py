@@ -177,7 +177,7 @@ def escape_like_clause(value: Any) -> Any:
     """
     Escape the ``LIKE`` wildcards of an SQL expression's value in SQL, so it
     matches literally, with the ``ESCAPE '!'`` clause ``comparison_clause``
-    adds. A value that is not text is cast to text first::
+    adds. A value that is not text, or an enum, is cast to text first::
 
         escape_like_clause(value=func.lower(name))
         # -> replace(replace(replace(lower(name), '!', '!!'), '%', '!%'),
@@ -188,7 +188,10 @@ def escape_like_clause(value: Any) -> Any:
     :return: SQL text expression matching the value in ``LIKE``
     :rtype: Any
     """
-    if not isinstance(value.type, sqlalchemy.String):
+    # Enum subclasses String, but native enums (PostgreSQL) have no replace()
+    if not isinstance(value.type, sqlalchemy.String) or isinstance(
+        value.type, sqlalchemy.Enum
+    ):
         value = sqlalchemy.cast(expression=value, type_=sqlalchemy.String())
     for character in (EXPRESSION_ESCAPE, *ESCAPE_CHARACTERS):
         value = sqlalchemy.func.replace(
