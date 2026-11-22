@@ -9,7 +9,7 @@ from ormar.models.model_row import ModelRow  # noqa I100
 from ormar.models.model import Model, T  # noqa I100
 from ormar.models.excludable import ExcludableItems  # noqa I100
 from ormar.models.utils import Extra  # noqa I100
-from ormar.models.ormar_config import OrmarConfig  # noqa I100
+from ormar.models.ormar_config import OrmarConfig, snake_case_tablename  # noqa I100
 
 __all__ = [
     "NewBaseModel",
@@ -19,4 +19,5 @@ __all__ = [
     "T",
     "Extra",
     "OrmarConfig",
+    "snake_case_tablename",
 ]

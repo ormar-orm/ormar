@@ -310,7 +310,8 @@ class ManyToManyField(  # type: ignore
         owner_name = self.owner.get_name(lower=False)
         to_name = self.to.get_name(lower=False)
         class_name = f"{owner_name}{to_name}"
-        table_name = f"{owner_name.lower()}s_{to_name.lower()}s"
+        tablename_factory = self.owner.ormar_config.tablename_factory
+        table_name = f"{tablename_factory(owner_name)}_{tablename_factory(to_name)}"
         base_namespace = {
             "__module__": self.owner.__module__,
             "__qualname__": f"{self.owner.__qualname__}.{class_name}",
@@ -323,6 +324,7 @@ class ManyToManyField(  # type: ignore
             database=self.owner.ormar_config.database,
             metadata=self.owner.ormar_config.metadata,
             schema=self.owner.ormar_config.schema,
+            tablename_factory=tablename_factory,
         )
         through_model = type(
             class_name,

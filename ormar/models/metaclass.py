@@ -252,7 +252,6 @@ def copy_and_replace_m2m_through_model(  # noqa: CFQ002
     table_name: str,
     parent_fields: dict,
     attrs: dict,
-    ormar_config: OrmarConfig,
     base_class: type["Model"],
 ) -> None:
     """
@@ -279,8 +278,6 @@ def copy_and_replace_m2m_through_model(  # noqa: CFQ002
     :type parent_fields: dict
     :param attrs: new namespace for class being constructed
     :type attrs: dict
-    :param ormar_config: metaclass of currently created model
-    :type ormar_config: OrmarConfig
     """
     if field.through and any(
         through_field.is_relation and not through_field.virtual
@@ -315,6 +312,7 @@ def copy_and_replace_m2m_through_model(  # noqa: CFQ002
         order_by=through_class.ormar_config.orders_by,
         view=through_class.ormar_config.view,
         partial_updates=through_class.ormar_config.partial_updates,
+        tablename_factory=through_class.ormar_config.tablename_factory,
     )
     # a set table keeps the copy from registering one in metadata on creation
     new_config.table = through_class.ormar_config.table
@@ -331,7 +329,7 @@ def copy_and_replace_m2m_through_model(  # noqa: CFQ002
     # create new table with copied columns but remove foreign keys
     # they will be populated later in expanding reverse relation
     # if hasattr(new_config, "table"):
-    new_config.tablename += "_" + ormar_config.tablename
+    new_config.tablename += "_" + table_name
     new_config.table = None  # type: ignore
     new_config.model_fields = {
         name: field
@@ -421,10 +419,8 @@ def copy_data_from_parent_model(  # noqa: CCR001
             raise ModelDefinitionError(
                 f"Model {curr_class.__name__} declared without ormar_config"
             )
-        table_name = (
-            ormar_config.tablename
-            if hasattr(ormar_config, "tablename") and ormar_config.tablename
-            else attrs.get("__name__", "").lower() + "s"
+        table_name = ormar_config.resolve_tablename(
+            class_name=attrs.get("__name__", "")
         )
         for field_name, field in base_class.ormar_config.model_fields.items():
             if field.is_multi:
@@ -435,7 +431,6 @@ def copy_data_from_parent_model(  # noqa: CCR001
                     table_name=table_name,
                     parent_fields=parent_fields,
                     attrs=attrs,
-                    ormar_config=ormar_config,
                     base_class=base_class,  # type: ignore
                 )
 

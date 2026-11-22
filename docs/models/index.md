@@ -328,6 +328,33 @@ You can overwrite this parameter by providing `ormar_config` object's `tablename
 --8<-- "../docs_src/models/docs002.py"
 ```
 
+To change the default naming for all models set `tablename_factory` on the base config.
+It is a function that gets the class name and returns the table name, and `copy()`
+passes it on to every model. An explicit `tablename` always wins.
+The factory is passed on only by `copy()`: a model that declares a fresh `OrmarConfig()`
+does not inherit it from an abstract parent model.
+
+`ormar.snake_case_tablename` turns the class name into snake case plus 's'
+(`UserProfile` -> `user_profiles`, `HTTPRequest` -> `http_requests`).
+
+```Python
+base_ormar_config = ormar.OrmarConfig(
+    database=database,
+    metadata=metadata,
+    tablename_factory=ormar.snake_case_tablename,
+)
+
+
+class UserProfile(ormar.Model):
+    ormar_config = base_ormar_config.copy()  # table name: user_profiles
+
+    id: int = ormar.Integer(primary_key=True)
+    tags: list[Tag] = ormar.ManyToMany(Tag)  # through table: user_profiles_tags
+```
+
+The default through table of a many to many relation is named with the factory of
+the model that declares the relation: `factory(owner) + "_" + factory(target)`.
+
 ### Schemas
 
 You can place a model in a non-default database schema by passing `schema=` to

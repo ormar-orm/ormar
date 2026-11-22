@@ -1,5 +1,23 @@
 # Release notes
 
+## 0.31.0
+
+### 🆕 Features
+
+* **`tablename_factory` in `OrmarConfig` and snake case table names** ([#1123](https://github.com/ormar-orm/ormar/issues/1123))
+
+    A function that builds the default table name from the class name. Set it once on the base config, `copy()` passes it on; an explicit `tablename` still wins. `ormar.snake_case_tablename` gives `user_profiles` for `UserProfile` and `http_requests` for `HTTPRequest`. Default through tables use the factory of the model that declares the relation (`user_profiles_tags`). Without a factory the names do not change. See [table names](models/index.md#table-names).
+
+    ```python
+    base_ormar_config = ormar.OrmarConfig(..., tablename_factory=ormar.snake_case_tablename)
+    ```
+
+### 🐛 Fixes
+
+* **A many to many relation inherited from an abstract model works when the child has no explicit `tablename`** ([#1123](https://github.com/ormar-orm/ormar/issues/1123))
+
+    The cloned through table name used the child's `tablename` from its config, which is empty until the default is built, and the class definition raised `TypeError`.
+
 ## 0.30.0
 
 ### ✨ Breaking changes

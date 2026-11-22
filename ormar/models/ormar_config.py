@@ -1,4 +1,5 @@
-from typing import TYPE_CHECKING, Optional, Union
+import re
+from typing import TYPE_CHECKING, Callable, Optional, Union
 
 import sqlalchemy
 from pydantic_core import PydanticUndefined, PydanticUndefinedType
@@ -16,6 +17,34 @@ from ormar.signals import SignalEmitter
 # ColumnCollectionConstraint, but Table accepts both
 TableConstraint = Union[ColumnCollectionConstraint, Index]
 
+WORD_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def default_tablename(class_name: str) -> str:
+    """
+    Default table name factory: lowercase class name plus 's'.
+
+    :param class_name: name of the model class
+    :type class_name: str
+    :return: table name, i.e. ``UserProfile`` -> ``userprofiles``
+    :rtype: str
+    """
+    return class_name.lower() + "s"
+
+
+def snake_case_tablename(class_name: str) -> str:
+    """
+    Table name factory: snake case class name plus 's'.
+
+    Acronyms are kept together, so ``HTTPRequest`` becomes ``http_requests``.
+
+    :param class_name: name of the model class
+    :type class_name: str
+    :return: table name, i.e. ``UserProfile`` -> ``user_profiles``
+    :rtype: str
+    """
+    return default_tablename(class_name=WORD_BOUNDARY.sub("_", class_name))
+
 
 class OrmarConfig:
     if TYPE_CHECKING:  # pragma: no cover
@@ -24,6 +53,7 @@ class OrmarConfig:
         database: DatabaseConnection
         engine: AsyncEngine
         tablename: str
+        tablename_factory: Callable[[str], str]
         schema: Optional[str]
         comment: Optional[str]
         order_by: list[str]
@@ -52,12 +82,14 @@ class OrmarConfig:
         constraints: Optional[list[TableConstraint]] = None,
         view: bool = False,
         partial_updates: Optional[bool] = None,
+        tablename_factory: Optional[Callable[[str], str]] = None,
     ) -> None:
         self.pk = None  # type: ignore
         self.metadata = metadata  # type: ignore
         self.database = database  # type: ignore
         self.engine = engine  # type: ignore
         self.tablename = tablename  # type: ignore
+        self.tablename_factory = tablename_factory or default_tablename
         self.schema = schema
         self.comment = comment
         self.orders_by = order_by or []
@@ -95,6 +127,7 @@ class OrmarConfig:
         constraints: Optional[list[TableConstraint]] = None,
         view: Optional[bool] = None,
         partial_updates: Union[bool, None, PydanticUndefinedType] = PydanticUndefined,
+        tablename_factory: Optional[Callable[[str], str]] = None,
     ) -> "OrmarConfig":
         # PydanticUndefined distinguishes "omitted" (inherit parent schema)
         # from an explicit ``schema=None`` (clear schema).
@@ -128,4 +161,16 @@ class OrmarConfig:
                 if isinstance(partial_updates, PydanticUndefinedType)
                 else partial_updates
             ),
+            tablename_factory=tablename_factory or self.tablename_factory,
         )
+
+    def resolve_tablename(self, class_name: str) -> str:
+        """
+        Returns the explicit tablename or the one built by tablename_factory.
+
+        :param class_name: name of the model class
+        :type class_name: str
+        :return: table name of the model
+        :rtype: str
+        """
+        return self.tablename or self.tablename_factory(class_name)

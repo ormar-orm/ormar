@@ -159,6 +159,9 @@ The default naming convention is:
    it would be `PostCategory`
 *  for table name it similar but with underscore in between and s in the end of class 
    lowercase name, in example above would be `posts_categorys`
+*  if the owner model's config sets a `tablename_factory`, the table name is both class
+   names passed through it and joined with an underscore, i.e. `posts_categorys` with
+   the default factory, see [table names](../models/index.md#table-names)
  
 ### Customizing Through relation names
 
