@@ -9,6 +9,7 @@ from ormar.queryset.actions import (
     SelectAction,
     random,
 )
+from ormar.queryset.annotations import annotations_of
 from ormar.queryset.clause import NullsOrdering, and_, or_
 from ormar.queryset.expressions import (
     Avg,
@@ -43,6 +44,7 @@ __all__ = [
     "SelectAction",
     "NullsOrdering",
     "and_",
+    "annotations_of",
     "or_",
     "Avg",
     "Case",

@@ -15,6 +15,7 @@ quick_access_set = {
     "model_fields",
     "__fields_set__",
     "__json_encoder__",
+    "__ormar_annotations__",
     "__ormar_excludable__",
     "__pk_only__",
     "__post_root_validators__",

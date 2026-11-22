@@ -1068,6 +1068,23 @@ class QuerysetProxy(Generic[T]):
             relation=self.relation, type_=self.type_, to=self.to, qryset=queryset
         )
 
+    def annotate(self, **expressions: Any) -> "QuerysetProxy[T]":
+        """
+        Add values computed by the database for each related row, by name,
+        read with ``ormar.annotations_of()``.
+
+        Actual call delegated to QuerySet.
+
+        :param expressions: expressions by annotation name
+        :type expressions: Any
+        :return: QuerysetProxy
+        :rtype: QuerysetProxy
+        """
+        queryset = self.queryset.annotate(**expressions)
+        return self.__class__(
+            relation=self.relation, type_=self.type_, to=self.to, qryset=queryset
+        )
+
     def order_by(
         self, columns: Union[list, str, "OrderAction", "RandomOrder", "Random"]
     ) -> "QuerysetProxy[T]":
