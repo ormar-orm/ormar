@@ -55,6 +55,10 @@
 
     The aggregate read the field name instead of the database column, so `Player.objects.max("score")` on `score = ormar.Integer(name="user_score")` failed with an SQL error, also through relations (`select_related("league").max("league__level")`) and many to many through fields. The column name is used now.
 
+* **`max()`, `min()`, `sum()` and `avg()` join the relations of related columns**
+
+    `Author.objects.max("posts__score")` failed with an SQL error unless the relation was joined with `select_related()` or a filter. The aggregate joins the relations of its columns now, like `values()` and filters do. As with `select_related()`, a reverse or many to many join returns one row per related model, so `sum()` and `avg()` of the queried model's own columns count them once per row.
+
 ## 0.30.0
 
 ### ✨ Breaking changes

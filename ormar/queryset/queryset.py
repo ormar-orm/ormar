@@ -1263,6 +1263,16 @@ class QuerySet(Generic[T]):
                 "You can use aggregate functions only on "
                 "existing columns of the target model"
             )
+        select_related = self._select_related
+        for select_action in select_actions:
+            select_related = select_action.update_select_related(
+                select_related=select_related
+            )
+        missing_joins = select_related[len(self._select_related) :]
+        if missing_joins:
+            return await self.select_related(
+                related=missing_joins
+            )._query_aggr_function(func_name=func_name, columns=columns)
         select_columns = [x.apply_func(func, use_label=True) for x in select_actions]
         wrap = functools.partial(
             aggregate_statement, func_name=func_name, select_columns=select_columns
