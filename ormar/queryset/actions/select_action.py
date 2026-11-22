@@ -37,7 +37,8 @@ class SelectAction(QueryAction):
 
     def get_text_clause(self) -> sqlalchemy.sql.expression.ColumnClause:
         alias = f"{self.table_prefix}_" if self.table_prefix else ""
-        return sqlalchemy.column(f"{alias}{self.field_name}")
+        column_name = self.target_model.get_column_alias(field_name=self.field_name)
+        return sqlalchemy.column(f"{alias}{column_name}")
 
     def apply_func(
         self, func: Callable, use_label: bool = True

@@ -51,6 +51,10 @@
 
     The cloned through table name used the child's `tablename` from its config, which is empty until the default is built, and the class definition raised `TypeError`.
 
+* **`max()`, `min()`, `sum()` and `avg()` work on fields with a custom column name**
+
+    The aggregate read the field name instead of the database column, so `Player.objects.max("score")` on `score = ormar.Integer(name="user_score")` failed with an SQL error, also through relations (`max("league__level")`). The column name is used now.
+
 ## 0.30.0
 
 ### ✨ Breaking changes
