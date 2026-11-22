@@ -167,10 +167,12 @@ async def test_statements_are_cached_with_the_condition_values(catalog):
             each=True, position=Case(When(album__name=name, then=value), default=0)
         )
     assert len(cache.entries) == 1
+    assert await positions() == {"a": 0, "b": 0, "c": 2, "d": 0}
+    cached = len(cache.entries)
     await Track.objects.update(
         each=True, position=Case(When(title="a", then=3), default=0)
     )
-    assert len(cache.entries) == 2
+    assert len(cache.entries) == cached + 1
     assert await positions() == {"a": 3, "b": 0, "c": 0, "d": 0}
 
 
@@ -183,4 +185,33 @@ async def test_upsert_still_rejects_related_conditions(catalog):
             on_conflict="update",
             conflict_target=["id"],
             update_values={"position": Case(When(album__name="first", then=1))},
+        )
+
+
+@pytest.mark.asyncio
+async def test_negated_related_condition(catalog):
+    outside_first = Case(When(~ormar.and_(album__name="first"), then=1), default=0)
+    assert await Track.objects.update(each=True, position=outside_first) == 4
+    assert await positions() == {"a": 0, "b": 0, "c": 1, "d": 0}
+    assert await matching_titles(case=outside_first) == ["a", "b", "c", "d"]
+    excluded = Track.objects.exclude(album__name="first").order_by("title")
+    assert await excluded.values_list("title", flatten=True) == ["c"]
+
+
+@pytest.mark.asyncio
+async def test_two_columns_with_related_conditions(catalog):
+    await Track.objects.update(
+        each=True,
+        position=Case(When(album__name="second", then=2), default=0),
+        title=Case(When(album__label__name="indie", then="L"), default="N"),
+    )
+    rows = await Track.objects.order_by("id").values_list(["title", "position"])
+    assert rows == [("L", 0), ("L", 0), ("N", 2), ("N", 0)]
+
+
+@pytest.mark.asyncio
+async def test_reverse_relation_conditions_are_rejected(catalog):
+    with pytest.raises(QueryDefinitionError, match="through foreign keys"):
+        await Album.objects.update(
+            each=True, rank=Case(When(children__name="second", then=1), default=0)
         )

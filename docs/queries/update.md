@@ -203,6 +203,9 @@ await Player.objects.update(
   condition checks the updated row against the rows it matches in a subquery with
   outer joins, so the update joins only the tables its values read
   (`then=F("team__rank")`, where rows without a team are not updated, see above).
+* Each `When` condition on a related model evaluates a subquery over the rows it
+  matches, so for selective updates of big tables an index on the foreign key column
+  helps.
 * Like other expressions, a `Case` cannot read a column set by the same `update()`,
   in its conditions neither.
 * `None`, `True` and `False` are written into the SQL, other literals are bound with
