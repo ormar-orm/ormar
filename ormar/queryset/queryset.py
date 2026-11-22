@@ -2097,6 +2097,18 @@ class QuerySet(Generic[T]):
         returning: Literal[False] = False,
     ) -> None: ...
 
+    @overload
+    async def bulk_create(
+        self,
+        objects: Union[list["T"], list[dict[str, Any]]],
+        on_conflict: Optional[Literal["ignore", "update"]] = None,
+        conflict_target: Optional[list[str]] = None,
+        update_fields: Optional[list[str]] = None,
+        update_values: Optional[dict[str, Any]] = None,
+        *,
+        returning: bool,
+    ) -> Optional[list[dict[str, Any]]]: ...
+
     async def bulk_create(  # noqa: CCR001
         self,
         objects: Union[list["T"], list[dict[str, Any]]],
@@ -2322,13 +2334,29 @@ class QuerySet(Generic[T]):
         if rows_are_dicts:
             if not returning:
                 return None
-            return [
-                self.model.translate_row_to_fields(row=dict(row))
-                for row in written_rows
-            ]
+            return [self._returned_row(row=row) for row in written_rows]
         for obj in cast(list["T"], objects):
             obj.set_save_status(True)
         return None
+
+    def _returned_row(self, row: Any) -> dict[str, Any]:
+        """
+        Return a row written by ``bulk_create(returning=True)`` as the field
+        values a model holds: by field name, with the fields represented as
+        base64 strings encoded.
+
+        :param row: written row by column name
+        :type row: Any
+        :return: field values by field name
+        :rtype: dict[str, Any]
+        """
+        values = self.model.translate_row_to_fields(row=dict(row))
+        for field_name in self.model._bytes_fields:
+            if field_name in values:
+                values[field_name] = self.model._convert_bytes_to_str(
+                    column_name=field_name, value=values[field_name]
+                )
+        return values
 
     async def _prepare_bulk_rows(
         self, objects: Sequence[Union["T", dict[str, Any]]]

@@ -31,6 +31,7 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         __ormar_fields_validators__: Optional[
             dict[str, Union[SchemaValidator, PluggableSchemaValidator]]
         ]
+        __ormar_dict_row_fields__: Optional[tuple[frozenset[str], tuple[str, ...]]]
 
     @classmethod
     def prepare_model_to_save(cls, new_kwargs: dict) -> dict:
@@ -105,9 +106,8 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         :return: names of the stored fields and of the required fields
         :rtype: tuple[frozenset[str], tuple[str, ...]]
         """
-        cached = cls.__dict__.get("_dict_row_field_names")
-        if cached is not None:
-            return cast(tuple[frozenset[str], tuple[str, ...]], cached)
+        if cls.__ormar_dict_row_fields__ is not None:
+            return cls.__ormar_dict_row_fields__
         stored_fields = frozenset(
             (cls.extract_db_own_fields() - cls.extract_through_names())
             | cls._extract_db_related_names()
@@ -117,8 +117,8 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
             for name, info in cls.model_fields.items()  # type: ignore[attr-defined]
             if name in stored_fields and info.is_required()
         )
-        type.__setattr__(cls, "_dict_row_field_names", (stored_fields, required_fields))
-        return stored_fields, required_fields
+        cls.__ormar_dict_row_fields__ = (stored_fields, required_fields)
+        return cls.__ormar_dict_row_fields__
 
     @classmethod
     def _prepare_column_values(cls, new_kwargs: dict) -> dict:
@@ -448,7 +448,8 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
         * json fields accept a json string or a value to be dumped and are
           replaced with the parsed value
         * other fields are validated with their own validators, and keep the
-          passed value unless ``use_validated`` is set
+          passed value unless ``use_validated`` is set (bytes fields always keep
+          it, ``reconvert_str_to_bytes`` converts them)
 
         :param new_kwargs: dictionary of values about to be used for the update
         :type new_kwargs: dict
@@ -475,7 +476,13 @@ class SavePrepareMixin(RelationMixin, AliasMixin):
                     if key in validators
                     else value
                 )
-                validated[key] = converted if use_validated else value
+                # bytes are converted by ``reconvert_str_to_bytes``, the validator
+                # of a base64 field does not decode it
+                validated[key] = (
+                    converted
+                    if use_validated and key not in cls._bytes_fields
+                    else value
+                )
         cls.merge_relation_values(target=validated, relation_values=related_values)
         return validated
 

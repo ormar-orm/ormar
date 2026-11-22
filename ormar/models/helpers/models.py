@@ -75,6 +75,7 @@ def populate_default_options_values(  # noqa: CCR001
     new_model.__relation_tree__ = None
     new_model.__relation_graph_version__ = RelationGraph.version
     new_model.__ormar_fields_validators__ = None
+    new_model.__ormar_dict_row_fields__ = None
 
 
 def check_required_config_parameters(new_model: type["Model"]) -> None:

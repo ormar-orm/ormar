@@ -1708,8 +1708,9 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
             setattr(self, key, value)
         return self
 
+    @classmethod
     def _convert_bytes_to_str(
-        self, column_name: str, value: Any
+        cls, column_name: str, value: Any
     ) -> Union[str, builtins.dict]:
         """
         Converts value to str from bytes for represent_as_base64_str columns.
@@ -1721,9 +1722,9 @@ class NewBaseModel(pydantic.BaseModel, ModelTableProxy, metaclass=ModelMetaclass
         :return: converted value if needed, else original value
         :rtype: Any
         """
-        if column_name not in self._bytes_fields:
+        if column_name not in cls._bytes_fields:
             return value
-        field = self.ormar_config.model_fields[column_name]
+        field = cls.ormar_config.model_fields[column_name]
         if (
             value is not None
             and not isinstance(value, str)

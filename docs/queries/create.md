@@ -163,15 +163,19 @@ await Track.objects.bulk_create(
 )
 ```
 
-* values are validated and converted by their field validators (`"2"` becomes `2`, a
-  date string a `date`), as in [`update()`](update.md), and a rejected value raises
-  pydantic's `ValidationError`;
+* values are validated by their field validators, as a model would validate them, and
+  stored as the validator converts them (`"2"` becomes `2`, a date string a `date`);
+  unlike [`update()`](update.md), which validates its values but writes them as passed.
+  A rejected value raises pydantic's `ValidationError`. Bytes fields take `bytes` or a
+  string (a base64 string for `represent_as_base64_str=True`), as a model does;
 * foreign keys take the related model, a dictionary with its primary key or the primary
   key itself;
 * missing fields get their `default` / default factory, a missing required field raises
   `ModelPersistenceError`;
 * fields the model does not store in its own table (unknown names, reverse and many to
-  many relations) raise `QueryDefinitionError`;
+  many relations, pydantic-only fields such as `@computed_field`) raise
+  `QueryDefinitionError`, so the output of `model_dump()` cannot always be passed as it
+  is: drop such fields first;
 * no model is built: model validators (`@model_validator`) are not run and no relations
   are registered.
 
@@ -200,15 +204,23 @@ rows = await Tag.objects.bulk_create(
 * The rows are not guaranteed to follow the order of the passed list: match them by a
   key.
 * A foreign key is returned as the primary key value of the related row (a tuple for a
-  foreign key stored in several columns).
+  foreign key stored in several columns). A field with `represent_as_base64_str=True`
+  is returned as the base64 string a model holds.
 * With `on_conflict="update"` every row needs a value for each field of
   `conflict_target`, like in `create(on_conflict="update")`.
 * With models `returning=True` raises `QueryDefinitionError`: use `create()` or reload
   them.
 
-PostgreSQL and SQLite return the rows from the insert (`INSERT ... RETURNING`), still in
-one statement per set of fields. On PostgreSQL two rows of one call must not update the
-same existing row (`ON CONFLICT DO UPDATE command cannot affect row a second time`).
+PostgreSQL and SQLite return the rows from the insert (`INSERT ... RETURNING`), batched
+into multi-row statements per set of fields. With SQLAlchemy 2.0 an
+`on_conflict="update"` call with `update_values` or `on_update` fields sends the rows
+one at a time instead (SQLAlchemy 2.0 cannot batch an upsert with parameters in its
+`SET` clause); SQLAlchemy 2.1 batches it.
+
+When two rows of one call conflict on the same key with `on_conflict="update"`,
+PostgreSQL rejects the statement (`ON CONFLICT DO UPDATE command cannot affect row a
+second time`), while SQLite applies both and returns two dictionaries for that row: the
+first one holds the values before the second update.
 MySQL has no `RETURNING`: the rows are inserted one by one and each is read back, like
 in `create(on_conflict=...)`, by the primary key or, for `on_conflict="update"`, by the
 `conflict_target` values (`NoMatch` when none matches, see the warning below). A row of

@@ -1,4 +1,6 @@
+import base64
 import datetime
+import enum
 import uuid
 from typing import Any, Optional, assert_type
 
@@ -49,8 +51,8 @@ class Item(ormar.Model):
 class Pair(ormar.Model):
     ormar_config = base_ormar_config.copy(tablename="bd_pairs")
 
-    a: int = ormar.Integer(primary_key=True, autoincrement=False)
-    b: int = ormar.Integer(primary_key=True, autoincrement=False)
+    left_id: int = ormar.Integer(primary_key=True, autoincrement=False)
+    right_id: int = ormar.Integer(primary_key=True, autoincrement=False)
     value: int = ormar.Integer(default=0)
 
 
@@ -59,9 +61,30 @@ class Booking(ormar.Model):
 
     id: int = ormar.Integer(primary_key=True)
     pair: Optional[Pair] = ormar.ForeignKey(
-        Pair, columns={"a": "pair_a", "b": "pair_b"}, related_name="bookings"
+        Pair,
+        columns={"left_id": "pair_left", "right_id": "pair_right"},
+        related_name="bookings",
     )
     slot: int = ormar.Integer(name="slot_number")
+
+
+class Color(enum.Enum):
+    RED = "red"
+    BLUE = "blue"
+
+
+class Blob(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="bd_blobs")
+
+    id: int = ormar.Integer(primary_key=True)
+    raw: bytes = ormar.LargeBinary(max_length=100)
+    encoded: str = ormar.LargeBinary(max_length=100, represent_as_base64_str=True)
+    color: Color = ormar.Enum(enum_class=Color)
+
+    @pydantic.computed_field  # type: ignore[prop-decorator]
+    @property
+    def raw_size(self) -> int:
+        return len(self.raw)
 
 
 create_test_database = init_tests(base_ormar_config)
@@ -116,8 +139,8 @@ async def test_dict_rows_are_validated() -> None:
                 await Item.objects.bulk_create(
                     [{"name": "a", "owner": Owner(name="o")}]
                 )
-            with pytest.raises(ModelPersistenceError, match="'b'"):
-                await Pair.objects.bulk_create([{"a": 1}])
+            with pytest.raises(ModelPersistenceError, match="right_id"):
+                await Pair.objects.bulk_create([{"left_id": 1}])
             assert await Item.objects.count() == 0
 
 
@@ -243,14 +266,25 @@ async def test_returning_upserted_rows() -> None:
             assert by_name["b"]["score"] == 2 and not by_name["b"]["is_dirty"]
 
             rows = await Pair.objects.bulk_create(
-                [{"a": 1, "b": 1, "value": 1}, {"a": 1, "b": 2}],
+                [
+                    {"left_id": 1, "right_id": 1, "value": 1},
+                    {"left_id": 1, "right_id": 2},
+                ],
                 on_conflict="update",
                 returning=True,
             )
-            assert sorted((row["a"], row["b"], row["value"]) for row in rows) == [
-                (1, 1, 1),
-                (1, 2, 0),
-            ]
+            assert sorted(
+                (row["left_id"], row["right_id"], row["value"]) for row in rows
+            ) == [(1, 1, 1), (1, 2, 0)]
+
+            rows = await Item.objects.bulk_create(
+                [{"name": "a", "score": 50, "extra": {"kept": True}}],
+                on_conflict="update",
+                conflict_target=["name"],
+                update_fields=["score"],
+                returning=True,
+            )
+            assert [(row["score"], row["extra"]) for row in rows] == [(50, None)]
 
             with pytest.raises(QueryDefinitionError, match="conflict target"):
                 await Item.objects.bulk_create(
@@ -262,9 +296,12 @@ async def test_returning_upserted_rows() -> None:
 async def test_returning_multi_column_foreign_key_and_aliases() -> None:
     async with base_ormar_config.database:
         async with base_ormar_config.database.transaction(force_rollback=True):
-            pair = await Pair.objects.create(a=1, b=2)
+            pair = await Pair.objects.create(left_id=1, right_id=2)
             rows = await Booking.objects.bulk_create(
-                [{"pair": pair, "slot": 1}, {"pair": {"a": 1, "b": 2}, "slot": 2}],
+                [
+                    {"pair": pair, "slot": 1},
+                    {"pair": {"left_id": 1, "right_id": 2}, "slot": 2},
+                ],
                 returning=True,
             )
             assert sorted((row["pair"], row["slot"]) for row in rows) == [
@@ -283,3 +320,45 @@ async def test_model_input_keeps_its_behaviour() -> None:
             await Item.objects.bulk_create(items)
             assert all(item.saved for item in items)
             assert await Item.objects.count() == 2
+
+
+@pytest.mark.asyncio
+async def test_dicts_with_bytes_base64_and_enums() -> None:
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            encoded = base64.b64encode(b"xyz").decode()
+            rows = await Blob.objects.bulk_create(
+                [
+                    {"raw": b"abc", "encoded": encoded, "color": "red"},
+                    {"raw": "text", "encoded": encoded, "color": Color.BLUE},
+                ],
+                returning=True,
+            )
+            blobs = {blob.id: blob for blob in await Blob.objects.all()}
+            for row in rows:
+                blob = blobs[row["id"]]
+                assert row["encoded"] == blob.encoded == encoded
+                assert row["raw"] == blob.raw
+                assert row["color"] == blob.color
+            assert {blob.raw for blob in blobs.values()} == {b"abc", b"text"}
+            assert {blob.color for blob in blobs.values()} == {Color.RED, Color.BLUE}
+            with pytest.raises(pydantic.ValidationError):
+                await Blob.objects.bulk_create(
+                    [{"raw": b"a", "encoded": encoded, "color": "green"}]
+                )
+            # pydantic-only fields are rejected, so a model_dump() needs filtering
+            dumped = Blob(raw=b"a", encoded=encoded, color=Color.RED).model_dump()
+            with pytest.raises(QueryDefinitionError, match="raw_size"):
+                await Blob.objects.bulk_create([dumped])
+
+
+@pytest.mark.asyncio
+async def test_returning_flag_typed_as_bool() -> None:
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            for flag in (False, True):
+                result = await Item.objects.bulk_create(
+                    [{"name": f"flag {flag}"}], returning=flag
+                )
+                assert_type(result, Optional[list[dict[str, Any]]])
+                assert (result is not None) == flag

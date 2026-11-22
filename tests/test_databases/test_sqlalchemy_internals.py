@@ -1,9 +1,10 @@
-"""Guards the SQLAlchemy internals that native execution relies on."""
+"""Guards the SQLAlchemy internals that native execution and bulk_create rely on."""
 
 from datetime import datetime
 
 import pytest
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.dialects.mysql.asyncmy import MySQLDialect_asyncmy
 from sqlalchemy.dialects.postgresql.asyncpg import (
     AsyncAdapt_asyncpg_connection,
@@ -11,6 +12,8 @@ from sqlalchemy.dialects.postgresql.asyncpg import (
 )
 from sqlalchemy.dialects.sqlite.aiosqlite import SQLiteDialect_aiosqlite
 from sqlalchemy.types import TypeEngine
+
+from ormar.queryset.templates import with_bound_values
 
 metadata = sa.MetaData()
 items = sa.Table(
@@ -22,6 +25,7 @@ items = sa.Table(
 )
 
 DIALECTS = [PGDialect_asyncpg, MySQLDialect_asyncmy, SQLiteDialect_aiosqlite]
+SQLALCHEMY_VERSION = tuple(int(part) for part in sa.__version__.split(".")[:3])
 
 
 def compile_with_key(stmt, dialect):
@@ -67,5 +71,35 @@ def test_asyncpg_adapter_internals_exist():
 
 
 def test_sqlalchemy_version_in_pinned_range():
-    version = tuple(int(part) for part in sa.__version__.split(".")[:3])
-    assert (2, 0, 50) <= version < (2, 2)
+    assert (2, 0, 50) <= SQLALCHEMY_VERSION < (2, 2)
+
+
+@pytest.mark.skipif(
+    SQLALCHEMY_VERSION < (2, 1),
+    reason="SQLAlchemy 2.0 sends an upsert with bound SET values row by row",
+)
+@pytest.mark.parametrize(
+    "insert_module, dialect_cls",
+    [(postgresql, PGDialect_asyncpg), (sqlite, SQLiteDialect_aiosqlite)],
+)
+def test_upsert_with_bound_values_is_batched(insert_module, dialect_cls):
+    """
+    bulk_create(returning=True) relies on SQLAlchemy batching an upsert with
+    RETURNING into multi-row VALUES once the values of its SET clause are set in
+    the statement (with_bound_values); with parameters there it goes row by row.
+    """
+    upsert = (
+        insert_module.insert(items)
+        .values(name=sa.bindparam("ormar_v0"))
+        .on_conflict_do_update(
+            index_elements=["id"],
+            set_={"name": sa.bindparam("ormar_u0", type_=sa.String(50))},
+        )
+        .returning(items.c.id)
+    )
+    parametrized = upsert._compiler(dialect_cls(), for_executemany=True)
+    assert parametrized._insertmanyvalues.has_upsert_bound_parameters
+    bound = with_bound_values(statement=upsert, values={"ormar_u0": "a"})
+    compiled = bound._compiler(dialect_cls(), for_executemany=True)
+    assert compiled._insertmanyvalues is not None
+    assert not compiled._insertmanyvalues.has_upsert_bound_parameters
