@@ -28,6 +28,14 @@ with ``==``, ``!=``, ``<``, ``<=``, ``>``, ``>=`` or the lookup methods of
     Member.objects.filter(Func("lower", F("team__name")).icontains("red"))
     Slot.objects.exclude((F("capacity") - F("taken")) < 2)
 
+``Case`` picks the value of the first ``When`` whose condition, written
+like the arguments of ``filter()``, holds::
+
+    order = [7, 3, 5]
+    Item.objects.filter(id__in=order).update(
+        rank=Case(*(When(id=pk, then=rank) for rank, pk in enumerate(order, 1)))
+    )
+
 ``Model.field`` accessors are expressions themselves, ``F("path")`` names a
 field by its path. ``Expression`` defines only dunders and underscored names,
 so it never shadows a field reached through a ``FieldAccessor``, which has
@@ -48,6 +56,7 @@ from typing import (
     cast,
 )
 
+import sqlalchemy
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import operators as sql_operators
 from sqlalchemy.sql.compiler import SQLCompiler
@@ -61,6 +70,7 @@ import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
 
 if TYPE_CHECKING:  # pragma: no cover
+    from ormar.queryset.actions.filter_action import FilterAction
     from ormar.queryset.actions.query_action import QueryAction
     from ormar.queryset.clause import FilterGroup
 
@@ -389,6 +399,101 @@ class Random(Expression):
     """
 
 
+class When:
+    """
+    Branch of a ``Case``: its value ``then`` where the condition holds. The
+    condition takes the arguments of ``filter()``: keyword filters with
+    operators, ``ormar.and_()`` / ``ormar.or_()`` groups, ``Model.field == v``
+    and comparisons of expressions::
+
+        When(id=7, then=1)
+        When(ormar.or_(score__gt=10, team__name="red"), then=F("bonus") + 1)
+        When(Func("lower", F("name")) == "ann", then=None)
+
+    Conditions read the model's own fields and the fields of models reached
+    through foreign keys, not reverse or many to many relations. A field named
+    ``then`` is filtered as ``then__exact``.
+    """
+
+    def __init__(self, *groups: "FilterGroup", then: Any, **kwargs: Any) -> None:
+        """
+        :param groups: filter groups of the condition
+        :type groups: FilterGroup
+        :param then: value of the branch, a literal (None, True and False
+            are written into the SQL) or an expression
+        :type then: Any
+        :param kwargs: keyword filters of the condition
+        :type kwargs: Any
+        :raises QueryDefinitionError: if there is no condition
+        """
+        if not groups and not kwargs:
+            raise QueryDefinitionError("When() needs a condition")
+        self.condition = ormar.queryset.clause.FilterGroup(*groups, **kwargs)
+        self.then = then._node() if isinstance(then, Expression) else then
+        # set on the copies resolved for a query (see ``resolve_expression``)
+        self.number = 0
+        self.actions: list["FilterAction"] = []
+
+    def slot_prefix(self, slot: str) -> str:
+        """
+        :param slot: slot name of the expression
+        :type slot: str
+        :return: prefix of the slot names of the condition's filter values,
+            ``{slot}_w{number}_``
+        :rtype: str
+        """
+        return f"{slot}_w{self.number}_"
+
+
+class Case(Comparable, Expression):
+    """
+    SQL ``CASE``: the ``then`` of the first ``When`` whose condition holds,
+    else ``default`` (``NULL`` when not given)::
+
+        Case(When(score__gte=10, then="high"), When(score__gte=5, then="mid"))
+        Case(When(team__name="red", then=F("score") * 2), default=F("score"))
+
+    Literal values are typed after the column the ``Case`` is written to or
+    compared with, else after its first expression value. Every number of
+    branches builds its own statement, kept in the model's statement cache.
+    """
+
+    def __init__(self, *whens: When, default: Any = None) -> None:
+        """
+        :param whens: branches in the order they are checked
+        :type whens: When
+        :param default: value where no condition holds, a literal or an
+            expression
+        :type default: Any
+        :raises QueryDefinitionError: if there is no branch or an argument is
+            not a ``When``
+        """
+        if not whens or not all(isinstance(when, When) for when in whens):
+            raise QueryDefinitionError(
+                "Case() takes one or more When() branches as positional arguments"
+            )
+        self._whens = list(whens)
+        self._default = default._node() if isinstance(default, Expression) else default
+
+    def _values(self) -> list[Any]:
+        """
+        :return: the values of the branches, then the default
+        :rtype: list[Any]
+        """
+        return [*(when.then for when in self._whens), self._default]
+
+
+def is_sql_constant(value: Any) -> bool:
+    """
+    :param value: value of a ``Case`` branch
+    :type value: Any
+    :return: whether the value is None or a bool, written into the SQL as
+        ``NULL``, ``true`` or ``false`` instead of bound
+    :rtype: bool
+    """
+    return value is None or isinstance(value, bool)
+
+
 class GreatestOf(ReturnTypeFromArgs):
     """SQL ``greatest()``, the scalar ``max()`` on SQLite."""
 
@@ -458,6 +563,14 @@ def compile_random_on_sqlite(
     return "(abs(random() % 9007199254740992) / 9007199254740992.0)"
 
 
+# ``Case`` values written into the SQL instead of bound
+SQL_CONSTANTS: dict[Optional[bool], Callable[[], Any]] = {
+    None: sqlalchemy.null,
+    True: sqlalchemy.true,
+    False: sqlalchemy.false,
+}
+
+
 SQL_FUNCTIONS: dict[str, Callable[..., Any]] = {
     "greatest": GreatestOf,
     "least": LeastOf,
@@ -481,8 +594,74 @@ def expression_leaves(node: Any) -> Iterator[Any]:
     elif isinstance(node, Function):
         for argument in node._arguments:
             yield from expression_leaves(node=argument)
+    elif isinstance(node, Case):
+        for value in node._values():
+            if not is_sql_constant(value=value):
+                yield from expression_leaves(node=value)
     elif not isinstance(node, Random):
         yield node
+
+
+def expression_whens(node: Any) -> Iterator[When]:
+    """
+    Yield the ``When`` branches of the ``Case`` expressions in an expression,
+    nested ones included.
+
+    :param node: expression node or a value
+    :type node: Any
+    :return: branches
+    :rtype: Iterator[When]
+    """
+    if isinstance(node, Combined):
+        yield from expression_whens(node=node._left)
+        yield from expression_whens(node=node._right)
+    elif isinstance(node, Function):
+        for argument in node._arguments:
+            yield from expression_whens(node=argument)
+    elif isinstance(node, Case):
+        for when in node._whens:
+            yield when
+            yield from expression_whens(node=when.then)
+        yield from expression_whens(node=node._default)
+
+
+def expression_conditions(node: Any) -> Iterator["FilterAction"]:
+    """
+    Yield the filter actions of the ``When`` conditions in a resolved
+    expression (see ``resolve_expression``), whose relation paths are joined
+    like the fields the expression reads.
+
+    :param node: resolved expression node or a value
+    :type node: Any
+    :return: filter actions of the conditions
+    :rtype: Iterator[FilterAction]
+    """
+    for when in expression_whens(node=node):
+        yield from when.actions
+
+
+def condition_params(node: Any, slot: str) -> dict[str, Any]:
+    """
+    Return the values bound by the ``When`` conditions of a resolved
+    expression, named like ``case_clause`` names them::
+
+        Case(When(id=7, then=1))  # slot ormar_v0 -> {"ormar_v0_w0_0": 7}
+
+    :param node: resolved expression node or a value
+    :type node: Any
+    :param slot: slot name of the expression
+    :type slot: str
+    :return: values by bind parameter name
+    :rtype: dict[str, Any]
+    """
+    params: dict[str, Any] = {}
+    for when in expression_whens(node=node):
+        params.update(
+            ormar.queryset.templates.action_params(
+                actions=when.actions, prefix=when.slot_prefix(slot=slot)
+            )
+        )
+    return params
 
 
 def expression_key(node: Any) -> Any:
@@ -497,6 +676,11 @@ def expression_key(node: Any) -> Any:
         # -> ("length", (("f", "a"),), (Integer, "Integer()"))
         Random()  # -> ("random",)
         Inserted("a")  # -> ("inserted", "a")
+        Case(When(id=7, then=1), default=None)
+        # -> ("case", ((<condition key>, int),), ("constant", None))
+
+    The conditions of a ``Case`` are keyed like filter clauses (see
+    ``clauses_cache_key``), so the expression has to be resolved.
 
     :param node: expression node
     :type node: Any
@@ -517,6 +701,20 @@ def expression_key(node: Any) -> Any:
         if node._type is None:
             return function_key
         return (*function_key, (type(node._type), repr(node._type)))
+    if isinstance(node, Case):
+        return (
+            "case",
+            tuple(
+                (
+                    ormar.queryset.templates.clauses_cache_key(
+                        clauses=[when.condition]
+                    ),
+                    case_value_key(value=when.then),
+                )
+                for when in node._whens
+            ),
+            case_value_key(value=node._default),
+        )
     if isinstance(node, Random):
         return ("random",)
     if isinstance(node, Inserted):
@@ -524,10 +722,24 @@ def expression_key(node: Any) -> Any:
     return ("f", node._path) if isinstance(node, F) else type(node)
 
 
+def case_value_key(value: Any) -> Any:
+    """
+    :param value: value of a ``Case`` branch
+    :type value: Any
+    :return: the value itself if written into the SQL (None, True, False),
+        else its ``expression_key``
+    :rtype: Any
+    """
+    if is_sql_constant(value=value):
+        return ("constant", value)
+    return expression_key(node=value)
+
+
 def expression_params(value: Any, slot: str) -> dict[str, Any]:
     """
     Return the values bound for a slot: the value itself, or for an expression
-    its literals named ``{slot}_{k}`` (as ``expression_clause`` names them).
+    its literals named ``{slot}_{k}`` (as ``expression_clause`` names them)
+    and the values of its ``When`` conditions (see ``condition_params``).
 
     :param value: bound value or expression
     :type value: Any
@@ -538,7 +750,10 @@ def expression_params(value: Any, slot: str) -> dict[str, Any]:
     """
     if not isinstance(value, Expression):
         return {slot: value}
-    return slot_literals(literals=expression_literals(node=value), slot=slot)
+    return {
+        **slot_literals(literals=expression_literals(node=value), slot=slot),
+        **condition_params(node=value, slot=slot),
+    }
 
 
 def expression_literals(node: Any) -> list[Any]:
@@ -615,6 +830,15 @@ def expression_clause(
     if isinstance(node, Random):
         return RandomFloat()
     index = index or itertools.count()
+    if isinstance(node, Case):
+        return case_clause(
+            node=node,
+            columns=columns,
+            slot=slot,
+            index=index,
+            inserted=inserted,
+            reference_type=reference_type,
+        )
     if isinstance(node, Function):
         return function_clause(
             node=node,
@@ -735,3 +959,86 @@ def function_clause(
         type_=node._type if node._type is not None else argument_type,
         packagenames=tuple(packagenames),
     )
+
+
+def case_clause(
+    node: Case,
+    columns: Mapping[str, "QueryAction"],
+    slot: Optional[str],
+    index: Iterator[int],
+    inserted: Any = None,
+    reference_type: Optional[TypeEngine] = None,
+) -> Any:
+    """
+    Build the SQL ``CASE`` of a resolved ``Case`` (see ``resolve_expression``).
+
+    The conditions are built like filters, their values named by a
+    ``SlotBinder`` with the prefix ``{slot}_w{number}_`` of each branch.
+    Literal values are named ``{slot}_{k}`` like the literals of
+    ``expression_clause``, in the order of the branches and the default, and
+    typed after ``reference_type``, else after the first expression value.
+    None, True and False are written into the SQL.
+
+    :param node: resolved case node
+    :type node: Case
+    :param columns: resolved field actions by field path
+    :type columns: Mapping[str, QueryAction]
+    :param slot: slot name of a statement template, if built for one
+    :type slot: Optional[str]
+    :param index: counter of the literals already named
+    :type index: Iterator[int]
+    :param inserted: columns of the inserted row of an upsert
+    :type inserted: Any
+    :param reference_type: type of the compared or written column
+    :type reference_type: Optional[TypeEngine]
+    :return: SQL case
+    :rtype: Any
+    """
+    conditions = [
+        when.condition.get_text_clause(
+            binder=ormar.queryset.templates.SlotBinder(
+                actions=when.actions, prefix=when.slot_prefix(slot=slot)
+            )
+            if slot is not None
+            else None
+        )
+        for when in node._whens
+    ]
+    # literals are named in branch order, but typed after the first
+    # expression value, which may come later
+    values = node._values()
+    expression_clauses: dict[int, Any] = {}
+    literal_keys: dict[int, Optional[str]] = {}
+    for position, value in enumerate(values):
+        if isinstance(value, Expression):
+            expression_clauses[position] = expression_clause(
+                node=value,
+                columns=columns,
+                slot=slot,
+                index=index,
+                inserted=inserted,
+                reference_type=reference_type,
+            )
+        elif not is_sql_constant(value=value):
+            literal_keys[position] = f"{slot}_{next(index)}" if slot else None
+    literal_type = (
+        reference_type
+        if reference_type is not None
+        else next((clause.type for clause in expression_clauses.values()), None)
+    )
+    value_clauses = [
+        expression_clauses[position]
+        if position in expression_clauses
+        else SQL_CONSTANTS[value]()
+        if is_sql_constant(value=value)
+        else BindParameter(
+            key=literal_keys[position],
+            value=value,
+            unique=literal_keys[position] is None,
+            _compared_to_operator=sql_operators.eq,
+            _compared_to_type=literal_type,
+        )
+        for position, value in enumerate(values)
+    ]
+    *then_clauses, default_clause = value_clauses
+    return sqlalchemy.case(*zip(conditions, then_clauses), else_=default_clause)

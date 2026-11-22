@@ -1,3 +1,4 @@
+import copy
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Generator, Optional, Union, cast
 
@@ -66,6 +67,19 @@ class FilterGroup:
     def __invert__(self) -> "FilterGroup":
         self.exclude = not self.exclude
         return self
+
+    def copy_tree(self) -> "FilterGroup":
+        """
+        :return: unresolved copy of the group and its nested groups, resolved
+            per query without touching the group the user built (see
+            ``resolve_expression``)
+        :rtype: FilterGroup
+        """
+        duplicate = copy.copy(self)
+        duplicate._nested_groups = [group.copy_tree() for group in self._nested_groups]
+        duplicate._resolved = False
+        duplicate.actions = []
+        return duplicate
 
     def resolve(
         self,

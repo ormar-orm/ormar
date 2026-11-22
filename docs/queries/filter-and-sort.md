@@ -277,6 +277,29 @@ The comparisons work on `F()`, arithmetic and functions only. A field accessor
 (`Model.field`) has comparisons of its own (see Python style filters), so wrap
 it in a function to filter on an expression of it: `Func("lower", Track.name) == "a"`.
 
+### Conditional expressions
+
+`ormar.Case` and `ormar.When` (see
+[conditional expressions in updates](update.md#conditional-expressions)) work as a
+filter value and as the filtered side. Their conditions take the arguments of
+`filter()`, fields of models reached through foreign keys are joined:
+
+```python
+from ormar import Case, F, When
+
+level = Case(When(score__gte=100, then="gold"), default="bronze")
+# WHERE players.level = CASE WHEN (players.score >= 100) THEN 'gold' ELSE 'bronze' END
+await Player.objects.filter(level=level).all()
+
+await Player.objects.filter(level.in_(["gold", "silver"])).all()
+await Player.objects.filter(
+    Case(When(team__name="red", then=F("score") * 2), default=F("score")) > 50
+).all()
+```
+
+A literal value of a branch is bound with the type of the filtered field, else of
+the first expression among the values.
+
 ### exclude
 
 `exclude(*args, **kwargs) -> QuerySet`

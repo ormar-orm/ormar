@@ -9,16 +9,22 @@ from sqlalchemy.sql.elements import BindParameter
 import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.query_action import QueryAction
-from ormar.queryset.actions.select_action import SelectAction, expression_columns
+from ormar.queryset.actions.select_action import (
+    SelectAction,
+    expression_paths,
+    resolve_expression,
+)
 from ormar.queryset.expressions import (
     Combined,
     Expression,
     Func,
     Function,
+    condition_params,
     expression_clause,
     expression_key,
     expression_literals,
     expression_params,
+    expression_whens,
     slot_literals,
 )
 
@@ -225,15 +231,24 @@ class FilterAction(QueryAction):
         super().__init__(query_str=filter_str, model_cls=model_cls)
         self.expression_columns: dict[str, SelectAction] = {}
         if isinstance(value, Expression):
-            value = value._node()
             if self.operator not in ("exact", "ne", "gt", "gte", "lt", "lte"):
                 raise QueryDefinitionError(
                     f"Expressions only take exact, ne, gt, gte, lt and lte filters, "
                     f"not '{self.operator}'"
                 )
-            self.expression_columns = expression_columns(node=value, model=model_cls)
+            value, self.expression_columns = resolve_expression(
+                node=value._node(), model=model_cls
+            )
         self.filter_value = value
         self._escape_characters_in_clause()
+
+    def value_paths(self) -> list[QueryAction]:
+        """
+        :return: the fields an expression value reads, its ``When``
+            conditions included, each resolving one relation path
+        :rtype: list[QueryAction]
+        """
+        return expression_paths(node=self.filter_value, columns=self.expression_columns)
 
     def path_actions(self) -> list[QueryAction]:
         """
@@ -241,7 +256,7 @@ class FilterAction(QueryAction):
             one relation path to a joined table
         :rtype: list[QueryAction]
         """
-        return [self, *self.expression_columns.values()]
+        return [self, *self.value_paths()]
 
     def update_select_related(self, select_related: list[str]) -> list[str]:
         """
@@ -254,7 +269,7 @@ class FilterAction(QueryAction):
         :rtype: list[str]
         """
         select_related = super().update_select_related(select_related=select_related)
-        for column in self.expression_columns.values():
+        for column in self.value_paths():
             select_related = column.update_select_related(select_related=select_related)
         return select_related
 
@@ -429,9 +444,12 @@ class ExpressionFilterAction(FilterAction):
             missing field, or an expression value is used with other operators
             than comparisons
         """
-        self.lhs = lhs._node()
-        self.lhs_columns = expression_columns(node=self.lhs, model=model_cls)
         super().__init__(filter_str=operator, value=value, model_cls=model_cls)
+        self.lhs, self.lhs_columns = resolve_expression(
+            node=lhs._node(),
+            model=model_cls,
+            first_branch=sum(1 for _ in expression_whens(node=self.filter_value)),
+        )
 
     def _split_value_into_parts(self, query_str: str) -> None:
         """
@@ -451,7 +469,10 @@ class ExpressionFilterAction(FilterAction):
             to a joined table
         :rtype: list[QueryAction]
         """
-        return [*self.lhs_columns.values(), *self.expression_columns.values()]
+        return [
+            *expression_paths(node=self.lhs, columns=self.lhs_columns),
+            *self.value_paths(),
+        ]
 
     def update_select_related(self, select_related: list[str]) -> list[str]:
         """
@@ -508,7 +529,8 @@ class ExpressionFilterAction(FilterAction):
         """
         Return the literals of the filtered expression, then the value or the
         literals of an expression value, named in the order
-        ``get_text_clause`` builds them.
+        ``get_text_clause`` builds them, and the values of the ``When``
+        conditions of both sides.
 
         :param slot: slot name of the action
         :type slot: str
@@ -521,7 +543,11 @@ class ExpressionFilterAction(FilterAction):
             literals += expression_literals(node=value)
         elif self.binds_slot():
             literals.append(value)
-        return slot_literals(literals=literals, slot=slot)
+        return {
+            **slot_literals(literals=literals, slot=slot),
+            **condition_params(node=self.lhs, slot=slot),
+            **condition_params(node=value, slot=slot),
+        }
 
     def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
         """

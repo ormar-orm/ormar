@@ -84,6 +84,7 @@ from ormar.models import (
     snake_case_tablename,
 )
 from ormar.queryset import (
+    Case,
     Coalesce,
     F,
     Func,
@@ -96,6 +97,7 @@ from ormar.queryset import (
     QuerySet,
     Random,
     RandomOrder,
+    When,
     and_,
     or_,
     random,
@@ -166,6 +168,7 @@ __all__ = [
     "NullsOrdering",
     "ExcludableItems",
     "and_",
+    "Case",
     "Coalesce",
     "F",
     "Func",
@@ -173,6 +176,7 @@ __all__ = [
     "Inserted",
     "Least",
     "Random",
+    "When",
     "or_",
     "EncryptBackends",
     "ENCODERS_MAP",

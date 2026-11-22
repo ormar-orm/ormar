@@ -30,7 +30,10 @@ import ormar
 from ormar.models.model_row import ModelRow, RowExtractionPlan
 from ormar.queryset import FilterQuery
 from ormar.queryset import queryset as queryset_module
-from ormar.queryset.actions.select_action import expression_columns
+from ormar.queryset.actions.select_action import (
+    expression_columns,
+    expression_paths,
+)
 from ormar.queryset.expressions import Expression, expression_clause
 from ormar.queryset.queryset import QuerySet, forward_join_conditions
 from ormar.queryset.templates import StatementTemplate, insert_template
@@ -308,10 +311,10 @@ def checked_write_template(
         for name in sorted(values):
             if isinstance(values[name], Expression):
                 columns = expression_columns(node=values[name], model=self.model)
-                for column in columns.values():
+                for path in expression_paths(node=values[name], columns=columns):
                     join_conditions.update(
                         forward_join_conditions(
-                            model=self.model, path=column.related_parts
+                            model=self.model, path=path.related_parts
                         )
                     )
         for conditions in join_conditions.values():

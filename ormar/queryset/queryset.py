@@ -32,7 +32,10 @@ from ormar.queryset.actions.order_action import (
     RandomOrder,
     expand_pk_orders,
 )
-from ormar.queryset.actions.select_action import expression_columns
+from ormar.queryset.actions.select_action import (
+    expression_paths,
+    resolve_expression,
+)
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.expressions import (
     Expression,
@@ -1473,21 +1476,17 @@ class QuerySet(Generic[T]):
             if field_name in self_fields
         }
         updates = self.model.populate_onupdate_value(updates)
-        expressions = {
-            field_name: value._node()
-            for field_name, value in updates.items()
-            if isinstance(value, Expression)
-        }
-        for name, node in expressions.items():
-            columns = expression_columns(node=node, model=self.model)
-            for column in columns.values():
+        expressions = {}
+        for name, value in updates.items():
+            if not isinstance(value, Expression):
+                continue
+            node, columns = resolve_expression(node=value._node(), model=self.model)
+            expressions[name] = node
+            paths = expression_paths(node=node, columns=columns)
+            for path in paths:
                 # only validates the path here, the joins are built with the statement
-                forward_join_conditions(model=self.model, path=column.related_parts)
-            read = [
-                column.field_name
-                for column in columns.values()
-                if not column.related_parts
-            ]
+                forward_join_conditions(model=self.model, path=path.related_parts)
+            read = [path.field_name for path in paths if not path.related_parts]
             if name in self.model.extract_related_names() or any(
                 field != name and field in updates for field in read
             ):

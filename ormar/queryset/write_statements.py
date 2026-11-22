@@ -21,7 +21,10 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, cast
 import sqlalchemy
 
 from ormar.exceptions import QueryDefinitionError
-from ormar.queryset.actions.select_action import expression_columns
+from ormar.queryset.actions.select_action import (
+    expression_columns,
+    expression_paths,
+)
 from ormar.queryset.expressions import Expression, expression_clause
 from ormar.queryset.queries import FilterQuery
 from ormar.queryset.templates import (
@@ -100,18 +103,19 @@ class WriteStatement(abc.ABC):
         names = tuple(sorted(self.values))
         assignments = value_binds(table=self.table, names=names)
         for index, name in enumerate(names):
-            if isinstance(self.values[name], Expression):
-                columns = expression_columns(node=self.values[name], model=self.model)
+            node = self.values[name]
+            if isinstance(node, Expression):
+                columns = expression_columns(node=node, model=self.model)
                 assignments[self.table.c[name]] = expression_clause(
-                    node=self.values[name],
+                    node=node,
                     columns=columns,
                     slot=f"ormar_v{index}",
                     reference_type=self.table.c[name].type,
                 )
-                for column in columns.values():
+                for path in expression_paths(node=node, columns=columns):
                     self.join_conditions.update(
                         forward_join_conditions(
-                            model=self.model, path=column.related_parts
+                            model=self.model, path=path.related_parts
                         )
                     )
         return assignments

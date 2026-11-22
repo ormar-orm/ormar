@@ -43,6 +43,16 @@
 
     Comparisons of `F()` and expressions now return filters: `F("a") == x` used to be `False`, `F("a") < x` raised `TypeError`.
 
+* **Conditional expressions: `ormar.Case` and `ormar.When`**
+
+    `Case(*whens, default=None)` takes the value of the first `When` whose condition holds. Conditions take the arguments of `filter()` (keyword filters, `and_()` / `or_()`, `Model.field == value`, comparisons of expressions) on own fields and fields reached through foreign keys; values are literals or expressions. Works in `update()`, upsert `update_values`, filter values and as the filtered side. See [conditional expressions](queries/update.md#conditional-expressions).
+
+    ```python
+    await Item.objects.filter(id__in=order).update(
+        rank=Case(*(When(id=pk, then=rank) for rank, pk in enumerate(order, 1)))
+    )
+    ```
+
 ### 🐛 Fixes
 
 * **Several filter groups in one `filter()` keep each other's joins**
