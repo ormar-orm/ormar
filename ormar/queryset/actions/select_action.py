@@ -1,15 +1,18 @@
 import copy
 import decimal
 import itertools
-from typing import TYPE_CHECKING, Any, Callable, Iterator
+from typing import TYPE_CHECKING, Any, Callable, Iterator, cast
 
 import sqlalchemy
 
 from ormar.exceptions import QueryDefinitionError  # noqa: I202
 from ormar.queryset.actions.query_action import QueryAction
 from ormar.queryset.expressions import (
+    Aggregate,
+    AggregateSource,
     Case,
     Combined,
+    Count,
     F,
     Function,
     Inserted,
@@ -19,7 +22,9 @@ from ormar.queryset.expressions import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover
-    from ormar import Model
+    from ormar import ForeignKeyField, Model
+    from ormar.queryset.actions.filter_action import FilterAction
+    from ormar.queryset.clause import FilterGroup
 
 
 class SelectAction(QueryAction):
@@ -122,14 +127,16 @@ def resolve_expression(
 ) -> tuple[Any, dict[str, SelectAction]]:
     """
     Resolve an expression for a query from ``model``: the fields it reads (see
-    ``expression_columns``) and the conditions of its ``When`` branches,
-    resolved into filter actions like ``filter()`` arguments. The actions are
-    kept on copies of the ``Case`` and ``When`` nodes and of the nodes
-    holding them, so an expression can be reused in other queries.
+    ``expression_columns``), the conditions of its ``When`` branches,
+    resolved into filter actions like ``filter()`` arguments, and its
+    aggregates (see ``resolve_aggregate``). The actions are kept on copies of
+    the ``Case``, ``When`` and aggregate nodes and of the nodes holding them,
+    so an expression can be reused in other queries.
 
-    Branches are numbered from ``first_branch`` to name the slots of their
-    conditions (see ``When.slot_prefix``); the two sides of a filter share
-    one slot, so the second side continues the numbering of the first.
+    Branches and aggregates are numbered from ``first_branch`` to name the
+    slots of their conditions (see ``When.slot_prefix``); the two sides of a
+    filter share one slot, so the second side continues the numbering of the
+    first.
 
     :param node: expression node
     :type node: Any
@@ -144,7 +151,8 @@ def resolve_expression(
     :raises QueryDefinitionError: if a field is not allowed (see
         ``expression_columns``) or a condition reads a related model through a
         reverse or many to many relation, or in an update or upsert any
-        related model
+        related model, or an aggregate is not allowed (see
+        ``resolve_aggregate``)
     :return: resolved expression and its fields by path
     :rtype: tuple[Any, dict[str, SelectAction]]
     """
@@ -166,8 +174,9 @@ def resolve_branches(
     numbers: Iterator[int],
 ) -> Any:
     """
-    Copy the nodes of an expression down to its ``When`` branches and resolve
-    the copies of the branches (see ``resolve_when``).
+    Copy the nodes of an expression down to its ``When`` branches and
+    aggregates and resolve the copies (see ``resolve_when`` and
+    ``resolve_aggregate``).
 
     :param node: expression node or a literal
     :type node: Any
@@ -220,7 +229,182 @@ def resolve_branches(
             numbers=numbers,
         )
         return case
+    if isinstance(node, Aggregate):
+        return resolve_aggregate(
+            aggregate=node, model=model, upsert=upsert, numbers=numbers
+        )
     return node
+
+
+def resolve_condition(
+    condition: "FilterGroup",
+    model: type["Model"],
+    upsert: bool,
+    update: bool,
+    owner: str,
+) -> tuple["FilterGroup", list["FilterAction"]]:
+    """
+    Resolve a copy of a condition into filter actions, in the order
+    ``FilterGroup.get_text_clause`` builds them, reading related models only
+    through foreign keys (see ``check_condition_path``).
+
+    :param condition: condition as given
+    :type condition: FilterGroup
+    :param model: model the condition filters
+    :type model: type[Model]
+    :param upsert: the condition is in ``update_values`` of an upsert
+    :type upsert: bool
+    :param update: the condition is in a value of ``update()``
+    :type update: bool
+    :param owner: what the condition belongs to, for error messages
+    :type owner: str
+    :return: resolved copy of the condition and its filter actions
+    :rtype: tuple[FilterGroup, list[FilterAction]]
+    """
+    resolved = condition.copy_tree()
+    resolved.resolve(model_cls=model, upsert=upsert)
+    actions = list(resolved._iter())
+    for action in actions:
+        for path in action.path_actions():
+            check_condition_path(
+                model=model,
+                path=path.related_parts,
+                upsert=upsert,
+                update=update,
+                owner=owner,
+            )
+    return resolved, actions
+
+
+def resolve_aggregate(
+    aggregate: Aggregate,
+    model: type["Model"],
+    upsert: bool,
+    numbers: Iterator[int],
+) -> Aggregate:
+    """
+    Copy an aggregate with its rows resolved from ``model`` (see
+    ``aggregate_source``) and its filter resolved into filter actions of the
+    related model, like ``When`` conditions (see ``resolve_condition``).
+
+    :param aggregate: aggregate as given
+    :type aggregate: Aggregate
+    :param model: queried model
+    :type model: type[Model]
+    :param upsert: the expression is a value of an upsert's ``update_values``
+    :type upsert: bool
+    :param numbers: numbers of the branches and aggregates
+    :type numbers: Iterator[int]
+    :raises QueryDefinitionError: if the aggregate is in an upsert, its path
+        is not allowed (see ``aggregate_source``) or its filter reads a
+        related model through a reverse or many to many relation
+    :return: resolved aggregate
+    :rtype: Aggregate
+    """
+    name = type(aggregate).__name__
+    if upsert:
+        raise QueryDefinitionError(
+            f"{name}() is not allowed in update_values of an upsert"
+        )
+    duplicate = copy.copy(aggregate)
+    duplicate.number = next(numbers)
+    duplicate.source = aggregate_source(aggregate=aggregate, model=model)
+    if aggregate.condition is not None:
+        duplicate.condition, duplicate.actions = resolve_condition(
+            condition=aggregate.condition,
+            model=duplicate.source.root,
+            upsert=False,
+            update=False,
+            owner=f"{name}() filters",
+        )
+    return duplicate
+
+
+def aggregate_source(aggregate: Aggregate, model: type["Model"]) -> AggregateSource:
+    """
+    Resolve the path of an aggregate from ``model``: its first step is a
+    reverse foreign key or a many to many relation, the related model, the
+    next steps foreign keys, then the aggregated field. ``Count`` may end in
+    a relation, counting the rows of its model (all related rows when the
+    path is the first relation only).
+
+    :param aggregate: aggregate as given
+    :type aggregate: Aggregate
+    :param model: queried model
+    :type model: type[Model]
+    :raises QueryDefinitionError: if the path does not start with a reverse
+        foreign key or many to many relation, continues through another
+        relation than a foreign key, names a missing field, ends in a relation
+        for another aggregate than ``Count``, or a distinct ``Count`` of rows
+        has a primary key of several columns
+    :return: resolved rows of the aggregate
+    :rtype: AggregateSource
+    """
+    name = type(aggregate).__name__
+    first, *rest = aggregate._path.split("__")
+    relation = model.ormar_config.model_fields.get(first)
+    if (
+        relation is None
+        or not relation.is_relation
+        or not (relation.is_multi or relation.virtual)
+    ):
+        raise QueryDefinitionError(
+            f"{name}('{aggregate._path}') has to start with a reverse foreign key "
+            f"or many to many relation of {model.get_name(lower=False)}; to "
+            f"aggregate fields of the queried rows use queryset.{name.lower()}()"
+        )
+    if relation.is_through:
+        raise QueryDefinitionError(
+            f"{name}('{aggregate._path}') starts with a through model, name its "
+            f"many to many relation instead"
+        )
+    relation_field = cast("ForeignKeyField", relation)
+    root = relation.to
+    target_model = root
+    for position, part in enumerate(rest):
+        field = target_model.ormar_config.model_fields.get(part)
+        if field is None:
+            raise QueryDefinitionError(
+                f"{name}('{aggregate._path}'): {target_model.get_name(lower=False)} "
+                f"has no field '{part}'"
+            )
+        if not field.is_relation:
+            if position != len(rest) - 1:
+                raise QueryDefinitionError(
+                    f"{name}('{aggregate._path}'): '{part}' is not a relation"
+                )
+            return AggregateSource(
+                parent=model,
+                relation=relation_field,
+                root=root,
+                target=SelectAction(select_str="__".join(rest), model_cls=root),
+            )
+        if field.is_multi or field.virtual or field.is_through:
+            raise QueryDefinitionError(
+                f"{name}('{aggregate._path}') continues after its first relation "
+                f"only through foreign keys, '{part}' is a reverse or many to many "
+                f"relation"
+            )
+        target_model = field.to
+    if not isinstance(aggregate, Count):
+        raise QueryDefinitionError(
+            f"{name}('{aggregate._path}') has to end in a non-relation field"
+        )
+    target = None
+    if rest or aggregate._distinct:
+        key_fields = target_model.ormar_config.pk.fields
+        if aggregate._distinct and len(key_fields) > 1:
+            raise QueryDefinitionError(
+                f"{name}('{aggregate._path}', distinct=True) counts rows of "
+                f"{target_model.get_name(lower=False)}, whose primary key has "
+                f"several columns: count a field instead"
+            )
+        target = SelectAction(
+            select_str="__".join([*rest, key_fields[0]]), model_cls=root
+        )
+    return AggregateSource(
+        parent=model, relation=relation_field, root=root, target=target
+    )
 
 
 def resolve_when(
@@ -252,14 +436,13 @@ def resolve_when(
     """
     duplicate = copy.copy(when)
     duplicate.number = next(numbers)
-    duplicate.condition = when.condition.copy_tree()
-    duplicate.condition.resolve(model_cls=model, upsert=upsert)
-    duplicate.actions = list(duplicate.condition._iter())
-    for action in duplicate.actions:
-        for path in action.path_actions():
-            check_condition_path(
-                model=model, path=path.related_parts, upsert=upsert, update=update
-            )
+    duplicate.condition, duplicate.actions = resolve_condition(
+        condition=when.condition,
+        model=model,
+        upsert=upsert,
+        update=update,
+        owner="When() conditions",
+    )
     duplicate.then = resolve_branches(
         node=when.then, model=model, upsert=upsert, update=update, numbers=numbers
     )
@@ -267,11 +450,12 @@ def resolve_when(
 
 
 def check_condition_path(
-    model: type["Model"], path: list[str], upsert: bool, update: bool
+    model: type["Model"], path: list[str], upsert: bool, update: bool, owner: str
 ) -> None:
     """
-    Allow ``When`` conditions to read related models only through foreign
-    keys, which match at most one row, and in an update or upsert none.
+    Allow ``When`` conditions and aggregate filters to read related models
+    only through foreign keys, which match at most one row, and ``When``
+    conditions in an update or upsert none.
 
     ``update()`` joins the tables its expressions read, so a row with a
     ``NULL`` foreign key would not be updated at all instead of taking the
@@ -285,6 +469,8 @@ def check_condition_path(
     :type upsert: bool
     :param update: the expression is a value of ``update()``
     :type update: bool
+    :param owner: what the condition belongs to, for error messages
+    :type owner: str
     :raises QueryDefinitionError: if the path follows a reverse, many to many
         or through relation, or reads a related model in an update or upsert
     """
@@ -293,7 +479,7 @@ def check_condition_path(
         field = target.ormar_config.model_fields[relation]
         if field.is_multi or field.virtual or field.is_through:
             raise QueryDefinitionError(
-                f"When() conditions read related models only through foreign "
+                f"{owner} read related models only through foreign "
                 f"keys, '{'__'.join(path)}' follows the reverse or many to many "
                 f"relation '{relation}'"
             )
@@ -315,7 +501,8 @@ def check_condition_path(
 def expression_paths(node: Any, columns: dict[str, SelectAction]) -> list[QueryAction]:
     """
     Return the actions resolving the relation paths an expression reads: its
-    fields and the fields of its ``When`` conditions.
+    fields and the fields of its ``When`` conditions. Aggregates read related
+    models in their own subqueries, so they add no paths.
 
     :param node: resolved expression node or a value
     :type node: Any

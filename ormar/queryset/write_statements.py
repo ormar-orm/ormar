@@ -16,7 +16,7 @@ steps it changes::
 """
 
 import abc
-from typing import TYPE_CHECKING, Any, Mapping, Optional, cast
+from typing import TYPE_CHECKING, Any, Mapping, NamedTuple, Optional, cast
 
 import sqlalchemy
 
@@ -404,6 +404,18 @@ def row_template(
     return StatementTemplate(statement=cached, params=params)
 
 
+class ForwardJoin(NamedTuple):
+    """
+    Table joined through a foreign key, aliased like in selects.
+
+    :ivar table: aliased table
+    :ivar conditions: conditions joining it to the previous table
+    """
+
+    table: Any
+    conditions: list
+
+
 def forward_join_conditions(model: type["Model"], path: list[str]) -> dict[str, list]:
     """
     Return the join conditions of the tables an update expression reads from,
@@ -424,7 +436,27 @@ def forward_join_conditions(model: type["Model"], path: list[str]) -> dict[str, 
     :return: join conditions by table alias
     :rtype: dict[str, list]
     """
-    conditions: dict[str, list] = {}
+    return {
+        alias: join.conditions
+        for alias, join in forward_joins(model=model, path=path).items()
+    }
+
+
+def forward_joins(model: type["Model"], path: list[str]) -> dict[str, ForwardJoin]:
+    """
+    Return the tables joined along a path of foreign keys from ``model`` and
+    their join conditions, by table alias (see ``forward_join_conditions``).
+
+    :param model: model the path starts from
+    :type model: type[Model]
+    :param path: relation names leading to the read model
+    :type path: list[str]
+    :raises QueryDefinitionError: if the path follows a reverse, many to many or
+        through relation, which can match many rows
+    :return: joined tables by table alias
+    :rtype: dict[str, ForwardJoin]
+    """
+    joins: dict[str, ForwardJoin] = {}
     source_table: Any = model.ormar_config.table
     for index, relation in enumerate(path):
         field = cast("ForeignKeyField", model.ormar_config.model_fields[relation])
@@ -436,9 +468,12 @@ def forward_join_conditions(model: type["Model"], path: list[str]) -> dict[str, 
             )
         alias = alias_for("__".join(path[: index + 1]))
         target_table = prefixed_table(alias=alias, table=field.to.ormar_config.table)
-        conditions[alias] = [
-            target_table.c[pair.target_column] == source_table.c[pair.source_column]
-            for pair in field.link.pairs
-        ]
+        joins[alias] = ForwardJoin(
+            table=target_table,
+            conditions=[
+                target_table.c[pair.target_column] == source_table.c[pair.source_column]
+                for pair in field.link.pairs
+            ],
+        )
         model, source_table = field.to, target_table
-    return conditions
+    return joins

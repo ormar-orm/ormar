@@ -51,6 +51,15 @@
     )
     ```
 
+* **Aggregates of related rows: `ormar.Count`, `Sum`, `Avg`, `Min` and `Max`**
+
+    Compute one value per row of the queried model over its related rows, reached through a reverse foreign key or a many to many relation and optionally further through foreign keys. `filter=` restricts the aggregated rows with keyword filters or a filter group of the related model, `Count` takes `distinct=True`. They are correlated subqueries usable wherever expressions are: compared in `filter()` / `exclude()`, as filter values, in `update()` and inside `Case` and functions. See [aggregates of related rows](queries/aggregations.md#aggregates-of-related-rows).
+
+    ```python
+    await Member.objects.filter(Count("bookings", filter={"status": "active"}) > 3).all()
+    await Member.objects.update(each=True, booked=Count("bookings"))
+    ```
+
 ### 🐛 Fixes
 
 * **Several filter groups in one `filter()` keep each other's joins**
