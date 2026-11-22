@@ -49,3 +49,16 @@ class OrmarDeprecatedSince020(OrmarDeprecationWarning):
 
     def __init__(self, message: str, *args: object) -> None:  # pragma: no cover
         super().__init__(message, *args, since=(0, 20), expected_removal=(0, 30))
+
+
+class OrmarDefaultChangeSince031(OrmarDeprecationWarning):
+    """An `OrmarDeprecationWarning` subclass for a default that changes in
+    Ormar 0.32, while the old behaviour stays available until Ormar 1.0."""
+
+    def __init__(self, message: str, *args: object) -> None:
+        super().__init__(message, *args, since=(0, 31))
+
+    def __str__(self) -> str:
+        return (
+            f"{self.message}. Deprecated in Ormar V0.31, the default changes in V0.32."
+        )

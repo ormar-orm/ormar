@@ -823,6 +823,9 @@ class Model(ModelRow):
 
         If follow=True is set it loads also related models of related models.
 
+        Own fields excluded with ``exclude`` are set to None, except the ones
+        with nullable=False, which keep their current (also unsaved) values.
+
         To not get stuck in an infinite loop as related models also keep a relation
         to parent model visited models set is kept.
 
@@ -864,6 +867,15 @@ class Model(ModelRow):
             queryset = queryset.order_by(order_by)
         instance = await queryset.select_related(relations).get(pk=self.persisted_key)
         self._orm.clear()
-        self.update_from_dict(instance.model_dump())
+        # excluded own fields hold None without validation, a not nullable one
+        # keeps its current value instead of failing validation on the copy
+        excluded_not_null_fields = {
+            field_name
+            for field_name, field in self.ormar_config.model_fields.items()
+            if not field.is_relation
+            and not field.nullable
+            and field_name not in instance.model_fields_set
+        }
+        self.update_from_dict(instance.model_dump(exclude=excluded_not_null_fields))
         self._reset_change_tracking()
         return self

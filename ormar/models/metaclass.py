@@ -28,6 +28,7 @@ from ormar.models.descriptors import (
 )
 from ormar.models.descriptors.descriptors import BytesDescriptor
 from ormar.models.helpers import (
+    apply_not_null_defaults,
     building_schemas,
     check_required_config_parameters,
     config_field_not_set,
@@ -719,6 +720,9 @@ class ModelMetaclass(pydantic._internal._model_construction.ModelMetaclass):
                 base_class=base, curr_class=mcs, attrs=attrs, model_fields=model_fields
             )
         if "ormar_config" in attrs:
+            model_fields = apply_not_null_defaults(
+                attrs=attrs, model_fields=model_fields, model_name=name
+            )
             attrs["model_config"]["ignored_types"] = (OrmarConfig,)
             attrs["model_config"]["from_attributes"] = True
             for field_name, field in model_fields.items():

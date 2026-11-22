@@ -5,12 +5,11 @@ import uuid
 import pytest
 import sqlalchemy
 from sqlalchemy.dialects import mysql, postgresql, sqlite
-from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.schema import CreateColumn, CreateTable, ExecutableDDLElement
-from sqlalchemy.sql.compiler import DDLCompiler
+from sqlalchemy.schema import CreateColumn, CreateTable
 
 import ormar
 from tests.lifespan import init_tests
+from tests.schema_helpers import AddColumn
 from tests.settings import create_config
 
 base_ormar_config = create_config()
@@ -23,23 +22,6 @@ class Color(enum.Enum):
 
 class Level(enum.IntEnum):
     LOW = 1
-
-
-class AddColumn(ExecutableDDLElement):
-    """``ALTER TABLE ... ADD COLUMN`` of a column, as a migration tool emits it."""
-
-    def __init__(self, table_name: str, column: sqlalchemy.Column) -> None:
-        self.table_name = table_name
-        self.column = column
-
-
-@compiles(AddColumn)
-def compile_add_column(
-    element: AddColumn, compiler: DDLCompiler, **kwargs: object
-) -> str:
-    """Render the column specification with the dialect's DDL compiler."""
-    column_spec = compiler.get_column_specification(element.column)
-    return f"ALTER TABLE {element.table_name} ADD COLUMN {column_spec}"
 
 
 class Gadget(ormar.Model):

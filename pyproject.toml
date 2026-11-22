@@ -149,6 +149,11 @@ build-backend = "poetry.core.masonry.api"
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
+# test models keep the 0.31 default (nullable literal defaults);
+# tests/test_model_definition/test_not_null_defaults.py covers the warning
+filterwarnings = [
+    "ignore:Model .+ fields with a literal default:DeprecationWarning",
+]
 
 [tool.mypy]
 # TODO: Enable mypy plugin after pydantic release supporting toml file

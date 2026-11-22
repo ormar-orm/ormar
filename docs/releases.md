@@ -16,6 +16,17 @@
     is_active: bool = ormar.Boolean(default=False)  # is_active BOOLEAN DEFAULT false
     ```
 
+### ⚠️ Deprecations
+
+* **Fields with a literal default become NOT NULL in 0.32**
+
+    A field with a simple literal `default` (`bool`, `int`, `float`, `Decimal`, or `str` on a `String` field) is nullable today, and each model with such fields now emits a `DeprecationWarning` listing them. In 0.32 they become `NOT NULL` with a non-`Optional` pydantic type. Opt in now with `OrmarConfig(not_null_defaults=True)` (`copy()` passes it on), keep the old behaviour with `nullable=True` on the field, or with `not_null_defaults=False` for the whole config. Existing columns need a backfill before the migration, see [NOT NULL literal defaults](models/migrations.md#not-null-literal-defaults-not_null_defaults). Projects running pytest with `filterwarnings = error` fail at collection until they set `not_null_defaults` (either value).
+
+    ```python
+    base_ormar_config = ormar.OrmarConfig(..., not_null_defaults=True)
+    is_active: bool = ormar.Boolean(default=False)  # is_active BOOLEAN DEFAULT false NOT NULL
+    ```
+
 ### 🆕 Features
 
 * **`tablename_factory` in `OrmarConfig` and snake case table names** ([#1123](https://github.com/ormar-orm/ormar/issues/1123))
@@ -56,6 +67,10 @@
     Comparisons of `F()` and expressions now return filters: `F("a") == x` used to be `False`, `F("a") < x` raised `TypeError`.
 
 ### 🐛 Fixes
+
+* **`load_all(exclude=...)` works with excluded own fields that have `nullable=False`**
+
+    Excluding such a field of the model raised `ValidationError`, as the reload copied its `None` back with validation. Now the field keeps its current value, including a local change that was not saved yet; other excluded own fields are still set to `None`. Excluded fields of related models behave as before.
 
 * **Several filter groups in one `filter()` keep each other's joins**
 
