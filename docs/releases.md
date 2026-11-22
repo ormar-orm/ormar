@@ -41,6 +41,8 @@
     await Player.objects.filter(Func("lower", F("team__name")).icontains("red")).all()
     ```
 
+    Comparisons of `F()` and expressions now return filters: `F("a") == x` used to be `False`, `F("a") < x` raised `TypeError`.
+
 ### 🐛 Fixes
 
 * **Several filter groups in one `filter()` keep each other's joins**

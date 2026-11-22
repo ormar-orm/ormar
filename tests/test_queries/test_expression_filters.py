@@ -235,12 +235,25 @@ async def test_update_and_delete_filtered_by_expressions(players):
 
 
 @pytest.mark.asyncio
+async def test_update_and_delete_excluding_related_paths(players):
+    red_team = Func("lower", F("team__name")) == "red_team"
+    assert await Player.objects.exclude(red_team).update(bonus=9) == 1
+    assert await codes(F("bonus") == 9) == ["c-3"]
+    assert await Player.objects.exclude(red_team).delete() == 1
+    assert await codes() == ["a-1", "b-2", "d-4"]
+
+
+@pytest.mark.asyncio
 async def test_function_compared_with_value_of_another_type(players):
     player = await Player.objects.get(code="a-1")
     upper_uid = Func("upper", Func("replace", F("uid"), "-", ""))
     assert await codes(upper_uid == player.uid.hex.upper()) == ["a-1"]
     assert await codes(upper_uid.in_([player.uid.hex.upper(), "X"])) == ["a-1"]
     assert await codes(Func("upper", F("uid")) == "X") == []
+    uid_or_name = Coalesce(upper_uid, F("name"))
+    assert await codes(uid_or_name == player.uid.hex.upper()) == ["a-1"]
+    assert await codes(Greatest(upper_uid, F("name")) == "X") == []
+    assert await codes(Func("abs", F("score") - 10) * 1 == 2) == ["b-2"]
     assert await codes(F("uid") == player.uid) == ["a-1"]
 
 

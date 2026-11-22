@@ -11,8 +11,10 @@ from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.query_action import QueryAction
 from ormar.queryset.actions.select_action import SelectAction, expression_columns
 from ormar.queryset.expressions import (
+    Combined,
     Expression,
     Func,
+    Function,
     expression_clause,
     expression_key,
     expression_literals,
@@ -127,6 +129,37 @@ def like_pattern(value: str, operator: str) -> str:
     prefix = "%" if "start" not in operator else ""
     suffix = "%" if "end" not in operator else ""
     return f"{prefix}{value}{suffix}"
+
+
+def comparison_bind(
+    key: Optional[str], value: Any, operator: str, compared_type: Any
+) -> BindParameter:
+    """
+    Build the bind parameter of a compared value the way SQLAlchemy builds
+    the one of ``column <op> value``: typed after ``compared_type`` (its bind
+    processing for dates, JSON, enums and so on) and expanding for ``in``,
+    rendering one placeholder per item of the list given on each call.
+
+    :param key: name of the parameter, None for an anonymous one
+    :type key: Optional[str]
+    :param value: compared value
+    :type value: Any
+    :param operator: filter operator
+    :type operator: str
+    :param compared_type: type the value is compared to, None for the type of
+        the value itself
+    :type compared_type: Any
+    :return: bind parameter
+    :rtype: BindParameter
+    """
+    return BindParameter(
+        key=key,
+        value=value,
+        unique=key is None,
+        expanding=operator == "in",
+        _compared_to_operator=COMPARISON_OPERATORS[FILTER_OPERATORS[operator]],
+        _compared_to_type=compared_type,
+    )
 
 
 def comparison_clause(left: Any, operator: str, value: Any, escaped: bool) -> Any:
@@ -392,8 +425,8 @@ class ExpressionFilterAction(FilterAction):
         :type value: Any
         :param model_cls: queried model
         :type model_cls: type[Model]
-        :raises QueryDefinitionError: if the expression reads no field or a
-            relation, or an expression value is used with other operators
+        :raises QueryDefinitionError: if the expression reads a relation or a
+            missing field, or an expression value is used with other operators
             than comparisons
         """
         self.lhs = lhs._node()
@@ -443,16 +476,31 @@ class ExpressionFilterAction(FilterAction):
     def value_type(self, lhs_type: Any) -> Any:
         """
         Return the type a literal value is bound with: the type of the
-        filtered expression, except for a ``Func`` without ``type_``, whose
-        result type is only guessed from its first argument
-        (``Func("upper", F("uid")) == "AB"`` binds a string, not a UUID).
+        filtered expression, unless that type comes from a ``Func`` without
+        ``type_``, whose result type is only guessed from its first argument
+        (``Func("upper", F("uid")) == "AB"`` and
+        ``Coalesce(Func("upper", F("uid")), F("name")) == "AB"`` bind a
+        string, not a UUID). The type comes from the left operand of
+        arithmetic and the first expression argument of ``Greatest``,
+        ``Least`` and ``Coalesce``.
 
         :param lhs_type: SQL type of the filtered expression
         :type lhs_type: Any
         :return: type to compare the value to, None for the value's own type
         :rtype: Any
         """
-        if isinstance(self.lhs, Func) and self.lhs._type is None:
+        node: Any = self.lhs
+        while isinstance(node, (Combined, Function)) and not isinstance(node, Func):
+            node = (
+                node._left
+                if isinstance(node, Combined)
+                else next(
+                    argument
+                    for argument in node._arguments
+                    if isinstance(argument, Expression)
+                )
+            )
+        if isinstance(node, Func) and node._type is None:
             return None
         return lhs_type
 
@@ -502,15 +550,11 @@ class ExpressionFilterAction(FilterAction):
                 reference_type=lhs_clause.type,
             )
         elif self.binds_slot():
-            filter_value = BindParameter(
+            filter_value = comparison_bind(
                 key=f"{slot}_{next(index)}" if slot is not None else None,
                 value=value,
-                unique=slot is None,
-                expanding=self.operator == "in",
-                _compared_to_operator=COMPARISON_OPERATORS[
-                    FILTER_OPERATORS[self.operator]
-                ],
-                _compared_to_type=self.value_type(lhs_type=lhs_clause.type),
+                operator=self.operator,
+                compared_type=self.value_type(lhs_type=lhs_clause.type),
             )
         return comparison_clause(
             left=lhs_clause,

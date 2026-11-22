@@ -263,9 +263,10 @@ await Track.objects.exclude(
 ).all()
 ```
 
-The value is a literal or another expression. The lookups `iexact()`,
-`contains()`, `startswith()`, `endswith()` and their variants take strings,
-escaped and wrapped in `%` like `filter(name__icontains=...)`.
+The comparison operators take a literal or another expression as the value.
+`in_()`, `isnull()` and the lookups `iexact()`, `contains()`, `startswith()`,
+`endswith()` and their variants take only plain values for now; the lookups take
+strings, escaped and wrapped in `%` like `filter(name__icontains=...)`.
 
 A literal value is bound with the type of the filtered expression. A `Func`
 without `type_` is the exception: it is bound with the type of its own value,

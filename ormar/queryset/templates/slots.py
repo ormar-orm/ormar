@@ -27,10 +27,7 @@ import sqlalchemy
 from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.sqltypes import TupleType
 
-from ormar.queryset.actions.filter_action import (
-    COMPARISON_OPERATORS,
-    FILTER_OPERATORS,
-)
+from ormar.queryset.actions.filter_action import comparison_bind
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar.queryset.actions.filter_action import FilterAction
@@ -176,11 +173,8 @@ class SlotBinder:
         """
         Return the named bind parameter for a filter action's value.
 
-        The parameter is built the way SQLAlchemy builds the bind of
-        ``column <op> value``: it is compared to the column's type, so the value
-        gets the column's bind processing (dates, JSON, enums and so on), and
-        an ``in`` filter is expanding, so it renders one placeholder per item of
-        the list it is given on each call.
+        The parameter is compared to the column's type (see
+        ``comparison_bind``).
 
         :param action: filter action the value belongs to
         :type action: FilterAction
@@ -189,13 +183,11 @@ class SlotBinder:
         :return: named bind parameter
         :rtype: BindParameter
         """
-        operator = COMPARISON_OPERATORS[FILTER_OPERATORS[action.operator]]
-        return BindParameter(
+        return comparison_bind(
             key=self.slots[id(action)],
             value=value,
-            expanding=action.operator == "in",
-            _compared_to_operator=operator,
-            _compared_to_type=action.column.type,
+            operator=action.operator,
+            compared_type=action.column.type,
         )
 
     def bind_key_in(
