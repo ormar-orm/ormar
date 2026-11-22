@@ -53,6 +53,7 @@ from typing import (
     Mapping,
     NamedTuple,
     Optional,
+    Sequence,
     cast,
 )
 
@@ -63,7 +64,7 @@ from sqlalchemy.sql.compiler import SQLCompiler
 from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.functions import Function as SQLFunction
 from sqlalchemy.sql.functions import GenericFunction, ReturnTypeFromArgs, coalesce
-from sqlalchemy.types import Float, TypeEngine
+from sqlalchemy.types import Float, NullType, TypeEngine
 from sqlalchemy.types import to_instance as type_instance
 
 import ormar  # noqa: I100, I202
@@ -246,12 +247,14 @@ class F(Comparable, Expression):
         self._path = path
 
 
-class Inserted(Expression):
+class Inserted(Comparable, Expression):
     """
     Value a conflicting insert tried to write into a field, only in
     ``update_values`` of ``create()`` / ``bulk_create()`` with
     ``on_conflict="update"``: ``excluded.<column>`` on PostgreSQL and SQLite,
     ``VALUES(<column>)`` on MySQL. ``F()`` there is the existing row's column.
+    Its comparisons are conditions of ``When`` there
+    (``When(Inserted("version") > F("version"), then=...)``).
     """
 
     def __init__(self, path: str) -> None:
@@ -414,9 +417,10 @@ class When:
         When(ormar.or_(score__gt=10, team__name="red"), then=F("bonus") + 1)
         When(Func("lower", F("name")) == "ann", then=None)
 
-    Conditions read the model's own fields and the fields of models reached
-    through foreign keys, not reverse or many to many relations. A field named
-    ``then`` is filtered as ``then__exact``.
+    In filters conditions read the model's own fields and the fields of models
+    reached through foreign keys, not reverse or many to many relations; in
+    ``update()`` and upserts own fields only, in upserts also ``Inserted``
+    fields. A field named ``then`` is filtered as ``then__exact``.
     """
 
     def __init__(self, *groups: "FilterGroup", then: Any, **kwargs: Any) -> None:
@@ -485,6 +489,38 @@ class Case(Comparable, Expression):
         :rtype: list[Any]
         """
         return [*(when.then for when in self._whens), self._default]
+
+
+def is_null_case(node: Any) -> bool:
+    """
+    :param node: expression node
+    :type node: Any
+    :return: whether the node is a ``Case`` whose values are all None
+    :rtype: bool
+    """
+    return isinstance(node, Case) and all(value is None for value in node._values())
+
+
+def fields_read(node: Any) -> list[str]:
+    """
+    Return the model's own fields an expression reads by ``F``, the fields its
+    ``When`` conditions filter and read included, for the check that an
+    update reads no column it sets. ``Inserted`` fields and fields of related
+    models are not columns of the updated row.
+
+    :param node: resolved expression node or a value
+    :type node: Any
+    :return: field names
+    :rtype: list[str]
+    """
+    names = [
+        leaf._path
+        for leaf in expression_leaves(node=node)
+        if isinstance(leaf, F) and "__" not in leaf._path
+    ]
+    for action in expression_conditions(node=node):
+        names += action.fields_read()
+    return names
 
 
 def is_sql_constant(value: Any) -> bool:
@@ -919,20 +955,14 @@ def function_clause(
     """
     # literals are named in argument order, but typed after the first
     # expression argument, which may come later
-    expression_clauses: dict[int, Any] = {}
-    literal_keys: dict[int, Optional[str]] = {}
-    for position, argument in enumerate(node._arguments):
-        if isinstance(argument, Expression):
-            expression_clauses[position] = expression_clause(
-                node=argument,
-                columns=columns,
-                slot=slot,
-                index=index,
-                inserted=inserted,
-                reference_type=reference_type,
-            )
-        else:
-            literal_keys[position] = f"{slot}_{next(index)}" if slot else None
+    expression_clauses, literal_keys = operand_clauses(
+        operands=node._arguments,
+        columns=columns,
+        slot=slot,
+        index=index,
+        inserted=inserted,
+        reference_type=reference_type,
+    )
     argument_type = next(
         (clause.type for clause in expression_clauses.values()), reference_type
     )
@@ -942,12 +972,8 @@ def function_clause(
     arguments = [
         expression_clauses[position]
         if position in expression_clauses
-        else BindParameter(
-            key=literal_keys[position],
-            value=argument,
-            unique=literal_keys[position] is None,
-            _compared_to_operator=sql_operators.eq,
-            _compared_to_type=literal_type,
+        else literal_bind(
+            key=literal_keys[position], value=argument, compared_type=literal_type
         )
         for position, argument in enumerate(node._arguments)
     ]
@@ -981,7 +1007,9 @@ def case_clause(
     Literal values are named ``{slot}_{k}`` like the literals of
     ``expression_clause``, in the order of the branches and the default, and
     typed after ``reference_type``, else after the first expression value.
-    None, True and False are written into the SQL.
+    None, True and False are written into the SQL; when all values are None
+    the ``NULL`` is cast to ``reference_type``, as PostgreSQL reads an untyped
+    ``CASE`` of ``NULL`` as text.
 
     :param node: resolved case node
     :type node: Case
@@ -1004,45 +1032,109 @@ def case_clause(
                 actions=when.actions, prefix=when.slot_prefix(slot=slot)
             )
             if slot is not None
-            else None
+            else None,
+            inserted=inserted,
         )
         for when in node._whens
     ]
-    # literals are named in branch order, but typed after the first
-    # expression value, which may come later
     values = node._values()
+    expression_clauses, literal_keys = operand_clauses(
+        operands=values,
+        columns=columns,
+        slot=slot,
+        index=index,
+        inserted=inserted,
+        reference_type=reference_type,
+    )
+    literal_type = (
+        reference_type
+        if reference_type is not None
+        else next((clause.type for clause in expression_clauses.values()), None)
+    )
+    null_type = (
+        literal_type
+        if is_null_case(node=node) and not isinstance(literal_type, NullType)
+        else None
+    )
+    value_clauses = [
+        expression_clauses[position]
+        if position in expression_clauses
+        else sqlalchemy.cast(expression=sqlalchemy.null(), type_=null_type)
+        if null_type is not None
+        else SQL_CONSTANTS[value]()
+        if is_sql_constant(value=value)
+        else literal_bind(
+            key=literal_keys[position], value=value, compared_type=literal_type
+        )
+        for position, value in enumerate(values)
+    ]
+    *then_clauses, default_clause = value_clauses
+    return sqlalchemy.case(*zip(conditions, then_clauses), else_=default_clause)
+
+
+def operand_clauses(
+    operands: Sequence[Any],
+    columns: Mapping[str, "QueryAction"],
+    slot: Optional[str],
+    index: Iterator[int],
+    inserted: Any = None,
+    reference_type: Optional[TypeEngine] = None,
+) -> tuple[dict[int, Any], dict[int, Optional[str]]]:
+    """
+    Build the expression operands of a function or ``Case`` and name its bound
+    literals ``{slot}_{k}``, both in operand order. The literals are bound
+    afterwards (see ``literal_bind``), typed after the first expression
+    operand, which may come later. None and bools are not bound.
+
+    :param operands: arguments or values, expressions and literals
+    :type operands: Sequence[Any]
+    :param columns: resolved field actions by field path
+    :type columns: Mapping[str, QueryAction]
+    :param slot: slot name of a statement template, if built for one
+    :type slot: Optional[str]
+    :param index: counter of the literals already named
+    :type index: Iterator[int]
+    :param inserted: columns of the inserted row of an upsert
+    :type inserted: Any
+    :param reference_type: type of the compared or written column
+    :type reference_type: Optional[TypeEngine]
+    :return: SQL of the expression operands and names of the literal ones,
+        by position (None names without a slot)
+    :rtype: tuple[dict[int, Any], dict[int, Optional[str]]]
+    """
     expression_clauses: dict[int, Any] = {}
     literal_keys: dict[int, Optional[str]] = {}
-    for position, value in enumerate(values):
-        if isinstance(value, Expression):
+    for position, operand in enumerate(operands):
+        if isinstance(operand, Expression):
             expression_clauses[position] = expression_clause(
-                node=value,
+                node=operand,
                 columns=columns,
                 slot=slot,
                 index=index,
                 inserted=inserted,
                 reference_type=reference_type,
             )
-        elif not is_sql_constant(value=value):
+        elif not is_sql_constant(value=operand):
             literal_keys[position] = f"{slot}_{next(index)}" if slot else None
-    literal_type = (
-        reference_type
-        if reference_type is not None
-        else next((clause.type for clause in expression_clauses.values()), None)
+    return expression_clauses, literal_keys
+
+
+def literal_bind(key: Optional[str], value: Any, compared_type: Any) -> BindParameter:
+    """
+    :param key: name of the parameter, None for an anonymous one
+    :type key: Optional[str]
+    :param value: literal operand
+    :type value: Any
+    :param compared_type: type the literal is bound with, None for the type
+        of its own value
+    :type compared_type: Any
+    :return: bind parameter of a literal operand
+    :rtype: BindParameter
+    """
+    return BindParameter(
+        key=key,
+        value=value,
+        unique=key is None,
+        _compared_to_operator=sql_operators.eq,
+        _compared_to_type=compared_type,
     )
-    value_clauses = [
-        expression_clauses[position]
-        if position in expression_clauses
-        else SQL_CONSTANTS[value]()
-        if is_sql_constant(value=value)
-        else BindParameter(
-            key=literal_keys[position],
-            value=value,
-            unique=literal_keys[position] is None,
-            _compared_to_operator=sql_operators.eq,
-            _compared_to_type=literal_type,
-        )
-        for position, value in enumerate(values)
-    ]
-    *then_clauses, default_clause = value_clauses
-    return sqlalchemy.case(*zip(conditions, then_clauses), else_=default_clause)

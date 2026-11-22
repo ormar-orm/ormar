@@ -187,7 +187,7 @@ await Player.objects.update(
     each=True,
     level=Case(
         When(score__gte=100, then="gold"),
-        When(ormar.or_(score__gte=50, team__name="red"), then="silver"),
+        When(ormar.or_(score__gte=50, team=red_team), then="silver"),
         default="bronze",
     ),
 )
@@ -196,16 +196,20 @@ await Player.objects.update(
 )
 ```
 
-* Conditions read the model's own fields and fields of models reached through
-  foreign keys, joined like the related fields an expression reads (see above, rows
-  with no related row are not updated). Reverse and many to many relations are
-  rejected with `QueryDefinitionError`.
+* In `update()` conditions read the model's own fields only, a foreign key included
+  (`When(team=red_team)`, `When(team=None)`). A condition on a related model
+  (`When(team__name="red")`) raises `QueryDefinitionError`: the update would join the
+  related table, so rows with a `NULL` foreign key would be skipped instead of taking
+  the `default`. Branch values may still read related fields (`then=F("team__rank")`,
+  see above). Filters take conditions on models reached through foreign keys.
 * Like other expressions, a `Case` cannot read a column set by the same `update()`,
   in its conditions neither.
 * `None`, `True` and `False` are written into the SQL, other literals are bound with
-  the type of the updated column.
+  the type of the updated column. A `Case` whose values are all `None` is cast to
+  that type.
 * `Case` works in upsert [`update_values`](create.md#expressions-on-conflict) too,
-  where conditions read only the model's own fields, and in filters (see
+  where conditions read only the model's own fields and `Inserted()` values, and in
+  filters (see
   [conditional expressions](filter-and-sort.md#conditional-expressions)).
 * Every number of `When` branches builds its own statement, kept in the model's
   statement cache (512 statements per model), so a list of a few hundred different

@@ -11,12 +11,7 @@ from ormar.exceptions import ModelPersistenceError, NoMatch, QueryDefinitionErro
 from ormar.models import NewBaseModel  # noqa I100
 from ormar.models.model_row import ModelRow
 from ormar.queryset.actions.select_action import resolve_expression
-from ormar.queryset.expressions import (
-    Expression,
-    F,
-    expression_conditions,
-    expression_leaves,
-)
+from ormar.queryset.expressions import Expression, fields_read
 from ormar.queryset.templates import (
     conflict_target_columns,
     insert_template,
@@ -327,15 +322,7 @@ class Model(ModelRow):
                 continue
             node = resolve_expression(node=value._node(), model=cls, upsert=True)[0]
             expressions[name] = node
-            read = [
-                leaf._path
-                for leaf in expression_leaves(node=node)
-                if isinstance(leaf, F)
-            ] + [
-                path.field_name
-                for action in expression_conditions(node=node)
-                for path in action.path_actions()
-            ]
+            read = fields_read(node=node)
             if name in related_names or any(
                 field != name and field in updated for field in read
             ):

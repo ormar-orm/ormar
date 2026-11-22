@@ -114,7 +114,11 @@ def expression_columns(
 
 
 def resolve_expression(
-    node: Any, model: type["Model"], upsert: bool = False, first_branch: int = 0
+    node: Any,
+    model: type["Model"],
+    upsert: bool = False,
+    update: bool = False,
+    first_branch: int = 0,
 ) -> tuple[Any, dict[str, SelectAction]]:
     """
     Resolve an expression for a query from ``model``: the fields it reads (see
@@ -133,11 +137,14 @@ def resolve_expression(
     :type model: type[Model]
     :param upsert: the expression is a value of an upsert's ``update_values``
     :type upsert: bool
+    :param update: the expression is a value of ``update()``
+    :type update: bool
     :param first_branch: number of the first ``When`` branch
     :type first_branch: int
     :raises QueryDefinitionError: if a field is not allowed (see
         ``expression_columns``) or a condition reads a related model through a
-        reverse or many to many relation, or in an upsert any related model
+        reverse or many to many relation, or in an update or upsert any
+        related model
     :return: resolved expression and its fields by path
     :rtype: tuple[Any, dict[str, SelectAction]]
     """
@@ -145,13 +152,18 @@ def resolve_expression(
         node=node,
         model=model,
         upsert=upsert,
+        update=update,
         numbers=itertools.count(start=first_branch),
     )
     return resolved, expression_columns(node=resolved, model=model, upsert=upsert)
 
 
 def resolve_branches(
-    node: Any, model: type["Model"], upsert: bool, numbers: Iterator[int]
+    node: Any,
+    model: type["Model"],
+    upsert: bool,
+    update: bool,
+    numbers: Iterator[int],
 ) -> Any:
     """
     Copy the nodes of an expression down to its ``When`` branches and resolve
@@ -163,6 +175,8 @@ def resolve_branches(
     :type model: type[Model]
     :param upsert: the expression is a value of an upsert's ``update_values``
     :type upsert: bool
+    :param update: the expression is a value of ``update()``
+    :type update: bool
     :param numbers: numbers of the branches
     :type numbers: Iterator[int]
     :return: resolved node
@@ -171,34 +185,50 @@ def resolve_branches(
     if isinstance(node, Combined):
         combined = copy.copy(node)
         combined._left = resolve_branches(
-            node=node._left, model=model, upsert=upsert, numbers=numbers
+            node=node._left, model=model, upsert=upsert, update=update, numbers=numbers
         )
         combined._right = resolve_branches(
-            node=node._right, model=model, upsert=upsert, numbers=numbers
+            node=node._right, model=model, upsert=upsert, update=update, numbers=numbers
         )
         return combined
     if isinstance(node, Function):
         function = copy.copy(node)
         function._arguments = tuple(
-            resolve_branches(node=argument, model=model, upsert=upsert, numbers=numbers)
+            resolve_branches(
+                node=argument,
+                model=model,
+                upsert=upsert,
+                update=update,
+                numbers=numbers,
+            )
             for argument in node._arguments
         )
         return function
     if isinstance(node, Case):
         case = copy.copy(node)
         case._whens = [
-            resolve_when(when=when, model=model, upsert=upsert, numbers=numbers)
+            resolve_when(
+                when=when, model=model, upsert=upsert, update=update, numbers=numbers
+            )
             for when in node._whens
         ]
         case._default = resolve_branches(
-            node=node._default, model=model, upsert=upsert, numbers=numbers
+            node=node._default,
+            model=model,
+            upsert=upsert,
+            update=update,
+            numbers=numbers,
         )
         return case
     return node
 
 
 def resolve_when(
-    when: When, model: type["Model"], upsert: bool, numbers: Iterator[int]
+    when: When,
+    model: type["Model"],
+    upsert: bool,
+    update: bool,
+    numbers: Iterator[int],
 ) -> When:
     """
     Copy a ``When`` with its condition resolved into filter actions, in the
@@ -210,6 +240,8 @@ def resolve_when(
     :type model: type[Model]
     :param upsert: the expression is a value of an upsert's ``update_values``
     :type upsert: bool
+    :param update: the expression is a value of ``update()``
+    :type update: bool
     :param numbers: numbers of the branches
     :type numbers: Iterator[int]
     :raises QueryDefinitionError: if the condition reads a related model
@@ -221,21 +253,29 @@ def resolve_when(
     duplicate = copy.copy(when)
     duplicate.number = next(numbers)
     duplicate.condition = when.condition.copy_tree()
-    duplicate.condition.resolve(model_cls=model)
+    duplicate.condition.resolve(model_cls=model, upsert=upsert)
     duplicate.actions = list(duplicate.condition._iter())
     for action in duplicate.actions:
         for path in action.path_actions():
-            check_condition_path(model=model, path=path.related_parts, upsert=upsert)
+            check_condition_path(
+                model=model, path=path.related_parts, upsert=upsert, update=update
+            )
     duplicate.then = resolve_branches(
-        node=when.then, model=model, upsert=upsert, numbers=numbers
+        node=when.then, model=model, upsert=upsert, update=update, numbers=numbers
     )
     return duplicate
 
 
-def check_condition_path(model: type["Model"], path: list[str], upsert: bool) -> None:
+def check_condition_path(
+    model: type["Model"], path: list[str], upsert: bool, update: bool
+) -> None:
     """
     Allow ``When`` conditions to read related models only through foreign
-    keys, which match at most one row, and in an upsert none.
+    keys, which match at most one row, and in an update or upsert none.
+
+    ``update()`` joins the tables its expressions read, so a row with a
+    ``NULL`` foreign key would not be updated at all instead of taking the
+    default of the ``Case``.
 
     :param model: queried model
     :type model: type[Model]
@@ -243,14 +283,11 @@ def check_condition_path(model: type["Model"], path: list[str], upsert: bool) ->
     :type path: list[str]
     :param upsert: the expression is a value of an upsert's ``update_values``
     :type upsert: bool
+    :param update: the expression is a value of ``update()``
+    :type update: bool
     :raises QueryDefinitionError: if the path follows a reverse, many to many
-        or through relation, or reads a related model in an upsert
+        or through relation, or reads a related model in an update or upsert
     """
-    if upsert and path:
-        raise QueryDefinitionError(
-            f"When() conditions in update_values of an upsert read only fields of "
-            f"the inserted model, not '{'__'.join(path)}'"
-        )
     target = model
     for relation in path:
         field = target.ormar_config.model_fields[relation]
@@ -261,6 +298,18 @@ def check_condition_path(model: type["Model"], path: list[str], upsert: bool) ->
                 f"relation '{relation}'"
             )
         target = field.to
+    if upsert and path:
+        raise QueryDefinitionError(
+            f"When() conditions in update_values of an upsert read only fields of "
+            f"the inserted model, not '{'__'.join(path)}'"
+        )
+    if update and path:
+        raise QueryDefinitionError(
+            f"When() conditions in update() read only fields of the updated "
+            f"model, not '{'__'.join(path)}': the update joins the related "
+            f"table, so rows with a NULL foreign key would be skipped instead of "
+            f"taking the default"
+        )
 
 
 def expression_paths(node: Any, columns: dict[str, SelectAction]) -> list[QueryAction]:

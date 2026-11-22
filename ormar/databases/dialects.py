@@ -85,10 +85,19 @@ def conflict_updates(
         :type element: Any
         :param kwargs: traversal options, unused
         :type kwargs: Any
+        :raises QueryDefinitionError: for the expanding parameter of an
+            ``in`` filter
         :return: the user variable of a bind parameter, None keeps the element
         :rtype: Any
         """
         if isinstance(element, BindParameter):
+            if element.expanding:
+                raise QueryDefinitionError(
+                    "update_values of a MySQL bulk_create() of several rows read "
+                    "their values from user variables, which hold no lists: "
+                    "use ormar.or_() of equalities instead of an in filter in "
+                    "When() conditions"
+                )
             return sqlalchemy.literal_column(
                 variables.get(element.key, f"@{element.key}"), type_=element.type
             )

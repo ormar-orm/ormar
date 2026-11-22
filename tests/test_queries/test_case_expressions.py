@@ -5,10 +5,12 @@ import pytest_asyncio
 
 import ormar
 from ormar import Case, F, Func, Greatest, Inserted, When
+from ormar.databases.dialects import MysqlRules
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.select_action import resolve_expression
 from ormar.queryset.expressions import expression_key
 from ormar.queryset.templates import template_cache_for
+from ormar.queryset.templates.writes import build_conflict_insert
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -40,6 +42,7 @@ class Player(ormar.Model):
     rank: Optional[int] = ormar.Integer(nullable=True)
     active: bool = ormar.Boolean(default=False)
     label: Optional[str] = ormar.String(max_length=20, nullable=True)
+    revision: int = ormar.Integer(default=0, on_update=1)
     team: Optional[Team] = ormar.ForeignKey(Team, nullable=True, related_name="players")
     tags: Optional[list[Tag]] = ormar.ManyToMany(Tag, related_name="players")
 
@@ -133,13 +136,11 @@ async def test_ranking_by_id_order(players):
 @pytest.mark.asyncio
 async def test_forward_relation_conditions(players):
     await Player.objects.update(
-        each=True,
-        rank=Case(When(team__name="red", then=F("score")), default=0),
+        each=True, rank=Case(When(team=None, then=0), default=F("score"))
     )
-    # a row without a team is not updated, like with F("team__name")
-    assert await column("rank") == {"a-1": 3, "b-2": 8, "c-3": 0, "d-4": None}
+    assert await column("rank") == {"a-1": 3, "b-2": 8, "c-3": 5, "d-4": 0}
     await Player.objects.filter(team__name="blue").update(
-        rank=Case(When(team__rank__gt=3, then=F("score") + 10), default=-1)
+        rank=Case(When(score__gt=3, then=F("team__rank") + 10), default=-1)
     )
     assert (await column("rank"))["c-3"] == 15
     in_red = Case(When(team__name="red", then=1), default=0)
@@ -210,6 +211,26 @@ async def test_bool_and_none_branches(players):
 
 
 @pytest.mark.asyncio
+async def test_null_only_cases_are_typed(players):
+    nothing = Case(When(code="a-1", then=None))
+    await Player.objects.update(each=True, rank=1, label="x")
+    await Player.objects.update(each=True, rank=nothing, label=nothing)
+    assert await column("rank") == {"a-1": None, "b-2": None, "c-3": None, "d-4": None}
+    assert set((await column("label")).values()) == {None}
+    everyone = ["a-1", "b-2", "c-3", "d-4"]
+    assert await codes(rank=nothing) == []
+    assert await codes(nothing == 1) == []
+    assert await codes(nothing == F("score")) == []
+    assert await codes(nothing.in_([1, 2])) == []
+    assert await codes(nothing.in_([])) == []
+    assert await codes(nothing.startswith("a")) == []
+    assert await codes(nothing.isnull(True)) == everyone
+    assert await codes(nothing == None) == everyone  # noqa: E711
+    with pytest.raises(QueryDefinitionError, match="unknown type"):
+        await codes(nothing == Func("now"))
+
+
+@pytest.mark.asyncio
 async def test_nested_and_combined_cases(players):
     nested = Case(
         When(score__gte=5, then=Case(When(code="b-2", then=1), default=2)),
@@ -229,7 +250,10 @@ async def test_upsert_update_values(players):
         on_conflict="update",
         conflict_target=["code"],
         update_values={
-            "rank": Case(When(score__lt=6, then=Inserted("score")), default=F("score")),
+            "rank": Case(
+                When(score__lt=Inserted("score"), then=Inserted("score")),
+                default=F("score"),
+            ),
             "label": Case(When(name="Ann", then="again"), default=None),
         },
     )
@@ -247,6 +271,46 @@ async def test_upsert_update_values(players):
         "e-5": None,
     }
     assert (await column("label"))["a-1"] == "again"
+    assert (await column("revision"))["a-1"] == 1
+
+
+@pytest.mark.asyncio
+async def test_upsert_conditions_read_the_inserted_row(players):
+    newer = Case(
+        When(Inserted("score") > F("score"), then=Inserted("name")), default=F("name")
+    )
+    rows = [
+        Player(code="a-1", name="Ann2", score=1),
+        Player(code="b-2", name="Bob2", score=9),
+        Player(code="c-3", name="Cyd2", score=7),
+    ]
+    await Player.objects.bulk_create(
+        rows,
+        on_conflict="update",
+        conflict_target=["code"],
+        update_values={
+            "name": newer,
+            "rank": Case(
+                When(
+                    ormar.or_(
+                        Player.code == "a-1",
+                        Player.code == "c-3",
+                        score__lt=Inserted("score"),
+                    ),
+                    then=Inserted("score") * 10,
+                ),
+                default=0,
+            ),
+        },
+    )
+    assert await column("name") == {
+        "a-1": "Ann",
+        "b-2": "Bob2",
+        "c-3": "Cyd2",
+        "d-4": "Dee",
+    }
+    assert await column("rank") == {"a-1": 10, "b-2": 90, "c-3": 70, "d-4": None}
+    assert await column("revision") == {"a-1": 1, "b-2": 1, "c-3": 1, "d-4": 0}
 
 
 @pytest.mark.asyncio
@@ -314,6 +378,16 @@ async def test_invalid_cases(players):
         Player.objects.filter(rank=Case(When(tags__name="x", then=1)))
     with pytest.raises(QueryDefinitionError, match="through foreign keys"):
         Player.objects.filter(Case(When(team__players__score=1, then=1)) == 1)
+    with pytest.raises(QueryDefinitionError, match="read only fields of the updated"):
+        await Player.objects.update(
+            each=True, rank=Case(When(team__name="red", then=1), default=0)
+        )
+    with pytest.raises(QueryDefinitionError, match="only allowed in update_values"):
+        Player.objects.filter(rank=Case(When(score=Inserted("score"), then=1)))
+    with pytest.raises(QueryDefinitionError, match="only allowed in update_values"):
+        await Player.objects.update(
+            each=True, rank=Case(When(Inserted("score") > 1, then=1))
+        )
     with pytest.raises(QueryDefinitionError, match="read no columns set"):
         await Player.objects.update(
             each=True, score=1, rank=Case(When(score=1, then=1))
@@ -333,4 +407,25 @@ async def test_invalid_cases(players):
             on_conflict="update",
             conflict_target=["code"],
             update_values={"rank": Case(When(score=1, then=1)), "score": 2},
+        )
+
+
+def test_mysql_batches_take_no_in_conditions():
+    update_values = Player._conflict_updates(
+        update_fields=None,
+        update_values={"rank": Case(When(code__in=["a-1"], then=1), default=0)},
+    )[1]
+    with pytest.raises(QueryDefinitionError, match="ormar.or_"):
+        build_conflict_insert(
+            table=Player.ormar_config.table,
+            names=("code", "name"),
+            rules=MysqlRules(backend_name="mysql"),
+            on_conflict="update",
+            target=("code",),
+            update_names=(),
+            on_update=("revision",),
+            returning=(),
+            model=Player,
+            update_values=update_values,
+            update_variables=True,
         )

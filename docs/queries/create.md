@@ -307,6 +307,34 @@ await Score.objects.bulk_create(
 )
 ```
 
+A [`Case`](update.md#conditional-expressions) chooses per row between the existing and
+the inserted value. Its `When` conditions read the model's own fields: `F("field")`
+and plain keyword filters read the existing row, `Inserted("field")` the inserted one,
+also as the filtered side:
+
+```python
+from ormar import Case, F, Inserted, When
+
+# only overwrite the price with a newer one
+await Price.objects.bulk_create(
+    prices,
+    on_conflict="update",
+    conflict_target=["product"],
+    update_values={
+        "amount": Case(
+            When(Inserted("valid_from") > F("valid_from"), then=Inserted("amount")),
+            default=F("amount"),
+        ),
+    },
+)
+# the same condition as a keyword filter on the existing row
+newer = When(valid_from__lt=Inserted("valid_from"), then=Inserted("amount"))
+```
+
+A field a condition reads cannot be set by the same upsert (here `valid_from`), as
+MySQL would read the new value: keep such fields out of `update_fields` and
+`update_values`.
+
 | | PostgreSQL, SQLite | MySQL |
 |---|---|---|
 | `F("x")` | `table.x` (the existing row) | `table.x` (the existing row) |
@@ -322,7 +350,8 @@ await Score.objects.bulk_create(
   upsert (`update_fields`, other `update_values`, fields with `on_update`); reading the
   field it sets is fine, and `Inserted()` can read any field. The literal goes on the
   right side. Plain values (`"source": "merge"`) are validated like `update()` values.
-* `Inserted()` is only accepted in `update_values`; in filters and `update()` it
+* `Inserted()` is only accepted in `update_values` (also in the conditions of a
+  `Case` there); in filters and `update()` it
   raises `QueryDefinitionError`, as do unknown fields.
 * The statement is cached per shape of the expressions: `F("completed") + 1` and
   `F("completed") + 5` run the same SQL with a different bound value.

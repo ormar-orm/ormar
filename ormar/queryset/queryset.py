@@ -42,6 +42,7 @@ from ormar.queryset.expressions import (
     Random,
     expression_key,
     expression_params,
+    fields_read,
 )
 from ormar.queryset.prefetch import Prefetch
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
@@ -1480,13 +1481,14 @@ class QuerySet(Generic[T]):
         for name, value in updates.items():
             if not isinstance(value, Expression):
                 continue
-            node, columns = resolve_expression(node=value._node(), model=self.model)
+            node, columns = resolve_expression(
+                node=value._node(), model=self.model, update=True
+            )
             expressions[name] = node
-            paths = expression_paths(node=node, columns=columns)
-            for path in paths:
+            for path in expression_paths(node=node, columns=columns):
                 # only validates the path here, the joins are built with the statement
                 forward_join_conditions(model=self.model, path=path.related_parts)
-            read = [path.field_name for path in paths if not path.related_parts]
+            read = fields_read(node=node)
             if name in self.model.extract_related_names() or any(
                 field != name and field in updates for field in read
             ):

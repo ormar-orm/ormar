@@ -5,6 +5,7 @@ import sqlalchemy
 from sqlalchemy import TextClause
 from sqlalchemy.sql import operators as sql_operators
 from sqlalchemy.sql.elements import BindParameter
+from sqlalchemy.types import NullType
 
 import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
@@ -25,6 +26,8 @@ from ormar.queryset.expressions import (
     expression_literals,
     expression_params,
     expression_whens,
+    fields_read,
+    is_null_case,
     slot_literals,
 )
 
@@ -324,7 +327,24 @@ class FilterAction(QueryAction):
     ``get(...)`` / ``first(...)``.
     """
 
-    def __init__(self, filter_str: str, value: Any, model_cls: type["Model"]) -> None:
+    def __init__(
+        self,
+        filter_str: str,
+        value: Any,
+        model_cls: type["Model"],
+        upsert: bool = False,
+    ) -> None:
+        """
+        :param filter_str: filter key, the field path and the operator
+        :type filter_str: str
+        :param value: filter value
+        :type value: Any
+        :param model_cls: queried model
+        :type model_cls: type[Model]
+        :param upsert: the filter is a ``When`` condition in ``update_values``
+            of an upsert, where expressions may read ``Inserted`` fields
+        :type upsert: bool
+        """
         super().__init__(query_str=filter_str, model_cls=model_cls)
         self.expression_columns: dict[str, SelectAction] = {}
         if isinstance(value, Expression):
@@ -334,7 +354,7 @@ class FilterAction(QueryAction):
                     f"'{self.operator}': in takes a list of values, isnull a bool"
                 )
             value, self.expression_columns = resolve_expression(
-                node=value._node(), model=model_cls
+                node=value._node(), model=model_cls, upsert=upsert
             )
         self.filter_value = value
         self._escape_characters_in_clause()
@@ -354,6 +374,15 @@ class FilterAction(QueryAction):
         :rtype: list[QueryAction]
         """
         return [self, *self.value_paths()]
+
+    def fields_read(self) -> list[str]:
+        """
+        :return: the model's own fields the filter reads, the filtered field
+            and the ``F`` fields of an expression value (see ``fields_read``)
+        :rtype: list[str]
+        """
+        own = [] if self.related_parts else [self.field_name]
+        return own + fields_read(node=self.filter_value)
 
     def update_select_related(self, select_related: list[str]) -> list[str]:
         """
@@ -501,7 +530,9 @@ class FilterAction(QueryAction):
             return {}
         return expression_params(value=self.bound_value(), slot=slot)
 
-    def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
+    def get_text_clause(
+        self, binder: Optional["SlotBinder"] = None, inserted: Any = None
+    ) -> TextClause:
         """
         Escapes characters if it's required.
         Substitutes values of the models if value is a ormar Model with its pk value.
@@ -510,6 +541,9 @@ class FilterAction(QueryAction):
         :param binder: names the bound value for statement templates
             (``= :ormar_p0`` instead of an anonymous parameter), if given
         :type binder: Optional[SlotBinder]
+        :param inserted: columns of the inserted row of an upsert, read by
+            ``Inserted`` fields of a ``When`` condition
+        :type inserted: Any
         :return: complied and escaped clause
         :rtype: sqlalchemy.sql.elements.TextClause
         """
@@ -520,6 +554,7 @@ class FilterAction(QueryAction):
                 node=value,
                 columns=self.expression_columns,
                 slot=binder.slots[id(self)] if binder is not None else None,
+                inserted=inserted,
                 reference_type=self.aliased_column.type,
             )
             filter_value = like_value_clause(value=filter_value, operator=self.operator)
@@ -547,7 +582,12 @@ class ExpressionFilterAction(FilterAction):
     """
 
     def __init__(
-        self, lhs: Expression, operator: str, value: Any, model_cls: type["Model"]
+        self,
+        lhs: Expression,
+        operator: str,
+        value: Any,
+        model_cls: type["Model"],
+        upsert: bool = False,
     ) -> None:
         """
         :param lhs: filtered expression
@@ -558,14 +598,20 @@ class ExpressionFilterAction(FilterAction):
         :type value: Any
         :param model_cls: queried model
         :type model_cls: type[Model]
+        :param upsert: the filter is a ``When`` condition in ``update_values``
+            of an upsert, where expressions may read ``Inserted`` fields
+        :type upsert: bool
         :raises QueryDefinitionError: if the expression reads a relation or a
             missing field, or an expression value is used with ``in`` or
             ``isnull``
         """
-        super().__init__(filter_str=operator, value=value, model_cls=model_cls)
+        super().__init__(
+            filter_str=operator, value=value, model_cls=model_cls, upsert=upsert
+        )
         self.lhs, self.lhs_columns = resolve_expression(
             node=lhs._node(),
             model=model_cls,
+            upsert=upsert,
             first_branch=sum(1 for _ in expression_whens(node=self.filter_value)),
         )
 
@@ -592,6 +638,13 @@ class ExpressionFilterAction(FilterAction):
             *self.value_paths(),
         ]
 
+    def fields_read(self) -> list[str]:
+        """
+        :return: the model's own fields both sides read by ``F``
+        :rtype: list[str]
+        """
+        return fields_read(node=self.lhs) + fields_read(node=self.filter_value)
+
     def update_select_related(self, select_related: list[str]) -> list[str]:
         """
         Add the joins of the fields both sides read.
@@ -608,9 +661,16 @@ class ExpressionFilterAction(FilterAction):
     def cache_key(self) -> tuple[Any, ...]:
         """
         :return: the shape of the filtered expression (see ``expression_key``)
+            and, for a ``Case`` whose values are all None compared by ``in``,
+            the type of the first listed value it is cast to (see
+            ``null_case_type``)
         :rtype: tuple[Any, ...]
         """
-        return ("lhs", expression_key(node=self.lhs))
+        key = ("lhs", expression_key(node=self.lhs))
+        if is_null_case(node=self.lhs) and self.operator == "in":
+            items = list(self.bound_value())
+            return (*key, type(items[0]) if items else None)
+        return key
 
     def value_type(self, lhs_type: Any) -> Any:
         """
@@ -667,7 +727,42 @@ class ExpressionFilterAction(FilterAction):
             **condition_params(node=value, slot=slot),
         }
 
-    def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
+    def null_case_type(self, inserted: Any) -> Any:
+        """
+        Return the type a filtered ``Case`` whose values are all None is cast
+        to, as PostgreSQL reads an untyped ``NULL`` as text: the type of the
+        compared value, None when compared with None or by ``isnull``.
+
+        :param inserted: columns of the inserted row of an upsert
+        :type inserted: Any
+        :raises QueryDefinitionError: if the type of the compared value is not
+            known
+        :return: type of the compared value
+        :rtype: Any
+        """
+        value = self.bound_value()
+        if isinstance(value, Expression):
+            value_type = expression_clause(
+                node=value,
+                columns=self.expression_columns,
+                slot=None,
+                inserted=inserted,
+            ).type
+        else:
+            items = list(value) if self.operator == "in" else [value]
+            if self.operator == "isnull" or not items or items[0] is None:
+                return None
+            value_type = sqlalchemy.literal(value=items[0]).type
+        if isinstance(value_type, NullType):
+            raise QueryDefinitionError(
+                "A Case() whose values are all None is compared with a value of "
+                "unknown type: give a branch a value of the compared type"
+            )
+        return value_type
+
+    def get_text_clause(
+        self, binder: Optional["SlotBinder"] = None, inserted: Any = None
+    ) -> TextClause:
         """
         Build the filtered expression and the value with one counter of
         literals, then compare them.
@@ -675,13 +770,25 @@ class ExpressionFilterAction(FilterAction):
         :param binder: names the bound literals for statement templates, if
             given
         :type binder: Optional[SlotBinder]
+        :param inserted: columns of the inserted row of an upsert, read by
+            ``Inserted`` fields of a ``When`` condition
+        :type inserted: Any
         :return: the condition
         :rtype: TextClause
         """
         slot = binder.slots[id(self)] if binder is not None else None
         index = itertools.count()
         lhs_clause = expression_clause(
-            node=self.lhs, columns=self.lhs_columns, slot=slot, index=index
+            node=self.lhs,
+            columns=self.lhs_columns,
+            slot=slot,
+            index=index,
+            inserted=inserted,
+            reference_type=(
+                self.null_case_type(inserted=inserted)
+                if is_null_case(node=self.lhs)
+                else None
+            ),
         )
         value = self.bound_value()
         filter_value = value
@@ -691,6 +798,7 @@ class ExpressionFilterAction(FilterAction):
                 columns=self.expression_columns,
                 slot=slot,
                 index=index,
+                inserted=inserted,
                 reference_type=lhs_clause.type,
             )
             filter_value = like_value_clause(value=filter_value, operator=self.operator)
@@ -778,10 +886,14 @@ class KeyInFilterAction(FilterAction):
         )
         return [self.aliased_table.c[name] for name in names]
 
-    def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
+    def get_text_clause(
+        self, binder: Optional["SlotBinder"] = None, inserted: Any = None
+    ) -> TextClause:
         """
         :param binder: names the bound values for statement templates, if given
         :type binder: Optional[SlotBinder]
+        :param inserted: columns of the inserted row of an upsert (unused)
+        :type inserted: Any
         :return: row-value ``IN`` over the key columns
         :rtype: TextClause
         """
@@ -813,11 +925,15 @@ class KeyNullFilterAction(KeyInFilterAction):
         """
         return "isnull"
 
-    def get_text_clause(self, binder: Optional["SlotBinder"] = None) -> TextClause:
+    def get_text_clause(
+        self, binder: Optional["SlotBinder"] = None, inserted: Any = None
+    ) -> TextClause:
         """
         :param binder: slot binder of a statement template (unused, nothing is
             bound)
         :type binder: Optional[SlotBinder]
+        :param inserted: columns of the inserted row of an upsert (unused)
+        :type inserted: Any
         :return: the null checks of the key columns
         :rtype: TextClause
         """

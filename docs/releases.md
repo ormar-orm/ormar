@@ -43,7 +43,7 @@
 
 * **Conditional expressions: `ormar.Case` and `ormar.When`**
 
-    `Case(*whens, default=None)` takes the value of the first `When` whose condition holds. Conditions take the arguments of `filter()` (keyword filters, `and_()` / `or_()`, `Model.field == value`, comparisons of expressions) on own fields and fields reached through foreign keys; values are literals or expressions. Works in `update()`, upsert `update_values`, filter values and as the filtered side. See [conditional expressions](queries/update.md#conditional-expressions).
+    `Case(*whens, default=None)` takes the value of the first `When` whose condition holds. Conditions take the arguments of `filter()` (keyword filters, `and_()` / `or_()`, `Model.field == value`, comparisons of expressions); values are literals or expressions. Works in `update()` and upsert `update_values` (conditions on own fields, in upserts also on `Inserted()` values), and in filter values and as the filtered side (conditions also on fields reached through foreign keys). See [conditional expressions](queries/update.md#conditional-expressions) and [expressions on conflict](queries/create.md#expressions-on-conflict).
 
     ```python
     await Item.objects.filter(id__in=order).update(
