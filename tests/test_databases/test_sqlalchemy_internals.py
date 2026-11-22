@@ -82,7 +82,9 @@ def test_sqlalchemy_version_in_pinned_range():
     "insert_module, dialect_cls",
     [(postgresql, PGDialect_asyncpg), (sqlite, SQLiteDialect_aiosqlite)],
 )
-def test_upsert_with_bound_values_is_batched(insert_module, dialect_cls):
+def test_upsert_with_bound_values_is_batched(  # pragma: no cover
+    insert_module, dialect_cls
+):
     """
     bulk_create(returning=True) relies on SQLAlchemy batching an upsert with
     RETURNING into multi-row VALUES once the values of its SET clause are set in
