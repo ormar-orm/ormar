@@ -25,6 +25,27 @@ class Player(ormar.Model):
     league: Optional[League] = ormar.ForeignKey(League, name="league_ref")
 
 
+class Badge(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="aggr_badges")
+
+    id: int = ormar.Integer(primary_key=True)
+    title: str = ormar.String(max_length=100)
+
+
+class TeamBadge(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="aggr_teams_x_badges")
+
+    id: int = ormar.Integer(primary_key=True)
+    sort_order: int = ormar.Integer(name="sort_col")
+
+
+class Team(ormar.Model):
+    ormar_config = base_ormar_config.copy(tablename="aggr_teams")
+
+    id: int = ormar.Integer(primary_key=True)
+    badges = ormar.ManyToMany(Badge, through=TeamBadge)
+
+
 create_test_database = init_tests(base_ormar_config)
 
 
@@ -32,6 +53,9 @@ create_test_database = init_tests(base_ormar_config)
 async def cleanup():
     yield
     async with base_ormar_config.database:
+        await TeamBadge.objects.delete(each=True)
+        await Team.objects.delete(each=True)
+        await Badge.objects.delete(each=True)
         await Player.objects.delete(each=True)
         await League.objects.delete(each=True)
 
@@ -78,3 +102,23 @@ async def test_aggregate_related_field_with_custom_column_name(
 
         filtered_queryset = forward_queryset.filter(league__level__gt=4)
         assert float(await getattr(filtered_queryset, func_name)("score")) == 6
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "func_name, expected",
+    [("max", 7), ("min", 3), ("sum", 10), ("avg", 5)],
+)
+async def test_aggregate_through_field_with_custom_column_name(func_name, expected):
+    async with base_ormar_config.database:
+        team = await Team().save()
+        for title, sort_order in [("first", 3), ("second", 7)]:
+            await team.badges.create(title=title, teambadge={"sort_order": sort_order})
+        through_result = await getattr(team.badges, func_name)("teambadge__sort_order")
+        assert float(through_result) == expected
+
+        queryset = Team.objects.select_related("badges")
+        related_result = await getattr(queryset, func_name)(
+            "badges__teambadge__sort_order"
+        )
+        assert float(related_result) == expected
