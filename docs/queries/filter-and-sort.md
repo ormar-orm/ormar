@@ -395,16 +395,28 @@ await Publisher.objects.update(each=True, staff=F("info")["staff"].as_integer())
 ```
 
 The comparisons and lookups are the ones of [filtering on expressions](#filtering-on-expressions).
-A missing key and a JSON `null` read as `NULL`, so `isnull(True)` matches both and
-`!=` matches neither. A value that does not fit the cast differs per database:
-`as_integer()` of `"abc"` raises an error on PostgreSQL and reads as `0` on SQLite
-and MySQL, of `4.7` it raises, gives `4` or `5`. Cast to the type the path stores
-(`as_float()` reads integers too).
+A JSON path also works in the `update_values` of upserts (`create()` and
+`bulk_create()` with `on_conflict="update"`), where it reads the existing row.
 
-Keys are non-negative array indexes or strings without `"`, `\`, `{`, `}` or commas,
-without surrounding whitespace and other than `null`, which the JSON path syntax of
-some database does not read literally. A JSON path is read only: it cannot be the
-target of `update()`, which writes whole columns.
+A missing key and a JSON `null` read as `NULL`, so `isnull(True)` matches both and
+`!=` matches neither. Some values read differently per database, so cast to the
+type the path stores (`as_float()` reads integers too):
+
+* a value that does not fit the cast: `as_integer()` of `"abc"` raises an error on
+  PostgreSQL and reads as `0` on SQLite and MySQL, of `4.7` it raises, gives `4`
+  on SQLite and `5` on MySQL;
+* booleans: `as_string()` of `true` is `"true"` on PostgreSQL and MySQL but `"1"`
+  on SQLite, and `as_boolean()` of the string `"true"` is true on PostgreSQL only;
+* MySQL reads a value that is not an array as an array of itself, so `[0]` of an
+  object or a string is the value itself there and `NULL` elsewhere;
+* a key of digits is an object key in `["tags"]["0"]` and an array index in
+  `["tags"][0]` on SQLite and MySQL, while PostgreSQL reads both as either in a
+  path of two or more keys.
+
+Keys are non-negative array indexes or strings without `"`, `\`, `{`, `}`, commas or
+control characters, without surrounding whitespace and other than `null`, which the
+JSON path syntax of some database does not read literally. A JSON path is read
+only: it cannot be the target of `update()`, which writes whole columns.
 
 ### exclude
 

@@ -19,7 +19,7 @@ class Publisher(ormar.Model):
     ormar_config = base_ormar_config.copy(tablename="json_path_publishers")
 
     id: int = ormar.Integer(primary_key=True)
-    name: str = ormar.String(max_length=20)
+    name: str = ormar.String(max_length=20, unique=True)
     info: Optional[Any] = ormar.JSON(nullable=True)
     city: Optional[str] = ormar.String(max_length=20, nullable=True)
     staff: Optional[int] = ormar.Integer(nullable=True)
@@ -198,18 +198,23 @@ async def test_pagination_with_select_related(publishers):
 
 
 @pytest.mark.asyncio
-async def test_template_cache_keys_paths_not_values(publishers):
+async def test_template_cache_keys_path_shapes_not_values(publishers):
     cache = template_cache_for(model_cls=Publisher)
     cache.clear()
     for city in ("Warsaw", "Krakow"):
         assert len(await names(F("info")["city"].as_string() == city)) == 1
+    assert await names(F("info")["staff"].as_string() == "12") == ["alpha"]
     assert len(cache.entries) == 1
     assert await names(F("info")["address"]["street"].as_string() == "Main") == [
         "alpha"
     ]
+    assert await names(F("info")["tags"]["x"].as_string() == "sea") == []
+    assert len(cache.entries) == 2
     assert await names(F("info")["tags"][0].as_string() == "sea") == ["alpha"]
     assert await names(F("info")["tags"][1].as_string() == "war") == ["alpha"]
-    assert await names(F("info")["staff"].as_string() == "12") == ["alpha"]
+    assert len(cache.entries) == 3
+    assert await names(F("info")["staff"].as_integer() == 12) == ["alpha"]
+    assert await names(F("info")[1].as_string().isnull(False)) == []
     assert len(cache.entries) == 5
 
 
@@ -218,8 +223,11 @@ def test_expression_key():
     assert expression_key(node=path.as_string()) == (
         "json",
         "info",
-        ("tags", 0),
+        (str, int),
         "string",
+    )
+    assert expression_key(node=F("info")["other"][7].as_string()) == (
+        expression_key(node=path.as_string())
     )
     assert expression_key(node=F("info")["tags"]["0"].as_string()) != (
         expression_key(node=path.as_string())
@@ -248,7 +256,22 @@ async def test_path_without_cast_is_rejected(publishers):
 
 
 @pytest.mark.parametrize(
-    "key", [-1, True, 1.5, None, "", " city", 'a"b', "a\\b", "{a}", "a,b", "NULL"]
+    "key",
+    [
+        -1,
+        True,
+        1.5,
+        None,
+        "",
+        " city",
+        'a"b',
+        "a\\b",
+        "{a}",
+        "a,b",
+        "NULL",
+        "a\nb",
+        "\x00",
+    ],
 )
 def test_invalid_keys_are_rejected(key):
     with pytest.raises(QueryDefinitionError, match="JSON path keys"):
@@ -270,14 +293,61 @@ def test_relation_accessor_has_no_json_path():
 
 
 @pytest.mark.parametrize(
-    "dialect, sql",
+    "dialect, string_sql, boolean_sql",
     [
-        (postgresql.dialect(), "->>"),
-        (mysql.dialect(), "JSON_UNQUOTE(JSON_EXTRACT("),
-        (sqlite.dialect(), "CAST(JSON_EXTRACT("),
+        (postgresql.dialect(), "->>", "AS BOOLEAN"),
+        (mysql.dialect(), "JSON_UNQUOTE(JSON_EXTRACT(", "IS NOT NULL"),
+        (sqlite.dialect(), "CAST(JSON_EXTRACT(", "AS BOOLEAN"),
     ],
 )
-def test_json_path_sql_per_dialect(dialect, sql):
+def test_json_path_sql_per_dialect(dialect, string_sql, boolean_sql):
     column = Publisher.ormar_config.table.c.info
-    clause = json_path_clause(node=F("info")["city"].as_string(), column=column)
-    assert sql in str(clause.compile(dialect=dialect))
+    string = json_path_clause(
+        node=F("info")["city"].as_string(), column=column, key="ormar_p0_0"
+    )
+    assert string_sql in str(string.compile(dialect=dialect))
+    boolean = json_path_clause(
+        node=F("info")["a"][0].as_boolean(), column=column, key=None
+    )
+    assert boolean_sql in str(boolean.compile(dialect=dialect))
+
+
+def test_expressions_are_not_iterable():
+    for expression in (Publisher.name, Publisher.info, F("info"), F("info")["a"]):
+        with pytest.raises(TypeError):
+            list(expression)
+        with pytest.raises(TypeError):
+            "x" in expression  # noqa: B015
+    with pytest.raises(TypeError):
+        Publisher.objects.fields(Publisher.name)
+    with pytest.raises(TypeError):
+        Publisher.objects.exclude_fields(Publisher.name)
+
+
+@pytest.mark.asyncio
+async def test_upsert_update_values(publishers):
+    await Publisher.objects.create(
+        name="alpha",
+        on_conflict="update",
+        conflict_target=["name"],
+        update_values={"city": F("info")["address"]["street"].as_string()},
+    )
+    await Publisher.objects.bulk_create(
+        [Publisher(name="beta"), Publisher(name="gamma"), Publisher(name="omega")],
+        on_conflict="update",
+        conflict_target=["name"],
+        update_values={
+            "city": Publisher.info["city"].as_string(),
+            "staff": F("info")["staff"].as_integer() + 1,
+        },
+    )
+    rows = await Publisher.objects.order_by("name").values_list(
+        ["name", "city", "staff"]
+    )
+    assert rows == [
+        ("alpha", "Main", None),
+        ("beta", "Krakow", 4),
+        ("delta", None, None),
+        ("gamma", "Gdansk", None),
+        ("omega", None, None),
+    ]

@@ -68,11 +68,11 @@ import sqlalchemy
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import operators as sql_operators
 from sqlalchemy.sql.compiler import SQLCompiler
-from sqlalchemy.sql.elements import BindParameter, ColumnElement
+from sqlalchemy.sql.elements import BinaryExpression, BindParameter, ColumnElement
 from sqlalchemy.sql.functions import Function as SQLFunction
 from sqlalchemy.sql.functions import GenericFunction, ReturnTypeFromArgs, coalesce
 from sqlalchemy.sql.visitors import InternalTraversal
-from sqlalchemy.types import Float, NullType, TypeEngine
+from sqlalchemy.types import JSON, Float, NullType, TypeEngine
 from sqlalchemy.types import to_instance as type_instance
 
 import ormar  # noqa: I100, I202
@@ -89,6 +89,11 @@ class Expression:
     Base of column expressions, combined with ``+``, ``-`` and ``*``. The
     literal operand has to be on the right side (``F("a") + 1``).
     """
+
+    # ``__getitem__`` of JSON paths would make expressions iterable through
+    # the sequence protocol, endlessly: ``list(F("a"))`` and ``"x" in F("a")``
+    # raise TypeError instead
+    __iter__ = None
 
     def _node(self) -> "Expression":
         """
@@ -266,19 +271,9 @@ class F(Comparable, Expression):
 
 
 # keys that the JSON path syntax of every dialect reads literally: SQLite and
-# MySQL bind them inside ``$."key"``, PostgreSQL nested paths as ``{a, b}``
-JSON_KEY_FORBIDDEN = re.compile(r'["\\{},]')
-
-
-def json_boolean(element: Any) -> Any:
-    """
-    :param element: JSON index operation
-    :type element: Any
-    :return: the value as a boolean, ``NULL`` for a missing key, which
-        SQLAlchemy's ``as_boolean()`` reads as false on MySQL
-    :rtype: Any
-    """
-    return sqlalchemy.case((element.is_not(other=None), element.as_boolean()))
+# MySQL bind them inside ``$."key"``, PostgreSQL nested paths as ``{a, b}``,
+# and MySQL rejects control characters in paths
+JSON_KEY_FORBIDDEN = re.compile(r'["\\{},\x00-\x1f]')
 
 
 # SQLAlchemy casts of JSON index operations by ``JsonPath`` cast name
@@ -286,7 +281,7 @@ JSON_CASTS: dict[str, Callable[[Any], Any]] = {
     "string": operator.methodcaller("as_string"),
     "integer": operator.methodcaller("as_integer"),
     "float": operator.methodcaller("as_float"),
-    "boolean": json_boolean,
+    "boolean": operator.methodcaller("as_boolean"),
 }
 
 
@@ -312,8 +307,8 @@ def check_json_key(key: Any) -> Union[str, int]:
         return key
     raise QueryDefinitionError(
         f"JSON path keys are non-negative array indexes or object keys without "
-        f'", \\, {{, }} or commas, surrounding whitespace, and other than '
-        f"'null', got {key!r}"
+        f'", \\, {{, }}, commas, control characters or surrounding whitespace, '
+        f"and other than 'null', got {key!r}"
     )
 
 
@@ -343,6 +338,14 @@ class JsonPath(Comparable, Expression):
         self._path = field._path
         self._keys = keys
         self._cast_name = cast_name
+
+    def _index(self) -> Union[str, int, tuple[Union[str, int], ...]]:
+        """
+        :return: the value bound as the path: a single key, or the keys of a
+            longer path
+        :rtype: Union[str, int, tuple[Union[str, int], ...]]
+        """
+        return self._keys[0] if len(self._keys) == 1 else self._keys
 
     def __getitem__(self, key: Union[str, int]) -> "JsonPath":
         """
@@ -741,41 +744,71 @@ def compile_random_on_sqlite(
     return "(abs(random() % 9007199254740992) / 9007199254740992.0)"
 
 
-class SqliteCast(ColumnElement[Any]):
+class DialectClause(ColumnElement[Any]):
     """
-    Clause cast to its own type on SQLite, unchanged elsewhere. SQLAlchemy
-    2.0 renders the casts of JSON index operations on SQLite as a bare
-    ``JSON_EXTRACT``, which returns the stored JSON type, so
-    ``as_string()`` of a number would compare as a number there.
+    Clause rendered as ``sqlite`` on SQLite, ``mysql`` on MySQL and
+    ``default`` elsewhere, all of the type of ``default``.
     """
 
     inherit_cache = True
-    _traverse_internals = [("clause", InternalTraversal.dp_clauseelement)]
+    _traverse_internals = [
+        ("default", InternalTraversal.dp_clauseelement),
+        ("sqlite", InternalTraversal.dp_clauseelement),
+        ("mysql", InternalTraversal.dp_clauseelement),
+    ]
 
-    def __init__(self, clause: Any) -> None:
+    def __init__(
+        self, default: Any, sqlite: Optional[Any] = None, mysql: Optional[Any] = None
+    ) -> None:
         """
-        :param clause: the cast clause
-        :type clause: Any
+        :param default: clause of the other dialects
+        :type default: Any
+        :param sqlite: clause on SQLite, ``default`` if None
+        :type sqlite: Optional[Any]
+        :param mysql: clause on MySQL, ``default`` if None
+        :type mysql: Optional[Any]
         """
-        self.clause = clause
-        self.type = clause.type
+        self.default = default
+        self.sqlite = sqlite if sqlite is not None else default
+        self.mysql = mysql if mysql is not None else default
+        self.type = default.type
 
 
-@compiles(SqliteCast)
-def compile_sqlite_cast(
-    element: SqliteCast, compiler: SQLCompiler, **kwargs: Any
+@compiles(DialectClause)
+def compile_dialect_clause(
+    element: DialectClause, compiler: SQLCompiler, **kwargs: Any
 ) -> str:
-    """Other dialects render the clause as is."""
-    return compiler.process(obj=element.clause, **kwargs)
+    """Other dialects render the default clause."""
+    return compiler.process(obj=element.default, **kwargs)
 
 
-@compiles(SqliteCast, "sqlite")
-def compile_sqlite_cast_on_sqlite(
-    element: SqliteCast, compiler: SQLCompiler, **kwargs: Any
+@compiles(DialectClause, "sqlite")
+def compile_dialect_clause_on_sqlite(
+    element: DialectClause, compiler: SQLCompiler, **kwargs: Any
 ) -> str:
-    """SQLite casts the clause to its type."""
-    type_name = compiler.dialect.type_compiler_instance.process(type_=element.type)
-    return f"CAST({compiler.process(obj=element.clause, **kwargs)} AS {type_name})"
+    """SQLite renders its own clause."""
+    return compiler.process(obj=element.sqlite, **kwargs)
+
+
+@compiles(DialectClause, "mysql")
+def compile_dialect_clause_on_mysql(
+    element: DialectClause, compiler: SQLCompiler, **kwargs: Any
+) -> str:
+    """MySQL renders its own clause."""
+    return compiler.process(obj=element.mysql, **kwargs)
+
+
+# SQLAlchemy 2.1 casts JSON index operations on SQLite itself, 2.0 renders a
+# bare ``JSON_EXTRACT``, which returns the stored JSON type
+SQLITE_CASTS_JSON = tuple(
+    int(part) for part in sqlalchemy.__version__.split(".")[:2]
+) >= (2, 1)
+
+# the JSON index operation of a path by the number of its keys
+JSON_INDEX_OPERATORS = {
+    True: sql_operators.json_getitem_op,
+    False: sql_operators.json_path_getitem_op,
+}
 
 
 # ``Case`` values written into the SQL instead of bound
@@ -891,7 +924,7 @@ def expression_key(node: Any) -> Any:
         # -> ("length", (("f", "a"),), (Integer, "Integer()"))
         Random()  # -> ("random",)
         Inserted("a")  # -> ("inserted", "a")
-        F("a")["b"][0].as_string()  # -> ("json", "a", ("b", 0), "string")
+        F("a")["b"][0].as_string()  # -> ("json", "a", (str, int), "string")
         Case(When(id=7, then=1), default=None)
         # -> ("case", ((<condition key>, int),), ("constant", None))
 
@@ -936,7 +969,8 @@ def expression_key(node: Any) -> Any:
     if isinstance(node, Inserted):
         return ("inserted", node._path)
     if isinstance(node, JsonPath):
-        return ("json", node._path, node._keys, node._cast_name)
+        key_types = tuple(type(key) for key in node._keys)
+        return ("json", node._path, key_types, node._cast_name)
     return ("f", node._path) if isinstance(node, F) else type(node)
 
 
@@ -983,9 +1017,9 @@ def expression_literals(node: Any) -> list[Any]:
     :rtype: list[Any]
     """
     return [
-        leaf
+        leaf._index() if isinstance(leaf, JsonPath) else leaf
         for leaf in expression_leaves(node=node)
-        if not isinstance(leaf, (F, Inserted, JsonPath))
+        if not isinstance(leaf, (F, Inserted))
     ]
 
 
@@ -1045,11 +1079,15 @@ def expression_clause(
         return columns[node._path].aliased_column
     if isinstance(node, Inserted):
         return inserted[columns[node._path].column.name]
-    if isinstance(node, JsonPath):
-        return json_path_clause(node=node, column=columns[node._path].aliased_column)
     if isinstance(node, Random):
         return RandomFloat()
     index = index or itertools.count()
+    if isinstance(node, JsonPath):
+        return json_path_clause(
+            node=node,
+            column=columns[node._path].aliased_column,
+            key=f"{slot}_{next(index)}" if slot is not None else None,
+        )
     if isinstance(node, Case):
         return case_clause(
             node=node,
@@ -1320,21 +1358,56 @@ def literal_bind(key: Optional[str], value: Any, compared_type: Any) -> BindPara
     )
 
 
-def json_path_clause(node: JsonPath, column: Any) -> Any:
+def json_path_clause(node: JsonPath, column: Any, key: Optional[str]) -> Any:
     """
     Build the SQL of a JSON path with SQLAlchemy's JSON index operations, a
     single key as ``->>`` on PostgreSQL, a longer path as ``#>>``, and
     ``JSON_EXTRACT`` (with ``JSON_UNQUOTE`` for strings on MySQL) elsewhere,
-    each cast to the type of the path's cast, on SQLite whatever the
-    SQLAlchemy version (see ``SqliteCast``). The keys are bound by SQLAlchemy
-    and belong to the path's ``expression_key``.
+    each cast to the type of the path's cast, on SQLite also with SQLAlchemy
+    2.0. A boolean is ``NULL`` for a missing key on MySQL too, where
+    SQLAlchemy's ``as_boolean()`` reads it as false.
+
+    The path is bound as one parameter named ``key`` like the literals of
+    ``expression_clause``, so statement templates and the user variables of
+    MySQL upserts bind it like any value; anonymous without a key.
 
     :param node: JSON path with a cast (see ``expression_columns``)
     :type node: JsonPath
     :param column: the JSON column in the aliased table of its join
     :type column: Any
+    :param key: name of the bound path, None for an anonymous one
+    :type key: Optional[str]
     :return: SQL of the cast value
     :rtype: Any
     """
-    index = node._keys[0] if len(node._keys) == 1 else node._keys
-    return SqliteCast(clause=JSON_CASTS[cast(str, node._cast_name)](column[index]))
+    single = len(node._keys) == 1
+    path_type = (
+        (
+            JSON.JSONIntIndexType
+            if isinstance(node._keys[0], int)
+            else JSON.JSONStrIndexType
+        )
+        if single
+        else JSON.JSONPathType
+    )
+    path = BindParameter(
+        key=key, value=node._index(), type_=path_type(), unique=key is None
+    )
+    element = BinaryExpression(
+        left=column,
+        right=path,
+        operator=JSON_INDEX_OPERATORS[single],
+        type_=column.type,
+    )
+    value = JSON_CASTS[cast(str, node._cast_name)](element)
+    return DialectClause(
+        default=value,
+        sqlite=None
+        if SQLITE_CASTS_JSON
+        else sqlalchemy.cast(expression=value, type_=value.type),
+        mysql=(
+            sqlalchemy.case((element.is_not(other=None), value))
+            if node._cast_name == "boolean"
+            else None
+        ),
+    )
