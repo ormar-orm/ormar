@@ -139,13 +139,22 @@ class FilterAction(QueryAction):
         Escapes the special characters ["%", "_"] if needed.
         Adds `%` for `like` queries.
 
+        ``iexact`` is compiled to ``ilike`` too, so its value is escaped the
+        same way, but it is not wrapped in ``%``::
+
+            filter(name__iexact="a_c")  # matches "A_C", not "abc"
+
         :raises QueryDefinitionError: if contains or icontains is used with
         ormar model instance
         :return: escaped value and flag if escaping is needed
         :rtype: tuple[Any, bool]
         """
         self.has_escaped_character = False
-        if self.operator in [
+        if self.operator == "iexact":
+            self.has_escaped_character = self.has_escaped_characters()
+            if self.has_escaped_character:
+                self._escape_chars()
+        elif self.operator in [
             "contains",
             "icontains",
             "startswith",
