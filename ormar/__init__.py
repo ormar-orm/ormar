@@ -76,7 +76,13 @@ from ormar.fields import (
 
 # noqa: I100
 from ormar.databases.connection import DatabaseConnection
-from ormar.models import ExcludableItems, Extra, Model, OrmarConfig
+from ormar.models import (
+    ExcludableItems,
+    Extra,
+    Model,
+    OrmarConfig,
+    snake_case_tablename,
+)
 from ormar.queryset import (
     Coalesce,
     F,
@@ -173,5 +179,6 @@ __all__ = [
     "LargeBinary",
     "Extra",
     "OrmarConfig",
+    "snake_case_tablename",
     "DatabaseConnection",
 ]

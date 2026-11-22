@@ -476,7 +476,8 @@ def populate_config_tablename_columns_and_pk(
 ) -> type["Model"]:
     """
     Sets Model tablename if it's not already set in OrmarConfig.
-    Default tablename if not present is class name lower + s (i.e. Bed becomes -> beds)
+    Default tablename is built by OrmarConfig.tablename_factory from the class name
+    (by default lowercase name + s, i.e. Bed becomes -> beds)
 
     Checks if Model's OrmarConfig have primary key and columns set.
     If not calls the sqlalchemy_columns_from_model_fields to populate
@@ -492,11 +493,8 @@ def populate_config_tablename_columns_and_pk(
     :return: Model with populated primary key and columns in OrmarConfig
     :rtype: ormar.models.metaclass.ModelMetaclass
     """
-    tablename = name.lower() + "s"
-    new_model.ormar_config.tablename = (
-        new_model.ormar_config.tablename
-        if new_model.ormar_config.tablename
-        else tablename
+    new_model.ormar_config.tablename = new_model.ormar_config.resolve_tablename(
+        class_name=name
     )
     if new_model.ormar_config.columns:
         # a config with columns is shared with the model that built them
