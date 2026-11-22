@@ -25,20 +25,18 @@
     )
     ```
 
-* **`ormar.Func` calls any SQL function in expressions**
+* **`ormar.Func` and filtering on SQL expressions** ([#2018](https://github.com/ormar-orm/ormar/pull/2018), [#2019](https://github.com/ormar-orm/ormar/pull/2019))
 
-    `Func(name, *arguments)` works wherever `Greatest` / `Least` / `Coalesce` do: in filter values, `update()` and upsert `update_values`. Arguments are fields, expressions or literals; a dotted name calls a function in a schema. See [functions](queries/update.md#functions).
+    `Func(name, *arguments)` calls any SQL function wherever `Greatest` / `Least` / `Coalesce` do: in filter values, `update()` and upsert `update_values`. Arguments are fields, expressions or literals; a dotted name calls a function in a schema, `type_=` sets the returned type. See [functions](queries/update.md#functions).
+
+    `F()`, arithmetic and functions can also be the filtered side: compare them with `==`, `!=`, `<`, `<=`, `>`, `>=` or `in_()`, `iexact()`, `(i)contains()`, `(i)startswith()`, `(i)endswith()` and `isnull()`. Each comparison is a filter group for `filter()`, `exclude()`, `get()`, `ormar.and_()` / `or_()` and `~`; related fields are joined automatically. The like lookups take expression values too, in both forms (`name__icontains=Func(...)`), wrapped in `%` in SQL, which makes an accent-insensitive search a one-liner on PostgreSQL. See [filtering on expressions](queries/filter-and-sort.md#filtering-on-expressions).
 
     ```python
     await Member.objects.update(each=True, email=Func("lower", F("email")))
-    ```
-
-* **Filtering on expressions**
-
-    `F()`, arithmetic and functions can be the filtered side: compare them with `==`, `!=`, `<`, `<=`, `>`, `>=` or `in_()`, `iexact()`, `(i)contains()`, `(i)startswith()`, `(i)endswith()` and `isnull()`. Each comparison is a filter group for `filter()`, `exclude()`, `get()`, `ormar.and_()` / `or_()` and `~`; related fields are joined automatically. See [filtering on expressions](queries/filter-and-sort.md#filtering-on-expressions).
-
-    ```python
     await Player.objects.filter(Func("lower", F("team__name")).icontains("red")).all()
+    await Town.objects.filter(
+        Func("unaccent", F("name")).icontains(Func("unaccent", "krakow"))
+    ).all()
     ```
 
     Comparisons of `F()` and expressions now return filters: `F("a") == x` used to be `False`, `F("a") < x` raised `TypeError`.

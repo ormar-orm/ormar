@@ -8,9 +8,10 @@ import sqlalchemy
 import ormar
 from ormar import Coalesce, F, Func, Greatest, Least
 from ormar.exceptions import QueryDefinitionError
+from ormar.queryset.expressions import expression_literals, replace_literals
 from ormar.queryset.templates import template_cache_for
 from tests.lifespan import init_tests
-from tests.settings import create_config
+from tests.settings import DATABASE_URL, create_config
 
 base_ormar_config = create_config()
 
@@ -275,6 +276,13 @@ async def test_templates_are_cached_by_shape(players):
         assert await codes(same_code) == expected
 
 
+def test_replace_literals_copies_the_expression():
+    expression = Func("lower", Coalesce(F("nick"), "a_")) + 1
+    replaced = replace_literals(node=expression, replacement=str)
+    assert expression_literals(node=replaced) == ["a_", "1"]
+    assert expression_literals(node=expression) == ["a_", 1]
+
+
 def test_expressions_stay_hashable():
     score = F("score")
     assert {score: 1}[score] == 1
@@ -282,11 +290,114 @@ def test_expressions_stay_hashable():
 
 
 @pytest.mark.asyncio
+async def test_like_lookups_take_expression_values(players):
+    lower_name = Func("lower", F("name"))
+    lower_nick = Func("lower", F("nick"))
+    assert await codes(lower_name.icontains(F("nick"))) == ["a-1", "c-3", "d-4"]
+    assert await codes(lower_name.startswith(lower_nick)) == ["a-1", "c-3", "d-4"]
+    assert await codes(lower_name.endswith(lower_nick)) == ["a-1"]
+    assert await codes(lower_name.contains(Func("lower", "NN"))) == ["a-1"]
+    assert await codes(F("name").iexact(F("nick"))) == ["a-1"]
+    assert await codes(F("name").istartswith(F("nick"))) == ["a-1", "c-3", "d-4"]
+    assert await codes(F("name").iendswith(Func("upper", "nn"))) == ["a-1"]
+
+
+@pytest.mark.asyncio
+async def test_like_lookups_take_expression_values_in_kwargs(players):
+    by_nick = Player.objects.filter(name__istartswith=F("nick")).order_by("code")
+    assert await by_nick.values_list("code", flatten=True) == ["a-1", "c-3", "d-4"]
+    by_initial = Player.objects.filter(
+        team__name__icontains=Func("substr", F("name"), 1, 1)
+    )
+    assert await by_initial.values_list("code", flatten=True) == ["a-1"]
+    assert await codes(Player.name.iexact(Func("lower", "DEE_"))) == ["d-4"]
+    teams = Team.objects.filter(
+        players__name__icontains=Func("lower", F("players__nick"))
+    ).order_by("name")
+    assert await teams.values_list("name", flatten=True) == ["Blue 100%", "Red_Team"]
+
+
+@pytest.mark.asyncio
+async def test_like_expression_values_with_pagination(players):
+    teams = (
+        Team.objects.select_related("players")
+        .filter(Func("lower", F("players__name")).icontains(F("players__nick")))
+        .order_by("name")
+    )
+    first_page = await teams.limit(1).all()
+    assert [team.name for team in first_page] == ["Blue 100%"]
+    assert [player.code for player in first_page[0].players] == ["c-3"]
+    second_page = await teams.limit(1).offset(1).all()
+    assert [team.name for team in second_page] == ["Red_Team"]
+    assert [player.code for player in second_page[0].players] == ["a-1"]
+    players_page = (
+        await Player.objects.select_related("team")
+        .filter(name__istartswith=F("nick"))
+        .order_by("code")
+        .limit(2)
+        .offset(1)
+        .all()
+    )
+    assert [player.code for player in players_page] == ["c-3", "d-4"]
+    assert players_page[0].team.name == "Blue 100%"
+    assert players_page[1].team is None
+
+
+@pytest.mark.asyncio
+async def test_like_wildcards_in_expression_literals_are_escaped(players):
+    lower_name = Func("lower", F("name"))
+    for literal, expected in (
+        ("a_n", []),
+        ("ann", ["a-1"]),
+        ("%", []),
+        ("_", ["d-4"]),
+        ("nn", ["a-1"]),
+    ):
+        assert await codes(lower_name.contains(Func("lower", literal))) == expected
+    nick_or_text = Func("lower", Coalesce(F("nick"), "b_"))
+    assert await codes(lower_name.startswith(nick_or_text)) == ["a-1", "c-3", "d-4"]
+    nick_or_text = Func("lower", Coalesce(F("nick"), "bo"))
+    assert await codes(lower_name.startswith(nick_or_text)) == [
+        "a-1",
+        "b-2",
+        "c-3",
+        "d-4",
+    ]
+    assert await codes(F("name").iexact(Func("lower", "a_n"))) == []
+    by_name = Team.objects.filter(
+        Func("lower", F("name")).endswith(Func("lower", "0%"))
+    )
+    assert await by_name.values_list("name", flatten=True) == ["Blue 100%"]
+
+
+@pytest.mark.asyncio
+async def test_unaccent_search(players):
+    if not DATABASE_URL.startswith("postgresql"):
+        pytest.skip("unaccent is a PostgreSQL extension")
+    try:  # pragma: no cover
+        async with base_ormar_config.database.transaction():
+            async with base_ormar_config.database.connection() as connection:
+                await connection.execute(
+                    sqlalchemy.text("CREATE EXTENSION IF NOT EXISTS unaccent")
+                )
+    except Exception:  # pragma: no cover
+        pytest.skip("the database user cannot create the unaccent extension")
+    await Team.objects.create(name="Kraków")  # pragma: no cover
+    town = Func("unaccent", F("name"))  # pragma: no cover
+    teams = Team.objects.filter(town.icontains(Func("unaccent", "KRAKOW")))
+    assert await teams.values_list("name", flatten=True) == ["Kraków"]
+    teams = Team.objects.filter(name__icontains=Func("unaccent", "krakow"))
+    assert await teams.values_list("name", flatten=True) == []
+
+
+@pytest.mark.asyncio
 async def test_invalid_expression_filters(players):
-    with pytest.raises(QueryDefinitionError, match="Expressions only take"):
-        Player.objects.filter(Func("lower", F("name")).icontains(F("nick")))
-    with pytest.raises(QueryDefinitionError, match="Expressions only take"):
+    with pytest.raises(QueryDefinitionError, match="in takes a list"):
         Player.objects.filter(Func("lower", F("name")).in_(F("nick")))
+    with pytest.raises(QueryDefinitionError, match="isnull a bool"):
+        Player.objects.filter(Func("lower", F("name")).isnull(F("nick")))
+    with pytest.raises(QueryDefinitionError, match="in takes a list"):
+        Player.objects.filter(name__in=Func("lower", F("nick")))
     with pytest.raises(QueryDefinitionError, match="non-relation field"):
         Player.objects.filter(Func("lower", F("team")) == "x")
     with pytest.raises(QueryDefinitionError, match="non-relation field"):

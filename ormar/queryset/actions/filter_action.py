@@ -19,6 +19,7 @@ from ormar.queryset.expressions import (
     expression_key,
     expression_literals,
     expression_params,
+    replace_literals,
     slot_literals,
 )
 
@@ -75,6 +76,23 @@ COMPARISON_OPERATORS = {
     "__le__": sql_operators.le,
 }
 ESCAPE_CHARACTERS = ["%", "_"]
+# operators taking an expression value; ``in`` takes a list and ``isnull`` a
+# bool, so neither has an expression form
+EXPRESSION_VALUE_OPERATORS = (
+    "exact",
+    "ne",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "iexact",
+    "contains",
+    "icontains",
+    "startswith",
+    "istartswith",
+    "endswith",
+    "iendswith",
+)
 LIKE_OPERATORS = (
     "contains",
     "icontains",
@@ -112,23 +130,43 @@ def escape_like(value: str) -> str:
     return value
 
 
-def like_pattern(value: str, operator: str) -> str:
+def like_pattern(value: Any, operator: str) -> Any:
     """
-    Wrap a searched text in ``%`` for a ``LIKE`` lookup::
+    Wrap a searched text in ``%`` for a ``LIKE`` lookup. The text of an SQL
+    expression is wrapped in SQL, concatenated with ``||`` (``concat()`` on
+    MySQL)::
 
         like_pattern(value="ab", operator="icontains")  # -> "%ab%"
         like_pattern(value="ab", operator="startswith")  # -> "ab%"
+        like_pattern(value=func.lower(name), operator="endswith")
+        # -> '%' || lower(name)
 
-    :param value: searched text, already escaped
-    :type value: str
+    :param value: searched text, already escaped, or SQL expression
+    :type value: Any
     :param operator: ``contains``, ``startswith`` or ``endswith`` lookup
     :type operator: str
-    :return: ``LIKE`` pattern
-    :rtype: str
+    :return: ``LIKE`` pattern, a string or an SQL expression
+    :rtype: Any
     """
     prefix = "%" if "start" not in operator else ""
     suffix = "%" if "end" not in operator else ""
-    return f"{prefix}{value}{suffix}"
+    if isinstance(value, str):
+        return f"{prefix}{value}{suffix}"
+    wildcard = sqlalchemy.literal_column(text="'%'", type_=sqlalchemy.String())
+    value = sqlalchemy.type_coerce(expression=value, type_=sqlalchemy.String())
+    if prefix:
+        value = wildcard.concat(value)
+    return value.concat(wildcard) if suffix else value
+
+
+def escape_like_literal(literal: Any) -> Any:
+    """
+    :param literal: literal of an expression value
+    :type literal: Any
+    :return: the literal with ``LIKE`` wildcards escaped if it is a string
+    :rtype: Any
+    """
+    return escape_like(value=literal) if has_like_wildcards(value=literal) else literal
 
 
 def comparison_bind(
@@ -226,10 +264,10 @@ class FilterAction(QueryAction):
         self.expression_columns: dict[str, SelectAction] = {}
         if isinstance(value, Expression):
             value = value._node()
-            if self.operator not in ("exact", "ne", "gt", "gte", "lt", "lte"):
+            if self.operator not in EXPRESSION_VALUE_OPERATORS:
                 raise QueryDefinitionError(
-                    f"Expressions only take exact, ne, gt, gte, lt and lte filters, "
-                    f"not '{self.operator}'"
+                    f"Expression values take comparison and like filters, not "
+                    f"'{self.operator}': in takes a list of values, isnull a bool"
                 )
             self.expression_columns = expression_columns(node=value, model=model_cls)
         self.filter_value = value
@@ -273,6 +311,11 @@ class FilterAction(QueryAction):
 
             filter(name__iexact="a_c")  # matches "A_C", not "abc"
 
+        An expression value is wrapped in ``%`` in SQL when the clause is
+        built (see ``like_pattern``), only the wildcards in its string
+        literals are escaped here; the ones its columns produce at runtime
+        stay wildcards.
+
         :raises QueryDefinitionError: if contains or icontains is used with
         ormar model instance
         """
@@ -285,6 +328,16 @@ class FilterAction(QueryAction):
             raise QueryDefinitionError(
                 "You cannot use contains and icontains with instance of the Model"
             )
+        if isinstance(self.filter_value, Expression):
+            self.has_escaped_character = any(
+                has_like_wildcards(value=literal)
+                for literal in expression_literals(node=self.filter_value)
+            )
+            if self.has_escaped_character:
+                self.filter_value = replace_literals(
+                    node=self.filter_value, replacement=escape_like_literal
+                )
+            return
         self.has_escaped_character = has_like_wildcards(value=self.filter_value)
         if self.has_escaped_character:
             self.filter_value = escape_like(value=self.filter_value)
@@ -390,6 +443,8 @@ class FilterAction(QueryAction):
                 slot=binder.slots[id(self)] if binder is not None else None,
                 reference_type=self.aliased_column.type,
             )
+            if self.operator in LIKE_OPERATORS:
+                filter_value = like_pattern(value=filter_value, operator=self.operator)
         elif binder is not None and self.binds_slot():
             filter_value = binder.bind(action=self, value=value)
         return comparison_clause(
@@ -426,8 +481,8 @@ class ExpressionFilterAction(FilterAction):
         :param model_cls: queried model
         :type model_cls: type[Model]
         :raises QueryDefinitionError: if the expression reads a relation or a
-            missing field, or an expression value is used with other operators
-            than comparisons
+            missing field, or an expression value is used with ``in`` or
+            ``isnull``
         """
         self.lhs = lhs._node()
         self.lhs_columns = expression_columns(node=self.lhs, model=model_cls)
@@ -549,6 +604,8 @@ class ExpressionFilterAction(FilterAction):
                 index=index,
                 reference_type=lhs_clause.type,
             )
+            if self.operator in LIKE_OPERATORS:
+                filter_value = like_pattern(value=filter_value, operator=self.operator)
         elif self.binds_slot():
             filter_value = comparison_bind(
                 key=f"{slot}_{next(index)}" if slot is not None else None,

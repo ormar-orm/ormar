@@ -298,7 +298,6 @@ async def test_expressions_reference_non_relation_fields(slots):
         {"taken__lt": F("nowhere__score")},
         {"taken__lt": F("name__score")},
         {"taken__lt": F("owner__slots")},
-        {"name__contains": F("name")},
         {"taken__in": F("capacity")},
     ]
     for kwargs in invalid_filters:
