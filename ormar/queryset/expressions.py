@@ -746,8 +746,8 @@ def compile_random_on_sqlite(
 
 class DialectClause(ColumnElement[Any]):
     """
-    Clause rendered as ``sqlite`` on SQLite, ``mysql`` on MySQL and
-    ``default`` elsewhere, all of the type of ``default``.
+    Clause rendered as ``sqlite`` on SQLite, ``mysql`` on MySQL and MariaDB
+    and ``default`` elsewhere, all of the type of ``default``.
     """
 
     inherit_cache = True
@@ -791,10 +791,11 @@ def compile_dialect_clause_on_sqlite(
 
 
 @compiles(DialectClause, "mysql")
+@compiles(DialectClause, "mariadb")
 def compile_dialect_clause_on_mysql(
     element: DialectClause, compiler: SQLCompiler, **kwargs: Any
 ) -> str:
-    """MySQL renders its own clause."""
+    """MySQL and MariaDB render the MySQL clause."""
     return compiler.process(obj=element.mysql, **kwargs)
 
 

@@ -3,6 +3,7 @@ from typing import Any, Optional
 import pytest
 import pytest_asyncio
 from sqlalchemy.dialects import mysql, postgresql, sqlite
+from sqlalchemy.dialects.mysql.mariadb import MariaDBDialect
 
 import ormar
 from ormar import F
@@ -297,6 +298,7 @@ def test_relation_accessor_has_no_json_path():
     [
         (postgresql.dialect(), "->>", "AS BOOLEAN"),
         (mysql.dialect(), "JSON_UNQUOTE(JSON_EXTRACT(", "IS NOT NULL"),
+        (MariaDBDialect(), "JSON_UNQUOTE(JSON_EXTRACT(", "IS NOT NULL"),
         (sqlite.dialect(), "CAST(JSON_EXTRACT(", "AS BOOLEAN"),
     ],
 )

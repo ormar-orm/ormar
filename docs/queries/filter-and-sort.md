@@ -408,7 +408,8 @@ type the path stores (`as_float()` reads integers too):
 * booleans: `as_string()` of `true` is `"true"` on PostgreSQL and MySQL but `"1"`
   on SQLite, and `as_boolean()` of the string `"true"` is true on PostgreSQL only;
 * MySQL reads a value that is not an array as an array of itself, so `[0]` of an
-  object or a string is the value itself there and `NULL` elsewhere;
+  object or a string is the value itself there and `NULL` elsewhere (in a path of
+  two or more keys PostgreSQL reads `[0]` of an object as its key `"0"`, see below);
 * a key of digits is an object key in `["tags"]["0"]` and an array index in
   `["tags"][0]` on SQLite and MySQL, while PostgreSQL reads both as either in a
   path of two or more keys.
