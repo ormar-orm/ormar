@@ -13,7 +13,19 @@ statements and reading results stays with the driver adapters.
 """
 
 import sqlite3
-from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, Type, Union
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+)
 
 import sqlalchemy
 from sqlalchemy.dialects import mysql, postgresql, sqlite
@@ -91,7 +103,12 @@ def conflict_updates(
             ``in`` list, the constant of an empty one, None keeps the element
         :rtype: Any
         """
-        if is_empty_in(element=element):
+        if (
+            isinstance(element, BinaryExpression)
+            and isinstance(element.right, BindParameter)
+            and element.right.expanding
+            and not element.right.value
+        ):
             # nothing is in an empty list, as SQLAlchemy renders it: in is
             # false and not in true, also for NULL
             return (
@@ -113,33 +130,41 @@ def conflict_updates(
     }
 
 
-def is_empty_in(element: Any) -> bool:
+def list_item_variables(
+    key: str, items: Iterable[Any], list_type: Any
+) -> Iterator[Tuple[str, Any, Any]]:
     """
-    :param element: element of an update clause
-    :type element: Any
-    :return: whether it is an ``in`` or ``not in`` comparison with an empty
-        list
-    :rtype: bool
+    Yield the MySQL user variables holding the items of an ``in`` list, with
+    their types and values: one per item named ``@<key>_<item>``, for a list
+    of key tuples (``list_type`` a ``TupleType``) one per part named
+    ``@<key>_<item>_<part>``::
+
+        list_item_variables(key="ormar_u0_w0_0", items=[1, 8], list_type=Integer())
+        # -> ("@ormar_u0_w0_0_0", Integer(), 1), ("@ormar_u0_w0_0_1", Integer(), 8)
+
+    :param key: name of the list's bind parameter
+    :type key: str
+    :param items: items of the list
+    :type items: Iterable[Any]
+    :param list_type: type of the list's bind parameter
+    :type list_type: Any
+    :return: variable name, type and value per held value
+    :rtype: Iterator[Tuple[str, Any, Any]]
     """
-    return (
-        isinstance(element, BinaryExpression)
-        and isinstance(element.right, BindParameter)
-        and element.right.expanding
-        and not element.right.value
-    )
+    for item, value in enumerate(items):
+        if isinstance(list_type, TupleType):
+            for part, part_type in enumerate(list_type.types):
+                yield f"@{key}_{item}_{part}", part_type, value[part]
+        else:
+            yield f"@{key}_{item}", list_type, value
 
 
 def bind_variables(bind: BindParameter) -> List[Tuple[str, Any]]:
     """
     Return the MySQL user variables holding the value of a bind parameter and
-    their types: ``@<key>``, for an ``in`` list one per item named
-    ``@<key>_<item>`` and for a list of key tuples one per part named
-    ``@<key>_<item>_<part>``::
-
-        bind_variables(bind=score_in)  # [1, 8]
-        # -> [("@ormar_u0_w0_0_0", Integer()), ("@ormar_u0_w0_0_1", Integer())]
-
-    The values are set by ``update_assignment`` (see ``list_variable_params``).
+    their types: ``@<key>``, for an ``in`` list one per item (see
+    ``list_item_variables``). The values are set by ``update_assignment``
+    (see ``list_variable_params``).
 
     :param bind: bind parameter
     :type bind: BindParameter
@@ -148,14 +173,12 @@ def bind_variables(bind: BindParameter) -> List[Tuple[str, Any]]:
     """
     if not bind.expanding:
         return [(f"@{bind.key}", bind.type)]
-    items = range(len(bind.value or ()))
-    if isinstance(bind.type, TupleType):
-        return [
-            (f"@{bind.key}_{item}_{part}", part_type)
-            for item in items
-            for part, part_type in enumerate(bind.type.types)
-        ]
-    return [(f"@{bind.key}_{item}", bind.type) for item in items]
+    return [
+        (name, variable_type)
+        for name, variable_type, _ in list_item_variables(
+            key=bind.key, items=bind.value or (), list_type=bind.type
+        )
+    ]
 
 
 def read_list_variables(bind: BindParameter) -> Any:
@@ -185,35 +208,31 @@ def read_list_variables(bind: BindParameter) -> Any:
 
 
 def list_variable_params(
-    params: Dict[str, Any], list_keys: Tuple[Tuple[str, int], ...]
+    params: Dict[str, Any], list_keys: Tuple[Tuple[str, Any], ...]
 ) -> Dict[str, Any]:
     """
     Return the values of ``update_assignment``: each ``in`` list replaced by
-    its items, named like their variables (see ``bind_variables``)::
+    its items, named like their variables (see ``list_item_variables``)::
 
         list_variable_params(
             params={"ormar_u0_0": 5, "ormar_u0_w0_0": [1, 8]},
-            list_keys=(("ormar_u0_w0_0", 0),),
+            list_keys=(("ormar_u0_w0_0", Integer()),),
         )
         # -> {"ormar_u0_0": 5, "ormar_u0_w0_0_0": 1, "ormar_u0_w0_0_1": 8}
 
     :param params: bound values by name
     :type params: Dict[str, Any]
-    :param list_keys: name of each ``in`` list and the number of parts of its
-        key tuples, 0 for a list of plain values
-    :type list_keys: Tuple[Tuple[str, int], ...]
+    :param list_keys: name and bind type of each ``in`` list
+    :type list_keys: Tuple[Tuple[str, Any], ...]
     :return: values by variable name
     :rtype: Dict[str, Any]
     """
     variable_params = dict(params)
-    for key, parts in list_keys:
-        for item, value in enumerate(variable_params.pop(key)):
-            if parts:
-                variable_params.update(
-                    {f"{key}_{item}_{part}": value[part] for part in range(parts)}
-                )
-            else:
-                variable_params[f"{key}_{item}"] = value
+    for key, list_type in list_keys:
+        for name, _, value in list_item_variables(
+            key=key, items=variable_params.pop(key), list_type=list_type
+        ):
+            variable_params[name[1:]] = value
     return variable_params
 
 

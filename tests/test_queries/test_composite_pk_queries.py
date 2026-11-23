@@ -6,12 +6,13 @@ from sqlalchemy.dialects import mysql
 
 import ormar
 from ormar import Case, When
-from ormar.databases.dialects import MysqlRules, list_variable_params
+from ormar.databases.dialects import MysqlRules
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset import FieldAccessor
 from ormar.queryset.templates.writes import (
     build_conflict_insert,
     build_update_assignment,
+    update_assignment_params,
     update_list_keys,
     update_values_params,
 )
@@ -312,9 +313,11 @@ def test_mysql_batches_read_key_lists_from_one_variable_per_part():
         "@ormar_u0_w0_0_0_1 = %s, @ormar_u0_w0_0_1_0 = %s, @ormar_u0_w0_0_1_1 = %s"
     )
     list_keys = update_list_keys(model=Order, update_values=update_values)
-    assert list_keys == (("ormar_u0_w0_0", 2),)
-    assert list_variable_params(
-        params=update_values_params(update_values=update_values), list_keys=list_keys
+    assert [key for key, _ in list_keys] == ["ormar_u0_w0_0"]
+    assert update_assignment_params(
+        on_update={},
+        update_params=update_values_params(update_values=update_values),
+        list_keys=list_keys,
     ) == {
         "ormar_u0_0": "hit",
         "ormar_u0_1": "miss",

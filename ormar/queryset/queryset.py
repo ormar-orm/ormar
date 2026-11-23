@@ -20,7 +20,6 @@ import sqlalchemy
 
 import ormar  # noqa I100
 from ormar import MultipleMatches, NoMatch
-from ormar.databases.dialects import list_variable_params
 from ormar.exceptions import (
     ModelListEmptyError,
     ModelPersistenceError,
@@ -65,6 +64,7 @@ from ormar.queryset.templates import (
     release_values,
     template_cache_for,
     template_params,
+    update_assignment_params,
     update_list_keys,
     update_values_key,
     update_values_params,
@@ -2200,14 +2200,9 @@ class QuerySet(Generic[T]):
                     model=self.model, update_values=conflict_values
                 )
                 list_lengths = tuple(len(conflict_params[key]) for key, _ in list_keys)
-                assignment_params = list_variable_params(
-                    params={
-                        **{
-                            f"ormar_on_update_{index}": on_update[column]
-                            for index, column in enumerate(on_update_columns)
-                        },
-                        **conflict_params,
-                    },
+                assignment_params = update_assignment_params(
+                    on_update=on_update,
+                    update_params=conflict_params,
                     list_keys=list_keys,
                 )
                 # only empty in lists bound: there is nothing to set

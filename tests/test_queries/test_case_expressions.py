@@ -6,7 +6,7 @@ from sqlalchemy.dialects import mysql
 
 import ormar
 from ormar import Case, F, Func, Greatest, Inserted, When
-from ormar.databases.dialects import MysqlRules, list_variable_params
+from ormar.databases.dialects import MysqlRules
 from ormar.databases.query_executor import QueryExecutor
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.select_action import resolve_expression
@@ -15,6 +15,7 @@ from ormar.queryset.templates import insert_statement, template_cache_for
 from ormar.queryset.templates.writes import (
     build_conflict_insert,
     build_update_assignment,
+    update_assignment_params,
     update_list_keys,
     update_values_params,
 )
@@ -471,10 +472,17 @@ def test_mysql_batches_read_in_lists_from_one_variable_per_item(
         ]
     )
     list_keys = update_list_keys(model=Player, update_values=update_values)
-    params = list_variable_params(
-        params=update_values_params(update_values=update_values), list_keys=list_keys
+    params = update_assignment_params(
+        on_update={"revision": 1},
+        update_params=update_values_params(update_values=update_values),
+        list_keys=list_keys,
     )
-    assert params == {"ormar_u0_0": 1, "ormar_u0_1": 0, **values}
+    assert params == {
+        "ormar_on_update_0": 1,
+        "ormar_u0_0": 1,
+        "ormar_u0_1": 0,
+        **values,
+    }
 
 
 def test_upserts_reading_in_lists_from_variables_are_cached_per_list_length():

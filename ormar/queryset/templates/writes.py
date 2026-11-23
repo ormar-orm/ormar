@@ -25,9 +25,8 @@ from typing import (
 import sqlalchemy
 from sqlalchemy.sql import Executable, visitors
 from sqlalchemy.sql.elements import BindParameter
-from sqlalchemy.sql.sqltypes import TupleType
 
-from ormar.databases.dialects import update_assignment
+from ormar.databases.dialects import list_variable_params, update_assignment
 from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.expressions import (
     Expression,
@@ -202,43 +201,81 @@ def build_update_assignment(
 
 def update_list_keys(
     model: Type[Any], update_values: Mapping[str, Any]
-) -> Tuple[Tuple[str, int], ...]:
+) -> Tuple[Tuple[str, Any], ...]:
     """
     Return the ``in`` lists bound by the ``When`` conditions of
-    ``update_values``: the name of each and the number of parts of its key
-    tuples, 0 for plain values, cached per shape of ``update_values``::
+    ``update_values``: the name and bind type of each, cached per shape of
+    ``update_values``::
 
         update_list_keys(
             model=Player,
             update_values={"rank": Case(When(score__in=[1, 8], then=1))},
         )
-        # -> (("ormar_u0_w0_0", 0),)
+        # -> (("ormar_u0_w0_0", Integer()),)
 
     A multi-row MySQL upsert reads each item from its own user variable, so
     its statements are cached per length of these lists (see
-    ``list_variable_params``).
+    ``update_assignment_params``).
 
     :param model: written model
     :type model: Type[Any]
     :param update_values: value or expression node by column name
     :type update_values: Mapping[str, Any]
-    :return: name and number of key parts per ``in`` list
-    :rtype: Tuple[Tuple[str, int], ...]
+    :return: name and bind type per ``in`` list
+    :rtype: Tuple[Tuple[str, Any], ...]
     """
     cache = template_cache_for(model_cls=model)
     key = ("update_list_keys", update_values_key(update_values=update_values))
     list_keys = cache.get(key)
     if list_keys is None:
         list_keys = tuple(
-            (
-                bind.key,
-                len(bind.type.types) if isinstance(bind.type, TupleType) else 0,
-            )
+            (bind.key, bind.type)
             for bind in update_value_binds(model=model, update_values=update_values)
             if bind.expanding
         )
         cache.put(key=key, statement=list_keys)
     return list_keys
+
+
+def update_assignment_params(
+    on_update: Mapping[str, Any],
+    update_params: Mapping[str, Any],
+    list_keys: Tuple[Tuple[str, Any], ...],
+) -> Dict[str, Any]:
+    """
+    Return the values of ``build_update_assignment``: the ``on_update`` values
+    named after the position of their column among the sorted ``on_update``
+    columns, then the bound ``update_values``, each ``in`` list split into its
+    items (see ``list_variable_params``)::
+
+        update_assignment_params(
+            on_update={"revision": 1},
+            update_params={"ormar_u0_w0_0": [1, 8]},
+            list_keys=(("ormar_u0_w0_0", Integer()),),
+        )
+        # -> {"ormar_on_update_0": 1, "ormar_u0_w0_0_0": 1, "ormar_u0_w0_0_1": 8}
+
+    :param on_update: ``on_update`` value by column name
+    :type on_update: Mapping[str, Any]
+    :param update_params: values bound by ``update_values``
+        (see ``update_values_params``)
+    :type update_params: Mapping[str, Any]
+    :param list_keys: ``in`` lists of ``update_values`` (see
+        ``update_list_keys``)
+    :type list_keys: Tuple[Tuple[str, Any], ...]
+    :return: values by variable name
+    :rtype: Dict[str, Any]
+    """
+    return list_variable_params(
+        params={
+            **{
+                f"ormar_on_update_{index}": on_update[column]
+                for index, column in enumerate(sorted(on_update))
+            },
+            **update_params,
+        },
+        list_keys=list_keys,
+    )
 
 
 def build_conflict_insert(
