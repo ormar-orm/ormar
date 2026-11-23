@@ -24,9 +24,10 @@ from typing import (
 
 import sqlalchemy
 from sqlalchemy.sql import Executable, visitors
-from sqlalchemy.sql.elements import BindParameter
+from sqlalchemy.sql.elements import BinaryExpression, BindParameter
 
 from ormar.databases.dialects import update_assignment
+from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.expressions import (
     Expression,
@@ -161,22 +162,80 @@ def build_update_assignment(
     :type on_update: Tuple[str, ...]
     :param update_values: value or expression node by column name
     :type update_values: Mapping[str, Any]
+    :raises QueryDefinitionError: for an ``in`` filter in a ``When`` condition,
+        as a user variable cannot hold its list
     :return: assignment statement
     :rtype: Executable
     """
     table = model.ormar_config.table
+    # only the binds are read, so an alias stands for the inserted row: its
+    # columns tell an ``Inserted`` field from the existing row's in the message
     clauses = update_value_clauses(
-        inserted=table.c, model_cls=model, update_values=update_values
+        inserted=table.alias("inserted").c, model_cls=model, update_values=update_values
     )
+    elements = [
+        element for clause in clauses.values() for element in visitors.iterate(clause)
+    ]
+    for element in elements:
+        if isinstance(element, BinaryExpression) and getattr(
+            element.right, "expanding", False
+        ):
+            raise QueryDefinitionError(
+                in_condition_message(model=model, in_filter=element)
+            )
     return update_assignment(
         table=table,
         on_update=on_update,
         value_binds=tuple(
-            element
-            for clause in clauses.values()
-            for element in visitors.iterate(clause)
-            if isinstance(element, BindParameter)
+            element for element in elements if isinstance(element, BindParameter)
         ),
+    )
+
+
+def in_condition_message(model: Type[Any], in_filter: BinaryExpression) -> str:
+    """
+    Explain that a multi-row MySQL upsert takes no ``in`` filter in a ``When``
+    condition of ``update_values`` and show the equalities to write instead,
+    built from the filtered field when the filter is on a column::
+
+        in_condition_message(model=Player, in_filter=...)
+        # -> '... cannot use an "in" filter (score__in) ... write
+        #     When((Player.score == 1) | (Player.score == 8), then=...) ...'
+
+    :param model: written model
+    :type model: Type[Any]
+    :param in_filter: ``IN`` comparison with an expanding bind
+    :type in_filter: BinaryExpression
+    :return: error message
+    :rtype: str
+    """
+    column = in_filter.left
+    if isinstance(column, sqlalchemy.Column):
+        field = model.get_column_name_from_alias(column.name)
+        values = [
+            value
+            for value in (in_filter.right.value or ())
+            if isinstance(value, (bool, int, float, str))
+        ][:2]
+        first, second = (
+            [repr(value) for value in values] if len(values) == 2 else ["a", "b"]
+        )
+        if column.table is model.ormar_config.table:
+            where = f" ({field}__in)"
+            side = f"{model.__name__}.{field}"
+        else:
+            where = f' (Inserted("{field}").in_())'
+            side = f'Inserted("{field}")'
+        example = f"({side} == {first}) | ({side} == {second})"
+    else:
+        where = ""
+        example = "(Model.field == a) | (Model.field == b)"
+    return (
+        'On MySQL, bulk_create() of several rows with on_conflict="update" '
+        f'cannot use an "in" filter{where} in a When() of update_values. '
+        f"Compare with each value instead, e.g. When({example}, then=...). "
+        "The in filter works with a single row and on PostgreSQL and SQLite; "
+        "MySQL reads these values from user variables, which cannot hold a list."
     )
 
 

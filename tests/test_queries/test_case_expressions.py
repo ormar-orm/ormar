@@ -410,15 +410,47 @@ async def test_invalid_cases(players):
         )
 
 
-def test_mysql_batches_take_no_in_conditions():
+@pytest.mark.parametrize(
+    "condition, message",
+    [
+        (
+            When(score__in=[1, 8], then=1),
+            "(score__in) in a When() of update_values. Compare with each value "
+            "instead, e.g. When((Player.score == 1) | (Player.score == 8), then=...)",
+        ),
+        (
+            When(code__in=["a-1"], then=1),
+            "(code__in) in a When() of update_values. Compare with each value "
+            "instead, e.g. When((Player.code == a) | (Player.code == b), then=...)",
+        ),
+        (
+            When(Inserted("score").in_([1, 8]), then=1),
+            'e.g. When((Inserted("score") == 1) | (Inserted("score") == 8), then=...)',
+        ),
+        (
+            When(Func("lower", F("name")).in_(["ann", "bob"]), then=1),
+            '"in" filter in a When() of update_values. Compare with each value '
+            "instead, e.g. When((Model.field == a) | (Model.field == b), then=...)",
+        ),
+    ],
+)
+def test_mysql_batches_take_no_in_conditions(condition, message):
     update_values = Player._conflict_updates(
-        update_fields=None,
-        update_values={"rank": Case(When(code__in=["a-1"], then=1), default=0)},
+        update_fields=None, update_values={"rank": Case(condition, default=0)}
     )[1]
-    with pytest.raises(QueryDefinitionError, match="ormar.or_"):
+    with pytest.raises(QueryDefinitionError) as error:
         build_update_assignment(
             model=Player, on_update=("revision",), update_values=update_values
         )
+    assert str(error.value).startswith(
+        'On MySQL, bulk_create() of several rows with on_conflict="update" '
+        'cannot use an "in" filter'
+    )
+    assert message in str(error.value)
+    assert str(error.value).endswith(
+        "The in filter works with a single row and on PostgreSQL and SQLite; "
+        "MySQL reads these values from user variables, which cannot hold a list."
+    )
 
 
 @pytest.mark.asyncio
@@ -428,7 +460,10 @@ def test_mysql_batches_take_no_in_conditions():
 )
 async def test_mysql_bulk_upsert_rejects_in_conditions(players):  # pragma: no cover
     rows = [Player(code="a-1", name="Ann"), Player(code="b-2", name="Bob")]
-    with pytest.raises(QueryDefinitionError, match="ormar.or_"):
+    with pytest.raises(
+        QueryDefinitionError,
+        match=r"When\(\(Player\.score == 1\) \| \(Player\.score == 8\), then=\.\.\.\)",
+    ):
         await Player.objects.bulk_create(
             rows,
             on_conflict="update",
@@ -438,3 +473,48 @@ async def test_mysql_bulk_upsert_rejects_in_conditions(players):  # pragma: no c
             },
         )
     assert await column("rank") == {"a-1": None, "b-2": None, "c-3": None, "d-4": None}
+
+
+@pytest.mark.asyncio
+async def test_bulk_upsert_takes_the_suggested_equalities(players):
+    rows = [
+        Player(code="a-1", name="Ann", score=20),
+        Player(code="b-2", name="Bob", score=30),
+        Player(code="d-4", name="Dee", score=40),
+    ]
+    await Player.objects.bulk_create(
+        rows,
+        on_conflict="update",
+        conflict_target=["code"],
+        update_values={
+            "rank": Case(
+                When((Player.score == 1) | (Player.score == 8), then=Inserted("score")),
+                default=-2,
+            )
+        },
+    )
+    assert await column("rank") == {"a-1": -2, "b-2": 30, "c-3": None, "d-4": 40}
+    await Player.objects.bulk_create(
+        rows,
+        on_conflict="update",
+        conflict_target=["code"],
+        update_values={
+            "label": Case(
+                When(
+                    ormar.or_(ormar.and_(score=1), ormar.and_(score=8)),
+                    then="or",
+                ),
+                When(
+                    (Inserted("score") == 20) | (Inserted("score") == 40),
+                    then="inserted",
+                ),
+                default="no",
+            )
+        },
+    )
+    assert await column("label") == {
+        "a-1": "inserted",
+        "b-2": "or",
+        "c-3": None,
+        "d-4": "or",
+    }

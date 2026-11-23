@@ -140,19 +140,12 @@ def update_assignment(
     :type table: sqlalchemy.Table
     :param on_update: columns updated with their ``on_update`` value
     :type on_update: Tuple[str, ...]
-    :param value_binds: bind parameters of the ``update_values`` columns
+    :param value_binds: bind parameters of the ``update_values`` columns,
+        none of them expanding (see ``build_update_assignment``)
     :type value_binds: Tuple[BindParameter, ...]
-    :raises QueryDefinitionError: for the list of an ``in`` filter in a
-        ``When`` condition, which a user variable cannot hold
     :return: assignment statement
     :rtype: Executable
     """
-    if any(bind.expanding for bind in value_binds):
-        raise QueryDefinitionError(
-            "update_values of a MySQL bulk_create() of several rows read their "
-            "values from user variables, which hold no lists: use ormar.or_() of "
-            "equalities instead of an in filter in When() conditions"
-        )
     binds = [
         sqlalchemy.bindparam(key=f"ormar_on_update_{index}", type_=table.c[name].type)
         for index, name in enumerate(on_update)
