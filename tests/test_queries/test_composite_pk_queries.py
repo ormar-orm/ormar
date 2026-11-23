@@ -1,11 +1,20 @@
-from typing import Optional
+from typing import Any, Optional
 
 import pytest
 import pytest_asyncio
+from sqlalchemy.dialects import mysql
 
 import ormar
+from ormar import Case, When
+from ormar.databases.dialects import MysqlRules, list_variable_params
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset import FieldAccessor
+from ormar.queryset.templates.writes import (
+    build_conflict_insert,
+    build_update_assignment,
+    update_list_keys,
+    update_values_params,
+)
 from tests.lifespan import init_tests
 from tests.settings import create_config
 
@@ -268,3 +277,69 @@ async def test_composite_pk_with_none_part_is_rejected():
         await Order.objects.filter(pk__in=[(1, None)]).all()
     with pytest.raises(QueryDefinitionError, match="not a relation"):
         await Order.objects.filter(note__pk="x").all()
+
+
+def test_mysql_batches_read_key_lists_from_one_variable_per_part():
+    update_values = Order._conflict_updates(
+        update_fields=None,
+        update_values={
+            "note": Case(When(pk__in=[(1, 7), (2, 8)], then="hit"), default="miss")
+        },
+    )[1]
+    statement: Any = build_conflict_insert(
+        table=Order.ormar_config.table,
+        names=("order_no", "tenant_id"),
+        rules=MysqlRules(backend_name="mysql"),
+        on_conflict="update",
+        target=("tenant_id", "order_no"),
+        update_names=(),
+        on_update=(),
+        returning=(),
+        model=Order,
+        update_values=update_values,
+        update_variables=True,
+    )
+    assert (
+        "(cq_orders.tenant_id, cq_orders.order_no) IN "
+        "((@ormar_u0_w0_0_0_0, @ormar_u0_w0_0_0_1), "
+        "(@ormar_u0_w0_0_1_0, @ormar_u0_w0_0_1_1))"
+    ) in str(statement.compile(dialect=mysql.dialect()))
+    assignment = build_update_assignment(
+        model=Order, on_update=(), update_values=update_values
+    )
+    assert str(assignment.compile(dialect=mysql.dialect())) == (
+        "SET @ormar_u0_0 = %s, @ormar_u0_1 = %s, @ormar_u0_w0_0_0_0 = %s, "
+        "@ormar_u0_w0_0_0_1 = %s, @ormar_u0_w0_0_1_0 = %s, @ormar_u0_w0_0_1_1 = %s"
+    )
+    list_keys = update_list_keys(model=Order, update_values=update_values)
+    assert list_keys == (("ormar_u0_w0_0", 2),)
+    assert list_variable_params(
+        params=update_values_params(update_values=update_values), list_keys=list_keys
+    ) == {
+        "ormar_u0_0": "hit",
+        "ormar_u0_1": "miss",
+        "ormar_u0_w0_0_0_0": 1,
+        "ormar_u0_w0_0_0_1": 7,
+        "ormar_u0_w0_0_1_0": 2,
+        "ormar_u0_w0_0_1_1": 8,
+    }
+
+
+@pytest.mark.asyncio
+async def test_bulk_upsert_takes_composite_pk_in_conditions():
+    await seed()
+    for keys, notes in [
+        ([(1, 7), (2, 7)], ["hit", "miss", "hit"]),
+        ([(1, 8)], ["miss", "hit", "miss"]),
+        ([], ["miss", "miss", "miss"]),
+    ]:
+        await Order.objects.bulk_create(
+            [
+                Order(tenant_id=1, number=7),
+                Order(tenant_id=1, number=8),
+                Order(tenant_id=2, number=7),
+            ],
+            on_conflict="update",
+            update_values={"note": Case(When(pk__in=keys, then="hit"), default="miss")},
+        )
+        assert [order.note for order in await Order.objects.all()] == notes

@@ -13,13 +13,14 @@ statements and reading results stays with the driver adapters.
 """
 
 import sqlite3
-from typing import Any, Callable, ClassVar, Dict, Optional, Tuple, Type, Union
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, Type, Union
 
 import sqlalchemy
 from sqlalchemy.dialects import mysql, postgresql, sqlite
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.sql import Executable
-from sqlalchemy.sql.elements import BindParameter
+from sqlalchemy.sql import Executable, operators
+from sqlalchemy.sql.elements import BinaryExpression, BindParameter
+from sqlalchemy.sql.sqltypes import TupleType
 from sqlalchemy.sql.visitors import replacement_traverse
 
 from ormar.exceptions import QueryDefinitionError
@@ -47,7 +48,8 @@ def conflict_updates(
         completed = tracks.completed + :ormar_u0_0
 
     With ``update_variables`` every bound value is read from a MySQL user
-    variable instead (see ``update_assignment``).
+    variable instead (see ``update_assignment``), an ``in`` list from one
+    variable per item (see ``bind_variables``).
 
     :param table: written table
     :type table: sqlalchemy.Table
@@ -85,9 +87,20 @@ def conflict_updates(
         :type element: Any
         :param kwargs: traversal options, unused
         :type kwargs: Any
-        :return: the user variable of a bind parameter, None keeps the element
+        :return: the user variable of a bind parameter, the variables of an
+            ``in`` list, the constant of an empty one, None keeps the element
         :rtype: Any
         """
+        if is_empty_in(element=element):
+            # nothing is in an empty list, as SQLAlchemy renders it: in is
+            # false and not in true, also for NULL
+            return (
+                sqlalchemy.false()
+                if element.operator is operators.in_op
+                else sqlalchemy.true()
+            )
+        if isinstance(element, BindParameter) and element.expanding:
+            return read_list_variables(bind=element)
         if isinstance(element, BindParameter):
             return sqlalchemy.literal_column(
                 variables.get(element.key, f"@{element.key}"), type_=element.type
@@ -98,6 +111,110 @@ def conflict_updates(
         name: replacement_traverse(value, {}, read_variable)
         for name, value in updates.items()
     }
+
+
+def is_empty_in(element: Any) -> bool:
+    """
+    :param element: element of an update clause
+    :type element: Any
+    :return: whether it is an ``in`` or ``not in`` comparison with an empty
+        list
+    :rtype: bool
+    """
+    return (
+        isinstance(element, BinaryExpression)
+        and isinstance(element.right, BindParameter)
+        and element.right.expanding
+        and not element.right.value
+    )
+
+
+def bind_variables(bind: BindParameter) -> List[Tuple[str, Any]]:
+    """
+    Return the MySQL user variables holding the value of a bind parameter and
+    their types: ``@<key>``, for an ``in`` list one per item named
+    ``@<key>_<item>`` and for a list of key tuples one per part named
+    ``@<key>_<item>_<part>``::
+
+        bind_variables(bind=score_in)  # [1, 8]
+        # -> [("@ormar_u0_w0_0_0", Integer()), ("@ormar_u0_w0_0_1", Integer())]
+
+    The values are set by ``update_assignment`` (see ``list_variable_params``).
+
+    :param bind: bind parameter
+    :type bind: BindParameter
+    :return: variable name and type per held value
+    :rtype: List[Tuple[str, Any]]
+    """
+    if not bind.expanding:
+        return [(f"@{bind.key}", bind.type)]
+    items = range(len(bind.value or ()))
+    if isinstance(bind.type, TupleType):
+        return [
+            (f"@{bind.key}_{item}_{part}", part_type)
+            for item in items
+            for part, part_type in enumerate(bind.type.types)
+        ]
+    return [(f"@{bind.key}_{item}", bind.type) for item in items]
+
+
+def read_list_variables(bind: BindParameter) -> Any:
+    """
+    Return an ``in`` list read from the user variables of its items (see
+    ``bind_variables``)::
+
+        score IN (@ormar_u0_w0_0_0, @ormar_u0_w0_0_1)
+        (tenant, number) IN ((@ormar_u0_w0_0_0_0, @ormar_u0_w0_0_0_1))
+
+    :param bind: expanding bind parameter of a non-empty ``in`` list
+    :type bind: BindParameter
+    :return: tuple of the variables, of a tuple of them per item for key tuples
+    :rtype: Any
+    """
+    columns: List[Any] = [
+        sqlalchemy.literal_column(name, type_=variable_type)
+        for name, variable_type in bind_variables(bind=bind)
+    ]
+    if isinstance(bind.type, TupleType):
+        width = len(bind.type.types)
+        columns = [
+            sqlalchemy.tuple_(*columns[start : start + width])
+            for start in range(0, len(columns), width)
+        ]
+    return sqlalchemy.tuple_(*columns)
+
+
+def list_variable_params(
+    params: Dict[str, Any], list_keys: Tuple[Tuple[str, int], ...]
+) -> Dict[str, Any]:
+    """
+    Return the values of ``update_assignment``: each ``in`` list replaced by
+    its items, named like their variables (see ``bind_variables``)::
+
+        list_variable_params(
+            params={"ormar_u0_0": 5, "ormar_u0_w0_0": [1, 8]},
+            list_keys=(("ormar_u0_w0_0", 0),),
+        )
+        # -> {"ormar_u0_0": 5, "ormar_u0_w0_0_0": 1, "ormar_u0_w0_0_1": 8}
+
+    :param params: bound values by name
+    :type params: Dict[str, Any]
+    :param list_keys: name of each ``in`` list and the number of parts of its
+        key tuples, 0 for a list of plain values
+    :type list_keys: Tuple[Tuple[str, int], ...]
+    :return: values by variable name
+    :rtype: Dict[str, Any]
+    """
+    variable_params = dict(params)
+    for key, parts in list_keys:
+        for item, value in enumerate(variable_params.pop(key)):
+            if parts:
+                variable_params.update(
+                    {f"{key}_{item}_{part}": value[part] for part in range(parts)}
+                )
+            else:
+                variable_params[f"{key}_{item}"] = value
+    return variable_params
 
 
 def on_update_variable(index: int) -> str:
@@ -132,6 +249,9 @@ def update_assignment(
 
         SET @ormar_on_update_0 = %s, @ormar_u0_0 = %s
 
+    An ``in`` list gets one variable per item (see ``bind_variables``),
+    an empty one none.
+
     MySQL drivers turn ``executemany`` of an insert into one multi-row VALUES
     and leave binds after it unfilled, so a multi-row upsert reads the values
     from these variables instead (see ``conflict_updates``).
@@ -140,8 +260,7 @@ def update_assignment(
     :type table: sqlalchemy.Table
     :param on_update: columns updated with their ``on_update`` value
     :type on_update: Tuple[str, ...]
-    :param value_binds: bind parameters of the ``update_values`` columns,
-        none of them expanding (see ``build_update_assignment``)
+    :param value_binds: bind parameters of the ``update_values`` columns
     :type value_binds: Tuple[BindParameter, ...]
     :return: assignment statement
     :rtype: Executable
@@ -150,12 +269,11 @@ def update_assignment(
         sqlalchemy.bindparam(key=f"ormar_on_update_{index}", type_=table.c[name].type)
         for index, name in enumerate(on_update)
     ]
-    binds.extend(
-        sqlalchemy.bindparam(key=bind.key, type_=bind.type) for bind in value_binds
-    )
-    variables = [on_update_variable(index=index) for index in range(len(on_update))] + [
-        f"@{bind.key}" for bind in value_binds
-    ]
+    variables = [on_update_variable(index=index) for index in range(len(on_update))]
+    for bind in value_binds:
+        for variable, variable_type in bind_variables(bind=bind):
+            variables.append(variable)
+            binds.append(sqlalchemy.bindparam(key=variable[1:], type_=variable_type))
     assignments = ", ".join(
         f"{variable} = :{bind.key}" for variable, bind in zip(variables, binds)
     )

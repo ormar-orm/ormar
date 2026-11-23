@@ -24,10 +24,10 @@ from typing import (
 
 import sqlalchemy
 from sqlalchemy.sql import Executable, visitors
-from sqlalchemy.sql.elements import BinaryExpression, BindParameter
+from sqlalchemy.sql.elements import BindParameter
+from sqlalchemy.sql.sqltypes import TupleType
 
 from ormar.databases.dialects import update_assignment
-from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.expressions import (
     Expression,
@@ -35,7 +35,11 @@ from ormar.queryset.expressions import (
     expression_key,
     expression_params,
 )
-from ormar.queryset.templates.cache import StatementTemplate, cached_statement
+from ormar.queryset.templates.cache import (
+    StatementTemplate,
+    cached_statement,
+    template_cache_for,
+)
 from ormar.queryset.templates.reads import release_values
 from ormar.queryset.templates.slots import value_binds, value_params
 
@@ -146,6 +150,29 @@ def update_values_key(update_values: Mapping[str, Any]) -> Tuple[Any, ...]:
     )
 
 
+def update_value_binds(
+    model: Type[Any], update_values: Mapping[str, Any]
+) -> Tuple[BindParameter, ...]:
+    """
+    :param model: written model
+    :type model: Type[Any]
+    :param update_values: value or expression node by column name
+    :type update_values: Mapping[str, Any]
+    :return: bind parameters of the ``update_values`` clauses, in build order
+    :rtype: Tuple[BindParameter, ...]
+    """
+    table = model.ormar_config.table
+    clauses = update_value_clauses(
+        inserted=table.alias("inserted").c, model_cls=model, update_values=update_values
+    )
+    return tuple(
+        element
+        for clause in clauses.values()
+        for element in visitors.iterate(clause)
+        if isinstance(element, BindParameter)
+    )
+
+
 def build_update_assignment(
     model: Type[Any],
     on_update: Tuple[str, ...],
@@ -154,7 +181,8 @@ def build_update_assignment(
     """
     Build the MySQL ``SET`` of the user variables a multi-row upsert reads its
     ``on_update`` values and the bound ``update_values`` from (see
-    ``update_assignment``).
+    ``update_assignment``). An ``in`` list sets one variable per item, so the
+    statement is cached per length of the lists (see ``update_list_keys``).
 
     :param model: written model
     :type model: Type[Any]
@@ -162,81 +190,55 @@ def build_update_assignment(
     :type on_update: Tuple[str, ...]
     :param update_values: value or expression node by column name
     :type update_values: Mapping[str, Any]
-    :raises QueryDefinitionError: for an ``in`` filter in a ``When`` condition,
-        as a user variable cannot hold its list
     :return: assignment statement
     :rtype: Executable
     """
-    table = model.ormar_config.table
-    # only the binds are read, so an alias stands for the inserted row: its
-    # columns tell an ``Inserted`` field from the existing row's in the message
-    clauses = update_value_clauses(
-        inserted=table.alias("inserted").c, model_cls=model, update_values=update_values
-    )
-    elements = [
-        element for clause in clauses.values() for element in visitors.iterate(clause)
-    ]
-    for element in elements:
-        if isinstance(element, BinaryExpression) and getattr(
-            element.right, "expanding", False
-        ):
-            raise QueryDefinitionError(
-                in_condition_message(model=model, in_filter=element)
-            )
     return update_assignment(
-        table=table,
+        table=model.ormar_config.table,
         on_update=on_update,
-        value_binds=tuple(
-            element for element in elements if isinstance(element, BindParameter)
-        ),
+        value_binds=update_value_binds(model=model, update_values=update_values),
     )
 
 
-def in_condition_message(model: Type[Any], in_filter: BinaryExpression) -> str:
+def update_list_keys(
+    model: Type[Any], update_values: Mapping[str, Any]
+) -> Tuple[Tuple[str, int], ...]:
     """
-    Explain that a multi-row MySQL upsert takes no ``in`` filter in a ``When``
-    condition of ``update_values`` and show the equalities to write instead,
-    built from the filtered field when the filter is on a column::
+    Return the ``in`` lists bound by the ``When`` conditions of
+    ``update_values``: the name of each and the number of parts of its key
+    tuples, 0 for plain values, cached per shape of ``update_values``::
 
-        in_condition_message(model=Player, in_filter=...)
-        # -> '... cannot use an "in" filter (score__in) ... write
-        #     When((Player.score == 1) | (Player.score == 8), then=...) ...'
+        update_list_keys(
+            model=Player,
+            update_values={"rank": Case(When(score__in=[1, 8], then=1))},
+        )
+        # -> (("ormar_u0_w0_0", 0),)
+
+    A multi-row MySQL upsert reads each item from its own user variable, so
+    its statements are cached per length of these lists (see
+    ``list_variable_params``).
 
     :param model: written model
     :type model: Type[Any]
-    :param in_filter: ``IN`` comparison with an expanding bind
-    :type in_filter: BinaryExpression
-    :return: error message
-    :rtype: str
+    :param update_values: value or expression node by column name
+    :type update_values: Mapping[str, Any]
+    :return: name and number of key parts per ``in`` list
+    :rtype: Tuple[Tuple[str, int], ...]
     """
-    column = in_filter.left
-    if isinstance(column, sqlalchemy.Column):
-        field = model.get_column_name_from_alias(column.name)
-        values = [
-            value
-            for value in (in_filter.right.value or ())
-            if isinstance(value, (bool, int, float, str))
-        ][:2]
-        first, second = (
-            [repr(value) for value in values] if len(values) == 2 else ["a", "b"]
+    cache = template_cache_for(model_cls=model)
+    key = ("update_list_keys", update_values_key(update_values=update_values))
+    list_keys = cache.get(key)
+    if list_keys is None:
+        list_keys = tuple(
+            (
+                bind.key,
+                len(bind.type.types) if isinstance(bind.type, TupleType) else 0,
+            )
+            for bind in update_value_binds(model=model, update_values=update_values)
+            if bind.expanding
         )
-        if column.table is model.ormar_config.table:
-            where = f" ({field}__in)"
-            side = f"{model.__name__}.{field}"
-        else:
-            where = f' (Inserted("{field}").in_())'
-            side = f'Inserted("{field}")'
-        example = f"({side} == {first}) | ({side} == {second})"
-    else:
-        where = ""
-        example = "(Model.field == a) | (Model.field == b)"
-    return (
-        'On MySQL, bulk_create() of several rows with on_conflict="update" '
-        f'cannot use an "in" filter{where} in a When() of update_values. '
-        f"Compare with each value instead, e.g. When({example}, then=...). "
-        "The in filter works with a single row and on PostgreSQL and SQLite; "
-        "MySQL reads these values from user variables, which cannot hold a list."
-    )
+        cache.put(key=key, statement=list_keys)
+    return list_keys
 
 
 def build_conflict_insert(
@@ -345,6 +347,7 @@ def insert_statement(
     returning: Tuple[str, ...] = (),
     update_values: Optional[Mapping[str, Any]] = None,
     update_variables: bool = False,
+    list_lengths: Tuple[int, ...] = (),
 ) -> Executable:
     """
     Return the insert of a model for the given sorted column names, from the
@@ -377,6 +380,10 @@ def insert_statement(
     :param update_variables: read the bound update values from MySQL user
         variables set by ``update_assignment`` instead of binds
     :type update_variables: bool
+    :param list_lengths: lengths of the ``in`` lists of ``update_values``
+        read from user variables, one variable per item (see
+        ``update_list_keys``)
+    :type list_lengths: Tuple[int, ...]
     :return: insert statement with ``ormar_v{i}`` binds
     :rtype: Executable
     """
@@ -430,6 +437,7 @@ def insert_statement(
             rules.backend_name,
             *conflict.values(),
             update_values_key(update_values=update_values or {}),
+            list_lengths,
         ),
         builder=build_conflict_insert,
         table=config.table,

@@ -2,14 +2,22 @@ from typing import Any, Optional
 
 import pytest
 import pytest_asyncio
+from sqlalchemy.dialects import mysql
 
 import ormar
 from ormar import Case, F, Func, Greatest, Inserted, When
+from ormar.databases.dialects import MysqlRules, list_variable_params
+from ormar.databases.query_executor import QueryExecutor
 from ormar.exceptions import QueryDefinitionError
 from ormar.queryset.actions.select_action import resolve_expression
 from ormar.queryset.expressions import expression_key
-from ormar.queryset.templates import template_cache_for
-from ormar.queryset.templates.writes import build_update_assignment
+from ormar.queryset.templates import insert_statement, template_cache_for
+from ormar.queryset.templates.writes import (
+    build_conflict_insert,
+    build_update_assignment,
+    update_list_keys,
+    update_values_params,
+)
 from tests.lifespan import init_tests
 from tests.settings import DATABASE_URL, create_config
 
@@ -411,68 +419,157 @@ async def test_invalid_cases(players):
 
 
 @pytest.mark.parametrize(
-    "condition, message",
+    "condition, sql_condition, values",
     [
         (
             When(score__in=[1, 8], then=1),
-            "(score__in) in a When() of update_values. Compare with each value "
-            "instead, e.g. When((Player.score == 1) | (Player.score == 8), then=...)",
+            "case_players.score IN (@ormar_u0_w0_0_0, @ormar_u0_w0_0_1)",
+            {"ormar_u0_w0_0_0": 1, "ormar_u0_w0_0_1": 8},
         ),
         (
-            When(code__in=["a-1"], then=1),
-            "(code__in) in a When() of update_values. Compare with each value "
-            "instead, e.g. When((Player.code == a) | (Player.code == b), then=...)",
+            When(Inserted("score").in_([1, 2, 3]), then=1),
+            "VALUES(score) IN (@ormar_u0_w0_0_0_0, @ormar_u0_w0_0_0_1, "
+            "@ormar_u0_w0_0_0_2)",
+            {"ormar_u0_w0_0_0_0": 1, "ormar_u0_w0_0_0_1": 2, "ormar_u0_w0_0_0_2": 3},
         ),
         (
-            When(Inserted("score").in_([1, 8]), then=1),
-            'e.g. When((Inserted("score") == 1) | (Inserted("score") == 8), then=...)',
+            When(~F("score").in_([4]), then=1),
+            "NOT (case_players.score IN (@ormar_u0_w0_0_0_0))",
+            {"ormar_u0_w0_0_0_0": 4},
         ),
-        (
-            When(Func("lower", F("name")).in_(["ann", "bob"]), then=1),
-            '"in" filter in a When() of update_values. Compare with each value '
-            "instead, e.g. When((Model.field == a) | (Model.field == b), then=...)",
-        ),
+        (When(score__in=[], then=1), "WHEN (false)", {}),
+        (When(~ormar.and_(score__in=[]), then=1), "WHEN NOT (false)", {}),
     ],
 )
-def test_mysql_batches_take_no_in_conditions(condition, message):
+def test_mysql_batches_read_in_lists_from_one_variable_per_item(
+    condition, sql_condition, values
+):
     update_values = Player._conflict_updates(
         update_fields=None, update_values={"rank": Case(condition, default=0)}
     )[1]
-    with pytest.raises(QueryDefinitionError) as error:
-        build_update_assignment(
-            model=Player, on_update=("revision",), update_values=update_values
+    statement: Any = build_conflict_insert(
+        table=Player.ormar_config.table,
+        names=("code", "name"),
+        rules=MysqlRules(backend_name="mysql"),
+        on_conflict="update",
+        target=("code",),
+        update_names=(),
+        on_update=("revision",),
+        returning=(),
+        model=Player,
+        update_values=update_values,
+        update_variables=True,
+    )
+    assert sql_condition in str(statement.compile(dialect=mysql.dialect()))
+    assignment = build_update_assignment(
+        model=Player, on_update=("revision",), update_values=update_values
+    )
+    assert str(assignment.compile(dialect=mysql.dialect())) == ", ".join(
+        [
+            "SET @ormar_on_update_0 = %s, @ormar_u0_0 = %s, @ormar_u0_1 = %s",
+            *(f"@{name} = %s" for name in values),
+        ]
+    )
+    list_keys = update_list_keys(model=Player, update_values=update_values)
+    params = list_variable_params(
+        params=update_values_params(update_values=update_values), list_keys=list_keys
+    )
+    assert params == {"ormar_u0_0": 1, "ormar_u0_1": 0, **values}
+
+
+def test_upserts_reading_in_lists_from_variables_are_cached_per_list_length():
+    def statement(list_lengths: tuple[int, ...]) -> Any:
+        update_values = Player._conflict_updates(
+            update_fields=None,
+            update_values={"rank": Case(When(score__in=[1, 8], then=1), default=0)},
+        )[1]
+        return insert_statement(
+            model_cls=Player,
+            names=("code", "name"),
+            on_conflict="update",
+            conflict_target=["code"],
+            update_values=update_values,
+            update_variables=True,
+            list_lengths=list_lengths,
         )
-    assert str(error.value).startswith(
-        'On MySQL, bulk_create() of several rows with on_conflict="update" '
-        'cannot use an "in" filter'
+
+    assert statement(list_lengths=(2,)) is statement(list_lengths=(2,))
+    assert statement(list_lengths=(2,)) is not statement(list_lengths=(3,))
+
+
+@pytest.fixture()
+def executed(monkeypatch):
+    calls: list[str] = []
+    for method_name in ("execute", "execute_many"):
+        original = getattr(QueryExecutor, method_name)
+
+        def recording(self, *args, _original=original, _name=method_name, **kwargs):
+            calls.append(_name)
+            return _original(self, *args, **kwargs)
+
+        monkeypatch.setattr(QueryExecutor, method_name, recording)
+    return calls
+
+
+async def bulk_upsert_rank(condition: Any, executed: list[str]) -> dict:
+    """
+    Upsert three existing players in one batch, setting the rank to the
+    inserted score where the condition holds and to -2 elsewhere; MySQL sets
+    the bound values, the in lists among them, in user variables first.
+    """
+    executed.clear()
+    await Player.objects.bulk_create(
+        [
+            Player(code="a-1", name="Ann", score=20),
+            Player(code="b-2", name="Bob", score=30),
+            Player(code="d-4", name="Dee", score=40),
+        ],
+        on_conflict="update",
+        conflict_target=["code"],
+        update_values={
+            "rank": Case(When(condition, then=Inserted("score")), default=-2)
+        },
     )
-    assert message in str(error.value)
-    assert str(error.value).endswith(
-        "The in filter works with a single row and on PostgreSQL and SQLite; "
-        "MySQL reads these values from user variables, which cannot hold a list."
-    )
+    assert executed.count("execute_many") == 1
+    assert executed.count("execute") == (1 if DATABASE_URL.startswith("mysql") else 0)
+    return await column("rank")
 
 
 @pytest.mark.asyncio
-@pytest.mark.skipif(
-    not DATABASE_URL.startswith("mysql"),
-    reason="only MySQL reads the update values of a batch from user variables",
+@pytest.mark.parametrize(
+    "condition, ranks",
+    [
+        (ormar.and_(score__in=[1, 8]), {"a-1": -2, "b-2": 30, "d-4": 40}),
+        (ormar.and_(score__in=[3, 5, 8]), {"a-1": 20, "b-2": 30, "d-4": -2}),
+        (Inserted("score").in_([20, 40]), {"a-1": 20, "b-2": -2, "d-4": 40}),
+        (ormar.and_(score__in=[]), {"a-1": -2, "b-2": -2, "d-4": -2}),
+        (~F("score").in_([1, 8]), {"a-1": 20, "b-2": -2, "d-4": -2}),
+        (~ormar.and_(score__in=[3]), {"a-1": -2, "b-2": 30, "d-4": 40}),
+        (~ormar.and_(score__in=[]), {"a-1": 20, "b-2": 30, "d-4": 40}),
+    ],
 )
-async def test_mysql_bulk_upsert_rejects_in_conditions(players):  # pragma: no cover
-    rows = [Player(code="a-1", name="Ann"), Player(code="b-2", name="Bob")]
-    with pytest.raises(
-        QueryDefinitionError,
-        match=r"When\(\(Player\.score == 1\) \| \(Player\.score == 8\), then=\.\.\.\)",
-    ):
-        await Player.objects.bulk_create(
-            rows,
-            on_conflict="update",
-            conflict_target=["code"],
-            update_values={
-                "rank": Case(When(score__in=[1, 8], then=Inserted("score")), default=-2)
-            },
-        )
-    assert await column("rank") == {"a-1": None, "b-2": None, "c-3": None, "d-4": None}
+async def test_bulk_upsert_takes_in_conditions(players, executed, condition, ranks):
+    assert await bulk_upsert_rank(condition=condition, executed=executed) == {
+        **ranks,
+        "c-3": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_bulk_upsert_takes_in_lists_of_any_length_in_turn(players, executed):
+    for scores, ranks in [
+        ([1, 8], {"a-1": -2, "b-2": 30, "d-4": 40}),
+        ([3, 5, 8], {"a-1": 20, "b-2": 30, "d-4": -2}),
+        ([3], {"a-1": 20, "b-2": -2, "d-4": -2}),
+        ([], {"a-1": -2, "b-2": -2, "d-4": -2}),
+        ([8, 1], {"a-1": -2, "b-2": 30, "d-4": 40}),
+        ([3, 1, 8, 5], {"a-1": 20, "b-2": 30, "d-4": 40}),
+    ]:
+        condition = ormar.and_(score__in=scores)
+        assert await bulk_upsert_rank(condition=condition, executed=executed) == {
+            **ranks,
+            "c-3": None,
+        }
 
 
 @pytest.mark.asyncio

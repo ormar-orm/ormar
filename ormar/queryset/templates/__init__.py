@@ -86,6 +86,7 @@ from ormar.queryset.templates.writes import (
     conflict_target_columns,
     insert_statement,
     insert_template,
+    update_list_keys,
     update_values_key,
     update_values_params,
 )
@@ -117,6 +118,7 @@ __all__ = [
     "release_values",
     "template_cache_for",
     "template_params",
+    "update_list_keys",
     "update_values_key",
     "update_values_params",
     "value_binds",

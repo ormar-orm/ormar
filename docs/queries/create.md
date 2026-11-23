@@ -333,13 +333,7 @@ newer = When(valid_from__lt=Inserted("valid_from"), then=Inserted("amount"))
 
 A field a condition reads cannot be set by the same upsert (here `valid_from`), as
 MySQL would read the new value: keep such fields out of `update_fields` and
-`update_values`. On MySQL, `bulk_create()` of several rows with `on_conflict="update"`
-cannot use an `in` filter in a `When()` of `update_values`. Compare with each value
-instead, e.g. `When((Player.score == 1) | (Player.score == 8), then=...)` or
-`When(ormar.or_(ormar.and_(score=1), ormar.and_(score=8)), then=...)` in place of
-`When(score__in=[1, 8], then=...)`. The `in` filter works with a single row and on
-PostgreSQL and SQLite; MySQL reads these values from user variables (see below), which
-cannot hold a list.
+`update_values`.
 
 | | PostgreSQL, SQLite | MySQL |
 |---|---|---|

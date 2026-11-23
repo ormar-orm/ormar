@@ -20,6 +20,7 @@ import sqlalchemy
 
 import ormar  # noqa I100
 from ormar import MultipleMatches, NoMatch
+from ormar.databases.dialects import list_variable_params
 from ormar.exceptions import (
     ModelListEmptyError,
     ModelPersistenceError,
@@ -64,6 +65,7 @@ from ormar.queryset.templates import (
     release_values,
     template_cache_for,
     template_params,
+    update_list_keys,
     update_values_key,
     update_values_params,
     value_params,
@@ -2190,20 +2192,15 @@ class QuerySet(Generic[T]):
         async with database.get_query_executor(
             transactional=several_statements
         ) as executor:
+            list_lengths: tuple[int, ...] = ()
             if update_variables:  # pragma: no cover
-                await executor.execute(
-                    query=cached_statement(
-                        model_cls=self.model,
-                        key=(
-                            "update_assignment",
-                            on_update_columns,
-                            update_values_key(update_values=conflict_values),
-                        ),
-                        builder=build_update_assignment,
-                        model=self.model,
-                        on_update=on_update_columns,
-                        update_values=conflict_values,
-                    ),
+                # an in list reads one variable per item, so the statements
+                # are cached per length of the lists
+                list_keys = update_list_keys(
+                    model=self.model, update_values=conflict_values
+                )
+                list_lengths = tuple(len(conflict_params[key]) for key, _ in list_keys)
+                assignment_params = list_variable_params(
                     params={
                         **{
                             f"ormar_on_update_{index}": on_update[column]
@@ -2211,7 +2208,26 @@ class QuerySet(Generic[T]):
                         },
                         **conflict_params,
                     },
+                    list_keys=list_keys,
                 )
+                # only empty in lists bound: there is nothing to set
+                if assignment_params:
+                    await executor.execute(
+                        query=cached_statement(
+                            model_cls=self.model,
+                            key=(
+                                "update_assignment",
+                                on_update_columns,
+                                update_values_key(update_values=conflict_values),
+                                list_lengths,
+                            ),
+                            builder=build_update_assignment,
+                            model=self.model,
+                            on_update=on_update_columns,
+                            update_values=conflict_values,
+                        ),
+                        params=assignment_params,
+                    )
             for rows in rows_by_keys.values():
                 names = tuple(sorted(rows[0]))
                 # duplicates in one batch: the last wins, only while there is no
@@ -2226,6 +2242,7 @@ class QuerySet(Generic[T]):
                     on_update=on_update_columns,
                     update_values=conflict_values,
                     update_variables=update_variables,
+                    list_lengths=list_lengths,
                 )
                 bound_updates = {} if update_variables else update_params
                 params = [
