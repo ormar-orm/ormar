@@ -196,12 +196,16 @@ await Player.objects.update(
 )
 ```
 
-* In `update()` conditions read the model's own fields only, a foreign key included
-  (`When(team=red_team)`, `When(team=None)`). A condition on a related model
-  (`When(team__name="red")`) raises `QueryDefinitionError`: the update would join the
-  related table, so rows with a `NULL` foreign key would be skipped instead of taking
-  the `default`. Branch values may still read related fields (`then=F("team__rank")`,
-  see above). Filters take conditions on models reached through foreign keys.
+* Conditions read the model's own fields and fields of models reached through
+  foreign keys (`When(team__name="red")`, `When(team__league__name="east")`), not
+  reverse or many to many relations. A row without the related row (a `NULL` foreign
+  key) falls through to the next `When` or the `default`, like in `filter()`: such a
+  condition checks the updated row against the rows it matches in a subquery with
+  outer joins, so the update joins only the tables its values read
+  (`then=F("team__rank")`, where rows without a team are not updated, see above).
+* Each `When` condition on a related model evaluates a subquery over the rows it
+  matches, so for selective updates of big tables an index on the foreign key column
+  helps.
 * Like other expressions, a `Case` cannot read a column set by the same `update()`,
   in its conditions neither.
 * `None`, `True` and `False` are written into the SQL, other literals are bound with

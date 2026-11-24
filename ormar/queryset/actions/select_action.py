@@ -13,9 +13,10 @@ from ormar.queryset.expressions import (
     F,
     Function,
     Inserted,
+    MatchedRows,
     When,
-    expression_conditions,
     expression_leaves,
+    expression_whens,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -143,8 +144,7 @@ def resolve_expression(
     :type first_branch: int
     :raises QueryDefinitionError: if a field is not allowed (see
         ``expression_columns``) or a condition reads a related model through a
-        reverse or many to many relation, or in an update or upsert any
-        related model
+        reverse or many to many relation, or in an upsert any related model
     :return: resolved expression and its fields by path
     :rtype: tuple[Any, dict[str, SelectAction]]
     """
@@ -234,6 +234,13 @@ def resolve_when(
     Copy a ``When`` with its condition resolved into filter actions, in the
     order ``FilterGroup.get_text_clause`` builds them, and its value resolved.
 
+    In ``update()`` a condition reading related models is kept with the
+    relations it joins (``When.matched_rows``): it is written as a membership
+    test of the updated row in the rows the condition matches with outer
+    joins, so a row without the related row falls through to the next branch
+    or the default, like in a select, instead of being skipped by the join of
+    the update.
+
     :param when: branch
     :type when: When
     :param model: queried model
@@ -253,29 +260,24 @@ def resolve_when(
     duplicate = copy.copy(when)
     duplicate.number = next(numbers)
     duplicate.condition = when.condition.copy_tree()
-    duplicate.condition.resolve(model_cls=model, upsert=upsert)
+    joins = duplicate.condition.resolve(model_cls=model, upsert=upsert)[1]
     duplicate.actions = list(duplicate.condition._iter())
     for action in duplicate.actions:
         for path in action.path_actions():
-            check_condition_path(
-                model=model, path=path.related_parts, upsert=upsert, update=update
-            )
+            check_condition_path(model=model, path=path.related_parts, upsert=upsert)
+    if update and joins:
+        duplicate.matched_rows = MatchedRows(model=model, select_related=joins)
     duplicate.then = resolve_branches(
         node=when.then, model=model, upsert=upsert, update=update, numbers=numbers
     )
     return duplicate
 
 
-def check_condition_path(
-    model: type["Model"], path: list[str], upsert: bool, update: bool
-) -> None:
+def check_condition_path(model: type["Model"], path: list[str], upsert: bool) -> None:
     """
     Allow ``When`` conditions to read related models only through foreign
-    keys, which match at most one row, and in an update or upsert none.
-
-    ``update()`` joins the tables its expressions read, so a row with a
-    ``NULL`` foreign key would not be updated at all instead of taking the
-    default of the ``Case``.
+    keys, which match at most one row, and in an upsert none: an upsert has
+    no stored row to look its related rows up for.
 
     :param model: queried model
     :type model: type[Model]
@@ -283,10 +285,8 @@ def check_condition_path(
     :type path: list[str]
     :param upsert: the expression is a value of an upsert's ``update_values``
     :type upsert: bool
-    :param update: the expression is a value of ``update()``
-    :type update: bool
     :raises QueryDefinitionError: if the path follows a reverse, many to many
-        or through relation, or reads a related model in an update or upsert
+        or through relation, or reads a related model in an upsert
     """
     target = model
     for relation in path:
@@ -303,19 +303,14 @@ def check_condition_path(
             f"When() conditions in update_values of an upsert read only fields of "
             f"the inserted model, not '{'__'.join(path)}'"
         )
-    if update and path:
-        raise QueryDefinitionError(
-            f"When() conditions in update() read only fields of the updated "
-            f"model, not '{'__'.join(path)}': the update joins the related "
-            f"table, so rows with a NULL foreign key would be skipped instead of "
-            f"taking the default"
-        )
 
 
 def expression_paths(node: Any, columns: dict[str, SelectAction]) -> list[QueryAction]:
     """
-    Return the actions resolving the relation paths an expression reads: its
-    fields and the fields of its ``When`` conditions.
+    Return the actions resolving the relation paths an expression reads, the
+    tables an update joins: its fields and the fields of its ``When``
+    conditions, but not of the conditions an update matches in a subquery
+    (see ``When.matched_rows``).
 
     :param node: resolved expression node or a value
     :type node: Any
@@ -328,7 +323,9 @@ def expression_paths(node: Any, columns: dict[str, SelectAction]) -> list[QueryA
         *columns.values(),
         *(
             path
-            for action in expression_conditions(node=node)
+            for when in expression_whens(node=node)
+            if when.matched_rows is None
+            for action in when.actions
             for path in action.path_actions()
         ),
     ]

@@ -311,3 +311,63 @@ class Query:
         self.select_from = []
         self.columns = []
         self.used_aliases = []
+
+
+def matched_rows_clause(
+    model_cls: type["Model"],
+    filter_clauses: list,
+    exclude_clauses: list,
+    select_related: list,
+    binder: Optional["SlotBinder"],
+    excludable: Optional["ExcludableItems"] = None,
+) -> Any:
+    """
+    Return the condition keeping the rows of a model the filters select with
+    outer joins, by primary key, for writes reading related models::
+
+        tracks.id IN (SELECT ormar_matched.id FROM (
+            SELECT tracks.id FROM tracks LEFT OUTER JOIN albums AS ... ON ...
+            WHERE <filters>
+        ) AS ormar_matched)
+
+    The select is wrapped in a derived table, as MySQL does not let a
+    statement select from the table it updates or deletes from (error
+    1093). A composite primary key is compared as a tuple.
+
+    :param model_cls: written model
+    :type model_cls: type[Model]
+    :param filter_clauses: filter actions and groups
+    :type filter_clauses: list
+    :param exclude_clauses: exclude actions and groups
+    :type exclude_clauses: list
+    :param select_related: relations the filters join
+    :type select_related: list
+    :param binder: names filter values for templates, None binds them as
+        plain values
+    :type binder: Optional[SlotBinder]
+    :param excludable: selected fields, none excluded when not given
+    :type excludable: Optional[ExcludableItems]
+    :return: condition on the primary key columns
+    :rtype: Any
+    """
+    matched = (
+        Query(
+            model_cls=model_cls,
+            filter_clauses=filter_clauses,
+            exclude_clauses=exclude_clauses,
+            select_related=select_related,
+            limit_count=None,
+            offset=None,
+            excludable=(
+                excludable
+                if excludable is not None
+                else ormar.models.excludable.ExcludableItems()
+            ),
+            order_bys=None,
+            limit_raw_sql=False,
+            binder=binder,
+        )
+        .build_primary_key_select()
+        .subquery(name="ormar_matched")
+    )
+    return model_cls.ormar_config.pk.row_value().in_(sqlalchemy.select(*matched.c))

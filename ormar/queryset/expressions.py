@@ -71,6 +71,7 @@ import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
 
 if TYPE_CHECKING:  # pragma: no cover
+    from ormar import Model
     from ormar.queryset.actions.filter_action import FilterAction
     from ormar.queryset.actions.query_action import QueryAction
     from ormar.queryset.clause import FilterGroup
@@ -406,6 +407,21 @@ class Random(Expression):
     """
 
 
+class MatchedRows(NamedTuple):
+    """
+    A ``When`` condition of ``update()`` reading related models, written as a
+    membership test of the updated row (see ``queries.matched_rows_clause``)::
+
+        players.id IN (SELECT ormar_matched.id FROM (
+            SELECT players.id FROM players LEFT OUTER JOIN teams AS ... ON ...
+            WHERE <condition>
+        ) AS ormar_matched)
+    """
+
+    model: type["Model"]
+    select_related: list[str]
+
+
 class When:
     """
     Branch of a ``Case``: its value ``then`` where the condition holds. The
@@ -417,10 +433,11 @@ class When:
         When(ormar.or_(score__gt=10, team__name="red"), then=F("bonus") + 1)
         When(Func("lower", F("name")) == "ann", then=None)
 
-    In filters conditions read the model's own fields and the fields of models
-    reached through foreign keys, not reverse or many to many relations; in
-    ``update()`` and upserts own fields only, in upserts also ``Inserted``
-    fields. A field named ``then`` is filtered as ``then__exact``.
+    Conditions read the model's own fields and the fields of models reached
+    through foreign keys, not reverse or many to many relations; in upserts
+    own fields only, and ``Inserted`` fields. A row without the related row
+    falls through to the next branch or the default, in ``update()`` too. A
+    field named ``then`` is filtered as ``then__exact``.
     """
 
     def __init__(self, *groups: "FilterGroup", then: Any, **kwargs: Any) -> None:
@@ -441,6 +458,7 @@ class When:
         # set on the copies resolved for a query (see ``resolve_expression``)
         self.number = 0
         self.actions: list["FilterAction"] = []
+        self.matched_rows: Optional[MatchedRows] = None
 
     def slot_prefix(self, slot: str) -> str:
         """
@@ -717,10 +735,11 @@ def expression_key(node: Any) -> Any:
         Random()  # -> ("random",)
         Inserted("a")  # -> ("inserted", "a")
         Case(When(id=7, then=1), default=None)
-        # -> ("case", ((<condition key>, int),), ("constant", None))
+        # -> ("case", ((<condition key>, False, int),), ("constant", None))
 
     The conditions of a ``Case`` are keyed like filter clauses (see
-    ``clauses_cache_key``), so the expression has to be resolved.
+    ``clauses_cache_key``), with whether they are written as a membership test
+    (see ``When.matched_rows``), so the expression has to be resolved.
 
     :param node: expression node
     :type node: Any
@@ -749,6 +768,7 @@ def expression_key(node: Any) -> Any:
                     ormar.queryset.templates.clauses_cache_key(
                         clauses=[when.condition]
                     ),
+                    when.matched_rows is not None,
                     case_value_key(value=when.then),
                 )
                 for when in node._whens
@@ -1027,15 +1047,7 @@ def case_clause(
     :rtype: Any
     """
     conditions = [
-        when.condition.get_text_clause(
-            binder=ormar.queryset.templates.SlotBinder(
-                actions=when.actions, prefix=when.slot_prefix(slot=slot)
-            )
-            if slot is not None
-            else None,
-            inserted=inserted,
-        )
-        for when in node._whens
+        when_condition(when=when, slot=slot, inserted=inserted) for when in node._whens
     ]
     values = node._values()
     expression_clauses, literal_keys = operand_clauses(
@@ -1070,6 +1082,39 @@ def case_clause(
     ]
     *then_clauses, default_clause = value_clauses
     return sqlalchemy.case(*zip(conditions, then_clauses), else_=default_clause)
+
+
+def when_condition(when: When, slot: Optional[str], inserted: Any) -> Any:
+    """
+    Build the condition of a resolved ``When`` like a filter, or for a
+    condition of ``update()`` reading related models the membership test of
+    the updated row in the rows it matches (see ``When.matched_rows``).
+
+    :param when: resolved branch
+    :type when: When
+    :param slot: slot name of a statement template, if built for one
+    :type slot: Optional[str]
+    :param inserted: columns of the inserted row of an upsert
+    :type inserted: Any
+    :return: SQL condition
+    :rtype: Any
+    """
+    binder = (
+        ormar.queryset.templates.SlotBinder(
+            actions=when.actions, prefix=when.slot_prefix(slot=slot)
+        )
+        if slot is not None
+        else None
+    )
+    if when.matched_rows is not None:
+        return ormar.queryset.queries.matched_rows_clause(
+            model_cls=when.matched_rows.model,
+            filter_clauses=[when.condition],
+            exclude_clauses=[],
+            select_related=when.matched_rows.select_related,
+            binder=binder,
+        )
+    return when.condition.get_text_clause(binder=binder, inserted=inserted)
 
 
 def operand_clauses(

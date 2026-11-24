@@ -387,10 +387,6 @@ async def test_invalid_cases(players):
         Player.objects.filter(rank=Case(When(tags__name="x", then=1)))
     with pytest.raises(QueryDefinitionError, match="through foreign keys"):
         Player.objects.filter(Case(When(team__players__score=1, then=1)) == 1)
-    with pytest.raises(QueryDefinitionError, match="read only fields of the updated"):
-        await Player.objects.update(
-            each=True, rank=Case(When(team__name="red", then=1), default=0)
-        )
     with pytest.raises(QueryDefinitionError, match="only allowed in update_values"):
         Player.objects.filter(rank=Case(When(score=Inserted("score"), then=1)))
     with pytest.raises(QueryDefinitionError, match="only allowed in update_values"):
