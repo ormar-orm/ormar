@@ -285,6 +285,49 @@ assert (
 )
 ```
 
+## Aggregates of related rows
+
+The functions above aggregate the rows of the queryset into one value.
+`ormar.Count`, `ormar.Sum`, `ormar.Avg`, `ormar.Min` and `ormar.Max` compute one value
+per row instead, over the rows related to it, e.g. members ordered by the number of
+their active bookings. Each one is a correlated subquery and works wherever
+[expressions](update.md#column-expressions) do: compared with `==`, `<`, `>`... in
+`filter()` / `exclude()`, as a filter value, as an `update()` value and inside
+`Case`, `Func` and arithmetic.
+
+```python
+from ormar import Count, Sum
+
+# members with more than 3 active bookings
+await Member.objects.filter(
+    Count("bookings", filter={"status": "active"}) > 3
+).all()
+
+# store the number of bookings on each member
+await Member.objects.update(each=True, booked=Count("bookings"))
+
+# members whose booked trainings cost more than 500 in total
+await Member.objects.filter(Sum("bookings__training__price") > 500).all()
+```
+
+* The path starts with a reverse foreign key or a many to many relation of the
+  queried model and may continue through foreign keys to the aggregated field
+  (`"bookings__training__price"`). To aggregate a field of the queried rows
+  themselves use `queryset.sum()` and the other functions above.
+* `filter=` restricts the aggregated rows. It takes a dict of keyword filters or a
+  filter group (`ormar.and_()`, `ormar.or_()`, `Booking.status == "active"`), both
+  written from the related model, and reads its fields and fields reached from it
+  through foreign keys.
+* `Count(path, filter=None, distinct=False)` counts the related rows, `0` when there
+  are none. A path ending in a field counts its non-null values, a path ending in
+  a relation counts the related models (`Count("bookings__training",
+  distinct=True)` counts distinct trainings).
+* `Sum`, `Avg`, `Min` and `Max` take a path ending in a field and give `NULL` when
+  there are no related rows. `Min` and `Max` keep the type of the field, `Avg` is a
+  decimal. The type of `Sum` depends on the database: the sum of an integer field
+  is a decimal on MySQL and a numeric on PostgreSQL for `bigint` fields.
+* Aggregates are not allowed in `update_values` of upserts.
+
 ## QuerysetProxy methods
 
 When access directly the related `ManyToMany` field as well as `ReverseForeignKey`

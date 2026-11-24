@@ -36,6 +36,12 @@ like the arguments of ``filter()``, holds::
         rank=Case(*(When(id=pk, then=rank) for rank, pk in enumerate(order, 1)))
     )
 
+Aggregates of related rows (``Count``, ``Sum``, ``Avg``, ``Min``, ``Max``)
+are correlated subqueries, computed per row of the queried model::
+
+    User.objects.filter(Count("bookings", filter={"status": "active"}) > 3)
+    User.objects.update(each=True, booked=Count("bookings"))
+
 ``Model.field`` accessors are expressions themselves, ``F("path")`` names a
 field by its path. ``Expression`` defines only dunders and underscored names,
 so it never shadows a field reached through a ``FieldAccessor``, which has
@@ -54,6 +60,7 @@ from typing import (
     NamedTuple,
     Optional,
     Sequence,
+    Union,
     cast,
 )
 
@@ -64,13 +71,16 @@ from sqlalchemy.sql.compiler import SQLCompiler
 from sqlalchemy.sql.elements import BindParameter
 from sqlalchemy.sql.functions import Function as SQLFunction
 from sqlalchemy.sql.functions import GenericFunction, ReturnTypeFromArgs, coalesce
-from sqlalchemy.types import Float, NullType, TypeEngine
+from sqlalchemy.sql.selectable import Alias, Subquery
+from sqlalchemy.sql.visitors import replacement_traverse
+from sqlalchemy.types import Float, Integer, NullType, Numeric, TypeEngine
 from sqlalchemy.types import to_instance as type_instance
 
 import ormar  # noqa: I100, I202
 from ormar.exceptions import QueryDefinitionError
 
 if TYPE_CHECKING:  # pragma: no cover
+    from ormar import ForeignKeyField, ManyToManyField, Model
     from ormar.queryset.actions.filter_action import FilterAction
     from ormar.queryset.actions.query_action import QueryAction
     from ormar.queryset.clause import FilterGroup
@@ -491,6 +501,184 @@ class Case(Comparable, Expression):
         return [*(when.then for when in self._whens), self._default]
 
 
+class AggregateSource(NamedTuple):
+    """
+    Rows an aggregate is computed over, resolved for a query (see
+    ``resolve_aggregate``).
+
+    :ivar parent: model the aggregate is computed for, one value per row
+    :ivar relation: reverse foreign key or many to many relation of ``parent``
+        the path starts with
+    :ivar root: model of the aggregated rows, the target of ``relation``
+    :ivar target: field of ``root`` or of a model reached from it through
+        foreign keys whose values are aggregated, None to count the rows
+    """
+
+    parent: type["Model"]
+    relation: "ForeignKeyField"
+    root: type["Model"]
+    target: Optional["QueryAction"]
+
+
+class Aggregate(Comparable, Expression):
+    """
+    Aggregate of the rows related to each row of the queried model, a
+    correlated scalar subquery::
+
+        Count("bookings")
+        # -> (SELECT count(*) FROM bookings AS bookings_1
+        #     WHERE bookings_1.user = users.id)
+
+    The path starts with a reverse foreign key or a many to many relation of
+    the queried model and may continue through foreign keys to the aggregated
+    field (``Sum("bookings__training__price")``). ``filter`` restricts the
+    aggregated rows, written like the arguments of ``filter()`` of the
+    related model: a dict of keyword filters or a filter group
+    (``ormar.and_()``, ``ormar.or_()``, ``Booking.status == "paid"``); it
+    reads the related model's own fields and fields reached from it through
+    foreign keys.
+
+    Usable wherever expressions are: as the filtered side
+    (``Count("bookings") > 3``), as filter values, in ``update()`` values and
+    inside ``Case`` and functions, not in upsert ``update_values``.
+    """
+
+    _sql_name = ""
+
+    def __init__(
+        self, path: str, filter: Union["FilterGroup", dict, None] = None
+    ) -> None:
+        """
+        :param path: relation path from the queried model, ending in the
+            aggregated field
+        :type path: str
+        :param filter: condition on the aggregated rows, keyword filters or a
+            filter group of the related model
+        :type filter: Union[FilterGroup, dict, None]
+        :raises QueryDefinitionError: if the path is not a string or the
+            filter is neither a dict nor a filter group
+        """
+        name = type(self).__name__
+        if not isinstance(path, str) or not path:
+            raise QueryDefinitionError(f"{name}() takes a relation path string")
+        condition = filter
+        if isinstance(condition, dict):
+            condition = (
+                ormar.queryset.clause.FilterGroup(**condition) if condition else None
+            )
+        elif condition is not None and not isinstance(
+            condition, ormar.queryset.clause.FilterGroup
+        ):
+            raise QueryDefinitionError(
+                f"{name}() takes a dict of keyword filters or a filter group "
+                f"(ormar.and_(), Model.field == value) as filter"
+            )
+        self._path = path
+        self._distinct = False
+        self.condition: Optional["FilterGroup"] = condition
+        # set on the copies resolved for a query (see ``resolve_aggregate``)
+        self.number = 0
+        self.actions: list["FilterAction"] = []
+        self.source: Optional[AggregateSource] = None
+
+    def slot_prefix(self, slot: str) -> str:
+        """
+        :param slot: slot name of the expression
+        :type slot: str
+        :return: prefix of the slot names of the filter values,
+            ``{slot}_a{number}_``
+        :rtype: str
+        """
+        return f"{slot}_a{self.number}_"
+
+    def _measure(self, column: Any) -> Any:
+        """
+        :param column: aggregated column, None to count the rows
+        :type column: Any
+        :return: SQL aggregate function of the column
+        :rtype: Any
+        """
+        return getattr(sqlalchemy.func, self._sql_name)(column)
+
+
+class Count(Aggregate):
+    """
+    Number of related rows, ``0`` when there are none. A path ending in a
+    field counts the rows where it is not ``NULL``, a path ending in a
+    relation the related rows reached through it; ``distinct=True`` counts
+    distinct values (``Count("bookings__training", distinct=True)``).
+    """
+
+    _sql_name = "count"
+
+    def __init__(
+        self,
+        path: str,
+        filter: Union["FilterGroup", dict, None] = None,
+        distinct: bool = False,
+    ) -> None:
+        """
+        :param path: relation path from the queried model, ending in a relation
+            or a field
+        :type path: str
+        :param filter: condition on the counted rows
+        :type filter: Union[FilterGroup, dict, None]
+        :param distinct: count distinct values
+        :type distinct: bool
+        """
+        super().__init__(path=path, filter=filter)
+        self._distinct = distinct
+
+    def _measure(self, column: Any) -> Any:
+        """
+        :param column: counted column, None to count the rows
+        :type column: Any
+        :return: SQL ``count``
+        :rtype: Any
+        """
+        if column is None:
+            return sqlalchemy.func.count()
+        if self._distinct:
+            column = sqlalchemy.distinct(expr=column)
+        return sqlalchemy.func.count(column)
+
+
+class Sum(Aggregate):
+    """Sum of a field of the related rows, ``NULL`` when there are none."""
+
+    _sql_name = "sum"
+
+
+class Avg(Aggregate):
+    """
+    Average of a field of the related rows as a decimal, ``NULL`` when there
+    are none.
+    """
+
+    _sql_name = "avg"
+
+    def _measure(self, column: Any) -> Any:
+        """
+        :param column: averaged column
+        :type column: Any
+        :return: SQL ``avg`` typed as a decimal
+        :rtype: Any
+        """
+        return sqlalchemy.func.avg(column, type_=Numeric())
+
+
+class Min(Aggregate):
+    """Smallest value of a field of the related rows, ``NULL`` when none."""
+
+    _sql_name = "min"
+
+
+class Max(Aggregate):
+    """Largest value of a field of the related rows, ``NULL`` when none."""
+
+    _sql_name = "max"
+
+
 def is_null_case(node: Any) -> bool:
     """
     :param node: expression node
@@ -621,7 +809,8 @@ SQL_FUNCTIONS: dict[str, Callable[..., Any]] = {
 def expression_leaves(node: Any) -> Iterator[Any]:
     """
     Yield the fields (``F``, ``Inserted``) and literals of an expression, left
-    to right; ``Random()`` is neither.
+    to right; ``Random()`` and aggregates, which read related models only,
+    are neither.
 
     :param node: expression node
     :type node: Any
@@ -638,7 +827,7 @@ def expression_leaves(node: Any) -> Iterator[Any]:
         for value in node._values():
             if not is_sql_constant(value=value):
                 yield from expression_leaves(node=value)
-    elif not isinstance(node, Random):
+    elif not isinstance(node, (Random, Aggregate)):
         yield node
 
 
@@ -665,6 +854,45 @@ def expression_whens(node: Any) -> Iterator[When]:
         yield from expression_whens(node=node._default)
 
 
+def expression_aggregates(node: Any) -> Iterator[Aggregate]:
+    """
+    Yield the aggregates of an expression, the ones in the values of its
+    ``Case`` branches included, not the ones in their conditions or in the
+    filters of aggregates, which are bound with the filter actions holding
+    them.
+
+    :param node: expression node or a value
+    :type node: Any
+    :return: aggregates
+    :rtype: Iterator[Aggregate]
+    """
+    if isinstance(node, Aggregate):
+        yield node
+    elif isinstance(node, Combined):
+        yield from expression_aggregates(node=node._left)
+        yield from expression_aggregates(node=node._right)
+    elif isinstance(node, Function):
+        for argument in node._arguments:
+            yield from expression_aggregates(node=argument)
+    elif isinstance(node, Case):
+        for value in node._values():
+            yield from expression_aggregates(node=value)
+
+
+def numbered_nodes(node: Any) -> int:
+    """
+    :param node: expression node or a value
+    :type node: Any
+    :return: number of ``When`` branches and aggregates of the expression,
+        each numbered to name the slots of its condition (see
+        ``resolve_expression``)
+    :rtype: int
+    """
+    return sum(1 for _ in expression_whens(node=node)) + sum(
+        1 for _ in expression_aggregates(node=node)
+    )
+
+
 def expression_conditions(node: Any) -> Iterator["FilterAction"]:
     """
     Yield the filter actions of the ``When`` conditions in a resolved
@@ -682,10 +910,12 @@ def expression_conditions(node: Any) -> Iterator["FilterAction"]:
 
 def condition_params(node: Any, slot: str) -> dict[str, Any]:
     """
-    Return the values bound by the ``When`` conditions of a resolved
-    expression, named like ``case_clause`` names them::
+    Return the values bound by the ``When`` conditions and the aggregate
+    filters of a resolved expression, named like ``case_clause`` and
+    ``aggregate_clause`` name them::
 
         Case(When(id=7, then=1))  # slot ormar_v0 -> {"ormar_v0_w0_0": 7}
+        Count("items", filter={"qty__gt": 2})  # -> {"ormar_v0_a0_0": 2}
 
     :param node: resolved expression node or a value
     :type node: Any
@@ -695,10 +925,14 @@ def condition_params(node: Any, slot: str) -> dict[str, Any]:
     :rtype: dict[str, Any]
     """
     params: dict[str, Any] = {}
-    for when in expression_whens(node=node):
+    holders: list[Union[When, Aggregate]] = [
+        *expression_whens(node=node),
+        *expression_aggregates(node=node),
+    ]
+    for holder in holders:
         params.update(
             ormar.queryset.templates.action_params(
-                actions=when.actions, prefix=when.slot_prefix(slot=slot)
+                actions=holder.actions, prefix=holder.slot_prefix(slot=slot)
             )
         )
     return params
@@ -718,9 +952,12 @@ def expression_key(node: Any) -> Any:
         Inserted("a")  # -> ("inserted", "a")
         Case(When(id=7, then=1), default=None)
         # -> ("case", ((<condition key>, int),), ("constant", None))
+        Count("items", filter={"qty__gt": 2})
+        # -> ("aggregate", "count", "items", False, <filter key>)
 
-    The conditions of a ``Case`` are keyed like filter clauses (see
-    ``clauses_cache_key``), so the expression has to be resolved.
+    The conditions of a ``Case`` and the filters of aggregates are keyed like
+    filter clauses (see ``clauses_cache_key``), so the expression has to be
+    resolved.
 
     :param node: expression node
     :type node: Any
@@ -754,6 +991,16 @@ def expression_key(node: Any) -> Any:
                 for when in node._whens
             ),
             case_value_key(value=node._default),
+        )
+    if isinstance(node, Aggregate):
+        return (
+            "aggregate",
+            node._sql_name,
+            node._path,
+            node._distinct,
+            ormar.queryset.templates.clauses_cache_key(clauses=[node.condition])
+            if node.condition is not None
+            else None,
         )
     if isinstance(node, Random):
         return ("random",)
@@ -869,6 +1116,8 @@ def expression_clause(
         return inserted[columns[node._path].column.name]
     if isinstance(node, Random):
         return RandomFloat()
+    if isinstance(node, Aggregate):
+        return aggregate_clause(node=node, slot=slot)
     index = index or itertools.count()
     if isinstance(node, Case):
         return case_clause(
@@ -1070,6 +1319,200 @@ def case_clause(
     ]
     *then_clauses, default_clause = value_clauses
     return sqlalchemy.case(*zip(conditions, then_clauses), else_=default_clause)
+
+
+def aggregate_clause(node: Aggregate, slot: Optional[str]) -> Any:
+    """
+    Build the correlated scalar subquery of a resolved aggregate (see
+    ``resolve_aggregate``)::
+
+        Sum("bookings__training__price", filter={"paid": True})
+        # -> (SELECT sum(t_trainings.price) FROM bookings AS bookings_1
+        #     LEFT OUTER JOIN trainings AS t_trainings
+        #     ON t_trainings.id = bookings_1.training
+        #     WHERE bookings_1.paid = true AND bookings_1.user = users.id)
+
+    The rows are selected from ``aggregate_from``, the filter values named by
+    a ``SlotBinder`` with the prefix ``{slot}_a{number}_``. The tables are
+    then replaced (see ``AggregateTables``) and every column pair of the
+    relation correlates the subquery with the queried row. ``Count`` is
+    wrapped in ``coalesce(..., 0)``.
+
+    :param node: resolved aggregate
+    :type node: Aggregate
+    :param slot: slot name of a statement template, if built for one
+    :type slot: Optional[str]
+    :return: SQL scalar subquery
+    :rtype: Any
+    """
+    source = cast(AggregateSource, node.source)
+    root_table = source.root.ormar_config.table
+    parent_table = source.parent.ormar_config.table
+    select_from, correlated = aggregate_from(node=node)
+    measured = node._measure(
+        column=source.target.aliased_column if source.target is not None else None
+    )
+    subquery: Any = sqlalchemy.select(measured).select_from(select_from)
+    if node.condition is not None:
+        binder = (
+            ormar.queryset.templates.SlotBinder(
+                actions=node.actions, prefix=node.slot_prefix(slot=slot)
+            )
+            if slot is not None
+            else None
+        )
+        subquery = subquery.where(node.condition.get_text_clause(binder=binder))
+    rules = source.parent.ormar_config.database.rules
+    tables = AggregateTables(
+        root=root_table,
+        parent=parent_table,
+        derived=not rules.subquery_reads_written_table,
+    )
+    subquery = replacement_traverse(obj=subquery, opts={}, replace=tables.replace)
+    correlated = tables.replaced.get(correlated, correlated)
+    subquery = (
+        subquery.where(
+            *(
+                correlated.c[pair.target_column] == parent_table.c[pair.source_column]
+                for pair in source.relation.link.pairs
+            )
+        )
+        .correlate(parent_table)
+        .scalar_subquery()
+    )
+    if isinstance(node, Count):
+        return coalesce(subquery, sqlalchemy.literal_column(text="0", type_=Integer()))
+    return subquery
+
+
+class AggregateTables:
+    """
+    Replaces the tables of an aggregate's subquery before it is correlated:
+    the related table by an alias, so a relation of a model to itself
+    compares two tables, and, where an update or delete may not read the
+    table it writes in a subquery (MySQL error 1093), every table of the
+    queried model, aliased or not, by a derived table of it.
+    """
+
+    def __init__(self, root: Any, parent: Any, derived: bool) -> None:
+        """
+        :param root: table of the related model
+        :type root: Any
+        :param parent: table of the queried model
+        :type parent: Any
+        :param derived: read the queried model's table from derived tables
+        :type derived: bool
+        """
+        self.root = root
+        self.parent = parent
+        self.derived = derived
+        self.replaced: dict[Any, Any] = {}
+
+    def is_replaced(self, table: Any) -> bool:
+        """
+        :param table: table or alias read by the subquery
+        :type table: Any
+        :return: whether the table is replaced
+        :rtype: bool
+        """
+        return table is self.root or (
+            self.derived and isinstance(table, Alias) and table.element is self.parent
+        )
+
+    def replacement(self, table: Any) -> Any:
+        """
+        :param table: replaced table or alias
+        :type table: Any
+        :return: its replacement, the same one for every reference
+        :rtype: Any
+        """
+        if table not in self.replaced:
+            if self.derived and (
+                table is self.parent or isinstance(table, Alias)
+            ):  # pragma: no cover
+                self.replaced[table] = sqlalchemy.select(self.parent).subquery(
+                    name=None if table is self.root else table.name
+                )
+            else:
+                self.replaced[table] = self.root.alias()
+        return self.replaced[table]
+
+    def replace(self, element: Any, **kwargs: Any) -> Any:
+        """
+        :param element: element of the subquery (see ``replacement_traverse``)
+        :type element: Any
+        :param kwargs: options of the traversal
+        :type kwargs: Any
+        :return: the replacement of a replaced table or of its column, None
+            to keep the element and replace inside it; a derived table, made
+            by a nested aggregate, is kept as it is
+        :rtype: Any
+        """
+        if isinstance(element, Subquery):  # pragma: no cover
+            return element
+        if isinstance(element, sqlalchemy.Column):
+            if self.is_replaced(table=element.table):
+                return self.replacement(table=element.table).c[element.name]
+            return None
+        if self.is_replaced(table=element):
+            return self.replacement(table=element)
+        return None
+
+
+def aggregate_from(node: Aggregate) -> tuple[Any, Any]:
+    """
+    Return the tables an aggregate reads its rows from: the related table, for
+    a many to many relation joined with the through table, and the tables of
+    the aggregated field and of the filter, joined through foreign keys and
+    aliased like in a select of the related model.
+
+    :param node: resolved aggregate
+    :type node: Aggregate
+    :return: joined tables and the table correlated with the queried row,
+        the through table or the related table
+    :rtype: tuple[Any, Any]
+    """
+    source = cast(AggregateSource, node.source)
+    root_table = source.root.ormar_config.table
+    select_from: Any = root_table
+    correlated: Any = root_table
+    if source.relation.is_multi:
+        relation = cast("ManyToManyField", source.relation)
+        through_model = relation.through
+        correlated = through_model.ormar_config.table.alias()
+        through_link = cast(
+            "ForeignKeyField",
+            through_model.ormar_config.model_fields[
+                relation.through_target_field_name()
+            ],
+        ).link
+        select_from = sqlalchemy.join(
+            left=select_from,
+            right=correlated,
+            onclause=sqlalchemy.and_(
+                *(
+                    correlated.c[pair.source_column] == root_table.c[pair.target_column]
+                    for pair in through_link.pairs
+                )
+            ),
+        )
+    paths = [path for action in node.actions for path in action.path_actions()]
+    if source.target is not None:
+        paths.append(source.target)
+    joined: set[str] = set()
+    for path in paths:
+        joins = ormar.queryset.write_statements.forward_joins(
+            model=source.root, path=path.related_parts
+        )
+        for alias, join in joins.items():
+            if alias not in joined:
+                joined.add(alias)
+                select_from = sqlalchemy.outerjoin(
+                    left=select_from,
+                    right=join.table,
+                    onclause=sqlalchemy.and_(*join.conditions),
+                )
+    return select_from, correlated
 
 
 def operand_clauses(

@@ -25,9 +25,9 @@ from ormar.queryset.expressions import (
     expression_key,
     expression_literals,
     expression_params,
-    expression_whens,
     fields_read,
     is_null_case,
+    numbered_nodes,
     slot_literals,
 )
 
@@ -612,7 +612,7 @@ class ExpressionFilterAction(FilterAction):
             node=lhs._node(),
             model=model_cls,
             upsert=upsert,
-            first_branch=sum(1 for _ in expression_whens(node=self.filter_value)),
+            first_branch=numbered_nodes(node=self.filter_value),
         )
 
     def _split_value_into_parts(self, query_str: str) -> None:
