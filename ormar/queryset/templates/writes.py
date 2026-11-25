@@ -26,7 +26,7 @@ import sqlalchemy
 from sqlalchemy.sql import Executable, visitors
 from sqlalchemy.sql.elements import BindParameter
 
-from ormar.databases.dialects import update_assignment
+from ormar.databases.dialects import list_variable_params, update_assignment
 from ormar.queryset.actions.select_action import expression_columns
 from ormar.queryset.expressions import (
     Expression,
@@ -34,7 +34,11 @@ from ormar.queryset.expressions import (
     expression_key,
     expression_params,
 )
-from ormar.queryset.templates.cache import StatementTemplate, cached_statement
+from ormar.queryset.templates.cache import (
+    StatementTemplate,
+    cached_statement,
+    template_cache_for,
+)
 from ormar.queryset.templates.reads import release_values
 from ormar.queryset.templates.slots import value_binds, value_params
 
@@ -145,6 +149,29 @@ def update_values_key(update_values: Mapping[str, Any]) -> Tuple[Any, ...]:
     )
 
 
+def update_value_binds(
+    model: Type[Any], update_values: Mapping[str, Any]
+) -> Tuple[BindParameter, ...]:
+    """
+    :param model: written model
+    :type model: Type[Any]
+    :param update_values: value or expression node by column name
+    :type update_values: Mapping[str, Any]
+    :return: bind parameters of the ``update_values`` clauses, in build order
+    :rtype: Tuple[BindParameter, ...]
+    """
+    table = model.ormar_config.table
+    clauses = update_value_clauses(
+        inserted=table.alias("inserted").c, model_cls=model, update_values=update_values
+    )
+    return tuple(
+        element
+        for clause in clauses.values()
+        for element in visitors.iterate(clause)
+        if isinstance(element, BindParameter)
+    )
+
+
 def build_update_assignment(
     model: Type[Any],
     on_update: Tuple[str, ...],
@@ -153,7 +180,8 @@ def build_update_assignment(
     """
     Build the MySQL ``SET`` of the user variables a multi-row upsert reads its
     ``on_update`` values and the bound ``update_values`` from (see
-    ``update_assignment``).
+    ``update_assignment``). An ``in`` list sets one variable per item, so the
+    statement is cached per length of the lists (see ``update_list_keys``).
 
     :param model: written model
     :type model: Type[Any]
@@ -164,19 +192,89 @@ def build_update_assignment(
     :return: assignment statement
     :rtype: Executable
     """
-    table = model.ormar_config.table
-    clauses = update_value_clauses(
-        inserted=table.c, model_cls=model, update_values=update_values
-    )
     return update_assignment(
-        table=table,
+        table=model.ormar_config.table,
         on_update=on_update,
-        value_binds=tuple(
-            element
-            for clause in clauses.values()
-            for element in visitors.iterate(clause)
-            if isinstance(element, BindParameter)
-        ),
+        value_binds=update_value_binds(model=model, update_values=update_values),
+    )
+
+
+def update_list_keys(
+    model: Type[Any], update_values: Mapping[str, Any]
+) -> Tuple[Tuple[str, Any], ...]:
+    """
+    Return the ``in`` lists bound by the ``When`` conditions of
+    ``update_values``: the name and bind type of each, cached per shape of
+    ``update_values``::
+
+        update_list_keys(
+            model=Player,
+            update_values={"rank": Case(When(score__in=[1, 8], then=1))},
+        )
+        # -> (("ormar_u0_w0_0", Integer()),)
+
+    A multi-row MySQL upsert reads each item from its own user variable, so
+    its statements are cached per length of these lists (see
+    ``update_assignment_params``).
+
+    :param model: written model
+    :type model: Type[Any]
+    :param update_values: value or expression node by column name
+    :type update_values: Mapping[str, Any]
+    :return: name and bind type per ``in`` list
+    :rtype: Tuple[Tuple[str, Any], ...]
+    """
+    cache = template_cache_for(model_cls=model)
+    key = ("update_list_keys", update_values_key(update_values=update_values))
+    list_keys = cache.get(key)
+    if list_keys is None:
+        list_keys = tuple(
+            (bind.key, bind.type)
+            for bind in update_value_binds(model=model, update_values=update_values)
+            if bind.expanding
+        )
+        cache.put(key=key, statement=list_keys)
+    return list_keys
+
+
+def update_assignment_params(
+    on_update: Mapping[str, Any],
+    update_params: Mapping[str, Any],
+    list_keys: Tuple[Tuple[str, Any], ...],
+) -> Dict[str, Any]:
+    """
+    Return the values of ``build_update_assignment``: the ``on_update`` values
+    named after the position of their column among the sorted ``on_update``
+    columns, then the bound ``update_values``, each ``in`` list split into its
+    items (see ``list_variable_params``)::
+
+        update_assignment_params(
+            on_update={"revision": 1},
+            update_params={"ormar_u0_w0_0": [1, 8]},
+            list_keys=(("ormar_u0_w0_0", Integer()),),
+        )
+        # -> {"ormar_on_update_0": 1, "ormar_u0_w0_0_0": 1, "ormar_u0_w0_0_1": 8}
+
+    :param on_update: ``on_update`` value by column name
+    :type on_update: Mapping[str, Any]
+    :param update_params: values bound by ``update_values``
+        (see ``update_values_params``)
+    :type update_params: Mapping[str, Any]
+    :param list_keys: ``in`` lists of ``update_values`` (see
+        ``update_list_keys``)
+    :type list_keys: Tuple[Tuple[str, Any], ...]
+    :return: values by variable name
+    :rtype: Dict[str, Any]
+    """
+    return list_variable_params(
+        params={
+            **{
+                f"ormar_on_update_{index}": on_update[column]
+                for index, column in enumerate(sorted(on_update))
+            },
+            **update_params,
+        },
+        list_keys=list_keys,
     )
 
 
@@ -286,6 +384,7 @@ def insert_statement(
     returning: Tuple[str, ...] = (),
     update_values: Optional[Mapping[str, Any]] = None,
     update_variables: bool = False,
+    list_lengths: Tuple[int, ...] = (),
 ) -> Executable:
     """
     Return the insert of a model for the given sorted column names, from the
@@ -318,6 +417,10 @@ def insert_statement(
     :param update_variables: read the bound update values from MySQL user
         variables set by ``update_assignment`` instead of binds
     :type update_variables: bool
+    :param list_lengths: lengths of the ``in`` lists of ``update_values``
+        read from user variables, one variable per item (see
+        ``update_list_keys``)
+    :type list_lengths: Tuple[int, ...]
     :return: insert statement with ``ormar_v{i}`` binds
     :rtype: Executable
     """
@@ -371,6 +474,7 @@ def insert_statement(
             rules.backend_name,
             *conflict.values(),
             update_values_key(update_values=update_values or {}),
+            list_lengths,
         ),
         builder=build_conflict_insert,
         table=config.table,

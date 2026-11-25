@@ -32,13 +32,17 @@ from ormar.queryset.actions.order_action import (
     RandomOrder,
     expand_pk_orders,
 )
-from ormar.queryset.actions.select_action import expression_columns
+from ormar.queryset.actions.select_action import (
+    expression_paths,
+    resolve_expression,
+)
 from ormar.queryset.clause import FilterGroup, QueryClause
 from ormar.queryset.expressions import (
     Expression,
     Random,
     expression_key,
     expression_params,
+    fields_read,
 )
 from ormar.queryset.prefetch import Prefetch
 from ormar.queryset.queries.prefetch_query import PrefetchQuery
@@ -60,6 +64,8 @@ from ormar.queryset.templates import (
     release_values,
     template_cache_for,
     template_params,
+    update_assignment_params,
+    update_list_keys,
     update_values_key,
     update_values_params,
     value_params,
@@ -1473,21 +1479,18 @@ class QuerySet(Generic[T]):
             if field_name in self_fields
         }
         updates = self.model.populate_onupdate_value(updates)
-        expressions = {
-            field_name: value._node()
-            for field_name, value in updates.items()
-            if isinstance(value, Expression)
-        }
-        for name, node in expressions.items():
-            columns = expression_columns(node=node, model=self.model)
-            for column in columns.values():
+        expressions = {}
+        for name, value in updates.items():
+            if not isinstance(value, Expression):
+                continue
+            node, columns = resolve_expression(
+                node=value._node(), model=self.model, update=True
+            )
+            expressions[name] = node
+            for path in expression_paths(node=node, columns=columns):
                 # only validates the path here, the joins are built with the statement
-                forward_join_conditions(model=self.model, path=column.related_parts)
-            read = [
-                column.field_name
-                for column in columns.values()
-                if not column.related_parts
-            ]
+                forward_join_conditions(model=self.model, path=path.related_parts)
+            read = fields_read(node=node)
             if name in self.model.extract_related_names() or any(
                 field != name and field in updates for field in read
             ):
@@ -2189,28 +2192,37 @@ class QuerySet(Generic[T]):
         async with database.get_query_executor(
             transactional=several_statements
         ) as executor:
+            list_lengths: tuple[int, ...] = ()
             if update_variables:  # pragma: no cover
-                await executor.execute(
-                    query=cached_statement(
-                        model_cls=self.model,
-                        key=(
-                            "update_assignment",
-                            on_update_columns,
-                            update_values_key(update_values=conflict_values),
-                        ),
-                        builder=build_update_assignment,
-                        model=self.model,
-                        on_update=on_update_columns,
-                        update_values=conflict_values,
-                    ),
-                    params={
-                        **{
-                            f"ormar_on_update_{index}": on_update[column]
-                            for index, column in enumerate(on_update_columns)
-                        },
-                        **conflict_params,
-                    },
+                # an in list reads one variable per item, so the statements
+                # are cached per length of the lists
+                list_keys = update_list_keys(
+                    model=self.model, update_values=conflict_values
                 )
+                list_lengths = tuple(len(conflict_params[key]) for key, _ in list_keys)
+                assignment_params = update_assignment_params(
+                    on_update=on_update,
+                    update_params=conflict_params,
+                    list_keys=list_keys,
+                )
+                # only empty in lists bound: there is nothing to set
+                if assignment_params:
+                    await executor.execute(
+                        query=cached_statement(
+                            model_cls=self.model,
+                            key=(
+                                "update_assignment",
+                                on_update_columns,
+                                update_values_key(update_values=conflict_values),
+                                list_lengths,
+                            ),
+                            builder=build_update_assignment,
+                            model=self.model,
+                            on_update=on_update_columns,
+                            update_values=conflict_values,
+                        ),
+                        params=assignment_params,
+                    )
             for rows in rows_by_keys.values():
                 names = tuple(sorted(rows[0]))
                 # duplicates in one batch: the last wins, only while there is no
@@ -2225,6 +2237,7 @@ class QuerySet(Generic[T]):
                     on_update=on_update_columns,
                     update_values=conflict_values,
                     update_variables=update_variables,
+                    list_lengths=list_lengths,
                 )
                 bound_updates = {} if update_variables else update_params
                 params = [

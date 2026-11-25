@@ -166,6 +166,55 @@ integer `random()` scaled into the same range. Use it with float or decimal
 columns: an integer column rounds the value on PostgreSQL and MySQL, while SQLite
 stores the fraction.
 
+#### Conditional expressions
+
+`ormar.Case(*whens, default=None)` takes the value of the first `ormar.When` whose
+condition holds, else `default` (`NULL` when not given). A condition takes the same
+arguments as `filter()`: keyword filters with operators, `ormar.and_()` /
+`ormar.or_()` groups, `Model.field == value` and comparisons of expressions. The
+value `then` and the `default` are literals or expressions.
+
+```python
+from ormar import Case, F, When
+
+# write the position of each id in a list in one statement
+order = [7, 3, 5]
+await Item.objects.filter(id__in=order).update(
+    rank=Case(*(When(id=pk, then=rank) for rank, pk in enumerate(order, 1)))
+)
+
+await Player.objects.update(
+    each=True,
+    level=Case(
+        When(score__gte=100, then="gold"),
+        When(ormar.or_(score__gte=50, team=red_team), then="silver"),
+        default="bronze",
+    ),
+)
+await Player.objects.update(
+    each=True, active=Case(When(last_seen__lt=cutoff, then=False), default=F("active"))
+)
+```
+
+* In `update()` conditions read the model's own fields only, a foreign key included
+  (`When(team=red_team)`, `When(team=None)`). A condition on a related model
+  (`When(team__name="red")`) raises `QueryDefinitionError`: the update would join the
+  related table, so rows with a `NULL` foreign key would be skipped instead of taking
+  the `default`. Branch values may still read related fields (`then=F("team__rank")`,
+  see above). Filters take conditions on models reached through foreign keys.
+* Like other expressions, a `Case` cannot read a column set by the same `update()`,
+  in its conditions neither.
+* `None`, `True` and `False` are written into the SQL, other literals are bound with
+  the type of the updated column. A `Case` whose values are all `None` is cast to
+  that type.
+* `Case` works in upsert [`update_values`](create.md#expressions-on-conflict) too,
+  where conditions read only the model's own fields and `Inserted()` values, and in
+  filters (see
+  [conditional expressions](filter-and-sort.md#conditional-expressions)).
+* Every number of `When` branches builds its own statement, kept in the model's
+  statement cache (512 statements per model), so a list of a few hundred different
+  lengths can push other statements out of it.
+
 ## update_returning
 
 `update_returning(each: bool = False, **kwargs) -> list[Model]`

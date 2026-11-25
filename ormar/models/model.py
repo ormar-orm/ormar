@@ -10,8 +10,8 @@ import ormar.queryset  # noqa I100
 from ormar.exceptions import ModelPersistenceError, NoMatch, QueryDefinitionError
 from ormar.models import NewBaseModel  # noqa I100
 from ormar.models.model_row import ModelRow
-from ormar.queryset.actions.select_action import expression_columns
-from ormar.queryset.expressions import Expression, F, expression_leaves
+from ormar.queryset.actions.select_action import resolve_expression
+from ormar.queryset.expressions import Expression, fields_read
 from ormar.queryset.templates import (
     conflict_target_columns,
     insert_template,
@@ -316,18 +316,13 @@ class Model(ModelRow):
             if name not in update_fields and name not in update_values
         }
         updated = {*update_fields, *update_values, *cls._onupdate_fields}
-        expressions = {
-            name: value._node()
-            for name, value in update_values.items()
-            if isinstance(value, Expression)
-        }
-        for name, node in expressions.items():
-            expression_columns(node=node, model=cls, upsert=True)
-            read = [
-                leaf._path
-                for leaf in expression_leaves(node=node)
-                if isinstance(leaf, F)
-            ]
+        expressions = {}
+        for name, value in update_values.items():
+            if not isinstance(value, Expression):
+                continue
+            node = resolve_expression(node=value._node(), model=cls, upsert=True)[0]
+            expressions[name] = node
+            read = fields_read(node=node)
             if name in related_names or any(
                 field != name and field in updated for field in read
             ):

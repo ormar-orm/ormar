@@ -34,7 +34,11 @@ if TYPE_CHECKING:  # pragma: no cover
     from ormar.queryset.clause import FilterGroup
 
 
-# fixed slot names of LIMIT and OFFSET; filter values are named ``ormar_p{n}``
+# prefix of the slot names of filter values, ``ormar_p{n}``
+FILTER_SLOT_PREFIX = "ormar_p"
+
+
+# fixed slot names of LIMIT and OFFSET
 LIMIT_SLOT = "ormar_limit"
 
 
@@ -76,13 +80,35 @@ def template_params(
     :return: values per slot name
     :rtype: Dict[str, Any]
     """
-    params = {}
-    for index, action in enumerate(actions):
-        params.update(action.slot_params(slot=f"ormar_p{index}"))
+    params = action_params(actions=actions)
     if limit is not None:
         params[LIMIT_SLOT] = limit
     if offset:
         params[OFFSET_SLOT] = offset
+    return params
+
+
+def action_params(
+    actions: List["FilterAction"], prefix: str = FILTER_SLOT_PREFIX
+) -> Dict[str, Any]:
+    """
+    Collect the values filter actions bind, each action's slot named
+    ``{prefix}{n}`` after its position, like ``SlotBinder`` with the same
+    ``prefix`` names them::
+
+        action_params(actions=[name_action, score_action])
+        # -> {"ormar_p0": "a", "ormar_p1": 5}
+
+    :param actions: filter actions in build order
+    :type actions: List[FilterAction]
+    :param prefix: prefix of the slot names
+    :type prefix: str
+    :return: values per slot name
+    :rtype: Dict[str, Any]
+    """
+    params: Dict[str, Any] = {}
+    for index, action in enumerate(actions):
+        params.update(action.slot_params(slot=f"{prefix}{index}"))
     return params
 
 
@@ -160,13 +186,18 @@ class SlotBinder:
     ``OffsetQuery``; without a binder they bind the plain values as before.
     """
 
-    def __init__(self, actions: List["FilterAction"]) -> None:
+    def __init__(
+        self, actions: List["FilterAction"], prefix: str = FILTER_SLOT_PREFIX
+    ) -> None:
         """
         :param actions: filter actions of the queryset in canonical order
         :type actions: List[FilterAction]
+        :param prefix: prefix of the slot names, another one for the
+            conditions of ``When`` (see ``When.slot_prefix``)
+        :type prefix: str
         """
         self.slots = {
-            id(action): f"ormar_p{index}" for index, action in enumerate(actions)
+            id(action): f"{prefix}{index}" for index, action in enumerate(actions)
         }
 
     def bind(self, action: "FilterAction", value: Any) -> BindParameter:

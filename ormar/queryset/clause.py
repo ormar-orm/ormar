@@ -1,3 +1,4 @@
+import copy
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Generator, Optional, Union, cast
 
@@ -67,11 +68,25 @@ class FilterGroup:
         self.exclude = not self.exclude
         return self
 
+    def copy_tree(self) -> "FilterGroup":
+        """
+        :return: unresolved copy of the group and its nested groups, resolved
+            per query without touching the group the user built (see
+            ``resolve_expression``)
+        :rtype: FilterGroup
+        """
+        duplicate = copy.copy(self)
+        duplicate._nested_groups = [group.copy_tree() for group in self._nested_groups]
+        duplicate._resolved = False
+        duplicate.actions = []
+        return duplicate
+
     def resolve(
         self,
         model_cls: type["Model"],
         select_related: Optional[list] = None,
         filter_clauses: Optional[list] = None,
+        upsert: bool = False,
     ) -> tuple[list[FilterAction], list[str]]:
         """
         Resolves the FilterGroups actions to use proper target model, replace
@@ -79,6 +94,9 @@ class FilterGroup:
 
         :param model_cls: model from which the query is run
         :type model_cls: type["Model"]
+        :param upsert: the group is a ``When`` condition in ``update_values`` of
+            an upsert, where expressions may read ``Inserted`` fields
+        :type upsert: bool
         :param select_related: list of models to join
         :type select_related: list[str]
         :param filter_clauses: list of filter conditions
@@ -92,6 +110,7 @@ class FilterGroup:
             model_cls=model_cls,
             select_related=select_related,
             filter_clauses=filter_clauses,
+            upsert=upsert,
         )
         own_filter_clauses, select_related = qryclause.prepare_filter(
             _own_only=True, **self._kwargs_dict
@@ -102,6 +121,7 @@ class FilterGroup:
                 operator=expression_filter.operator,
                 value=expression_filter.value,
                 model_cls=model_cls,
+                upsert=upsert,
             )
             select_related = action.update_select_related(select_related=select_related)
             own_filter_clauses.append(action)
@@ -114,6 +134,7 @@ class FilterGroup:
                     model_cls=model_cls,
                     select_related=select_related,
                     filter_clauses=filter_clauses,
+                    upsert=upsert,
                 )
         return filter_clauses, select_related
 
@@ -128,22 +149,29 @@ class FilterGroup:
         yield from self.actions
 
     def _get_text_clauses(
-        self, binder: Optional["SlotBinder"] = None
+        self, binder: Optional["SlotBinder"] = None, inserted: Any = None
     ) -> list[Union[sqlalchemy.sql.expression.TextClause, ColumnElement[Any]]]:
         """
         Helper to return list of text queries from actions and nested groups
 
         :param binder: names bound values for statement templates, if given
         :type binder: Optional[SlotBinder]
+        :param inserted: columns of the inserted row of an upsert, read by
+            ``Inserted`` fields of ``When`` conditions
+        :type inserted: Any
         :return: list of text queries from actions and nested groups
         :rtype: list[sqlalchemy.sql.elements.TextClause]
         """
-        return [x.get_text_clause(binder=binder) for x in self._nested_groups] + [
-            x.get_text_clause(binder=binder) for x in self.actions
+        return [
+            group.get_text_clause(binder=binder, inserted=inserted)
+            for group in self._nested_groups
+        ] + [
+            action.get_text_clause(binder=binder, inserted=inserted)
+            for action in self.actions
         ]
 
     def get_text_clause(
-        self, binder: Optional["SlotBinder"] = None
+        self, binder: Optional["SlotBinder"] = None, inserted: Any = None
     ) -> ColumnElement[bool]:
         """
         Returns all own actions and nested groups conditions compiled and joined
@@ -154,10 +182,13 @@ class FilterGroup:
 
         :param binder: names bound values for statement templates, if given
         :type binder: Optional[SlotBinder]
+        :param inserted: columns of the inserted row of an upsert, read by
+            ``Inserted`` fields of ``When`` conditions
+        :type inserted: Any
         :return: complied and escaped clause
         :rtype: sqlalchemy.sql.elements.TextClause
         """
-        clauses = self._get_text_clauses(binder=binder)
+        clauses = self._get_text_clauses(binder=binder, inserted=inserted)
         if self.filter_type == FilterType.AND:
             clause = sqlalchemy.sql.and_(*clauses).self_group()
         else:
@@ -201,8 +232,13 @@ class QueryClause:
     """
 
     def __init__(
-        self, model_cls: type["Model"], filter_clauses: list, select_related: list
+        self,
+        model_cls: type["Model"],
+        filter_clauses: list,
+        select_related: list,
+        upsert: bool = False,
     ) -> None:
+        self.upsert = upsert
         self._select_related = select_related[:]
         self.filter_clauses = filter_clauses[:]
 
@@ -253,7 +289,14 @@ class QueryClause:
                 or multi_column_filter_actions(
                     model_cls=self.model_cls, name=key, value=value
                 )
-                or [FilterAction(filter_str=key, value=value, model_cls=self.model_cls)]
+                or [
+                    FilterAction(
+                        filter_str=key,
+                        value=value,
+                        model_cls=self.model_cls,
+                        upsert=self.upsert,
+                    )
+                ]
             )
             for filter_action in actions:
                 select_related = filter_action.update_select_related(

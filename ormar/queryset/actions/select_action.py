@@ -1,11 +1,22 @@
+import copy
 import decimal
-from typing import TYPE_CHECKING, Any, Callable
+import itertools
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 import sqlalchemy
 
 from ormar.exceptions import QueryDefinitionError  # noqa: I202
 from ormar.queryset.actions.query_action import QueryAction
-from ormar.queryset.expressions import F, Inserted, expression_leaves
+from ormar.queryset.expressions import (
+    Case,
+    Combined,
+    F,
+    Function,
+    Inserted,
+    When,
+    expression_conditions,
+    expression_leaves,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from ormar import Model
@@ -100,3 +111,224 @@ def expression_columns(
                 )
             columns[leaf._path] = column
     return columns
+
+
+def resolve_expression(
+    node: Any,
+    model: type["Model"],
+    upsert: bool = False,
+    update: bool = False,
+    first_branch: int = 0,
+) -> tuple[Any, dict[str, SelectAction]]:
+    """
+    Resolve an expression for a query from ``model``: the fields it reads (see
+    ``expression_columns``) and the conditions of its ``When`` branches,
+    resolved into filter actions like ``filter()`` arguments. The actions are
+    kept on copies of the ``Case`` and ``When`` nodes and of the nodes
+    holding them, so an expression can be reused in other queries.
+
+    Branches are numbered from ``first_branch`` to name the slots of their
+    conditions (see ``When.slot_prefix``); the two sides of a filter share
+    one slot, so the second side continues the numbering of the first.
+
+    :param node: expression node
+    :type node: Any
+    :param model: queried model
+    :type model: type[Model]
+    :param upsert: the expression is a value of an upsert's ``update_values``
+    :type upsert: bool
+    :param update: the expression is a value of ``update()``
+    :type update: bool
+    :param first_branch: number of the first ``When`` branch
+    :type first_branch: int
+    :raises QueryDefinitionError: if a field is not allowed (see
+        ``expression_columns``) or a condition reads a related model through a
+        reverse or many to many relation, or in an update or upsert any
+        related model
+    :return: resolved expression and its fields by path
+    :rtype: tuple[Any, dict[str, SelectAction]]
+    """
+    resolved = resolve_branches(
+        node=node,
+        model=model,
+        upsert=upsert,
+        update=update,
+        numbers=itertools.count(start=first_branch),
+    )
+    return resolved, expression_columns(node=resolved, model=model, upsert=upsert)
+
+
+def resolve_branches(
+    node: Any,
+    model: type["Model"],
+    upsert: bool,
+    update: bool,
+    numbers: Iterator[int],
+) -> Any:
+    """
+    Copy the nodes of an expression down to its ``When`` branches and resolve
+    the copies of the branches (see ``resolve_when``).
+
+    :param node: expression node or a literal
+    :type node: Any
+    :param model: queried model
+    :type model: type[Model]
+    :param upsert: the expression is a value of an upsert's ``update_values``
+    :type upsert: bool
+    :param update: the expression is a value of ``update()``
+    :type update: bool
+    :param numbers: numbers of the branches
+    :type numbers: Iterator[int]
+    :return: resolved node
+    :rtype: Any
+    """
+    if isinstance(node, Combined):
+        combined = copy.copy(node)
+        combined._left = resolve_branches(
+            node=node._left, model=model, upsert=upsert, update=update, numbers=numbers
+        )
+        combined._right = resolve_branches(
+            node=node._right, model=model, upsert=upsert, update=update, numbers=numbers
+        )
+        return combined
+    if isinstance(node, Function):
+        function = copy.copy(node)
+        function._arguments = tuple(
+            resolve_branches(
+                node=argument,
+                model=model,
+                upsert=upsert,
+                update=update,
+                numbers=numbers,
+            )
+            for argument in node._arguments
+        )
+        return function
+    if isinstance(node, Case):
+        case = copy.copy(node)
+        case._whens = [
+            resolve_when(
+                when=when, model=model, upsert=upsert, update=update, numbers=numbers
+            )
+            for when in node._whens
+        ]
+        case._default = resolve_branches(
+            node=node._default,
+            model=model,
+            upsert=upsert,
+            update=update,
+            numbers=numbers,
+        )
+        return case
+    return node
+
+
+def resolve_when(
+    when: When,
+    model: type["Model"],
+    upsert: bool,
+    update: bool,
+    numbers: Iterator[int],
+) -> When:
+    """
+    Copy a ``When`` with its condition resolved into filter actions, in the
+    order ``FilterGroup.get_text_clause`` builds them, and its value resolved.
+
+    :param when: branch
+    :type when: When
+    :param model: queried model
+    :type model: type[Model]
+    :param upsert: the expression is a value of an upsert's ``update_values``
+    :type upsert: bool
+    :param update: the expression is a value of ``update()``
+    :type update: bool
+    :param numbers: numbers of the branches
+    :type numbers: Iterator[int]
+    :raises QueryDefinitionError: if the condition reads a related model
+        through a reverse or many to many relation, or in an upsert any related
+        model
+    :return: resolved branch
+    :rtype: When
+    """
+    duplicate = copy.copy(when)
+    duplicate.number = next(numbers)
+    duplicate.condition = when.condition.copy_tree()
+    duplicate.condition.resolve(model_cls=model, upsert=upsert)
+    duplicate.actions = list(duplicate.condition._iter())
+    for action in duplicate.actions:
+        for path in action.path_actions():
+            check_condition_path(
+                model=model, path=path.related_parts, upsert=upsert, update=update
+            )
+    duplicate.then = resolve_branches(
+        node=when.then, model=model, upsert=upsert, update=update, numbers=numbers
+    )
+    return duplicate
+
+
+def check_condition_path(
+    model: type["Model"], path: list[str], upsert: bool, update: bool
+) -> None:
+    """
+    Allow ``When`` conditions to read related models only through foreign
+    keys, which match at most one row, and in an update or upsert none.
+
+    ``update()`` joins the tables its expressions read, so a row with a
+    ``NULL`` foreign key would not be updated at all instead of taking the
+    default of the ``Case``.
+
+    :param model: queried model
+    :type model: type[Model]
+    :param path: relation names leading to the read model
+    :type path: list[str]
+    :param upsert: the expression is a value of an upsert's ``update_values``
+    :type upsert: bool
+    :param update: the expression is a value of ``update()``
+    :type update: bool
+    :raises QueryDefinitionError: if the path follows a reverse, many to many
+        or through relation, or reads a related model in an update or upsert
+    """
+    target = model
+    for relation in path:
+        field = target.ormar_config.model_fields[relation]
+        if field.is_multi or field.virtual or field.is_through:
+            raise QueryDefinitionError(
+                f"When() conditions read related models only through foreign "
+                f"keys, '{'__'.join(path)}' follows the reverse or many to many "
+                f"relation '{relation}'"
+            )
+        target = field.to
+    if upsert and path:
+        raise QueryDefinitionError(
+            f"When() conditions in update_values of an upsert read only fields of "
+            f"the inserted model, not '{'__'.join(path)}'"
+        )
+    if update and path:
+        raise QueryDefinitionError(
+            f"When() conditions in update() read only fields of the updated "
+            f"model, not '{'__'.join(path)}': the update joins the related "
+            f"table, so rows with a NULL foreign key would be skipped instead of "
+            f"taking the default"
+        )
+
+
+def expression_paths(node: Any, columns: dict[str, SelectAction]) -> list[QueryAction]:
+    """
+    Return the actions resolving the relation paths an expression reads: its
+    fields and the fields of its ``When`` conditions.
+
+    :param node: resolved expression node or a value
+    :type node: Any
+    :param columns: fields of the expression by path
+    :type columns: dict[str, SelectAction]
+    :return: actions each resolving one relation path
+    :rtype: list[QueryAction]
+    """
+    return [
+        *columns.values(),
+        *(
+            path
+            for action in expression_conditions(node=node)
+            for path in action.path_actions()
+        ),
+    ]

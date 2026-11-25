@@ -11,6 +11,7 @@ from ormar.queryset.actions import (
 )
 from ormar.queryset.clause import NullsOrdering, and_, or_
 from ormar.queryset.expressions import (
+    Case,
     Coalesce,
     F,
     Func,
@@ -18,6 +19,7 @@ from ormar.queryset.expressions import (
     Inserted,
     Least,
     Random,
+    When,
 )
 from ormar.queryset.field_accessor import FieldAccessor
 from ormar.queryset.prefetch import Prefetch
@@ -37,6 +39,7 @@ __all__ = [
     "NullsOrdering",
     "and_",
     "or_",
+    "Case",
     "Coalesce",
     "F",
     "Func",
@@ -44,6 +47,7 @@ __all__ = [
     "Inserted",
     "Least",
     "Random",
+    "When",
     "FieldAccessor",
     "Prefetch",
     "random",
