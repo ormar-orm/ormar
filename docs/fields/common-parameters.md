@@ -92,6 +92,24 @@ created_date: datetime.datetime = ormar.DateTime(default=datetime.datetime.now)
 # Callable can be a function, builtin, class etc.
 ```
 
+A simple literal default is also set as the column default in the database (`DEFAULT` in
+`CREATE TABLE`), so rows inserted outside ormar, and existing rows when the column is added
+to a table, get it too:
+
+| Field | `default` | Column default |
+|-------|-----------|----------------|
+| `Boolean` | `True` / `False` | `true` / `false` |
+| `Integer`, `BigInteger`, `SmallInteger` | `int` | the number |
+| `Float` | `float` or `int` | the number |
+| `Decimal` | `Decimal` or `int` | the number |
+| `String` | `str` | the quoted string |
+
+Callables and other fields (`Text`, `JSON`, `LargeBinary`, `Enum`, `UUID`, dates, encrypted
+fields, primary keys and relations) get no column default. An explicit `server_default` always
+wins, and `nullable` / `sql_nullable` are not changed by it. The field's `server_default`
+attribute stays `None`, so ormar still fills the default in python and saving an explicit
+`None` on a nullable field still stores `NULL`.
+
 ## server default
 
 `server_default`: `Any` = `None`  -> defaults to None. 
@@ -120,6 +138,10 @@ Sample usage:
     You can pass also valid sql (dialect specific) wrapped in `sqlalchemy.text()`
     
     For example `func.now()` above could be exchanged for `text('(CURRENT_TIMESTAMP)')` for sqlite backend
+
+!!!info
+    Simple literal values of `default` are set as the column default even without
+    `server_default`, see [default](#default).
 
 !!!info
     `server_default` is passed straight to sqlalchemy table definition so you can read more in [server default][server default] sqlalchemy documentation

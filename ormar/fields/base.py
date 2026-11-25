@@ -1,3 +1,5 @@
+import decimal
+import math
 from typing import TYPE_CHECKING, Any, Literal, Optional, Union, overload
 
 import sqlalchemy
@@ -344,12 +346,55 @@ class BaseField(FieldInfo):  # type: ignore[misc]
                 index=self.index,
                 unique=self.unique,
                 default=self.ormar_default,
-                server_default=self.server_default,
+                server_default=self.get_column_server_default(),
                 comment=self.comment,
             )
         else:
             column = self._get_encrypted_column(name=name)
         return column
+
+    def get_column_server_default(self) -> Any:
+        """
+        Returns the server default of the database column: the explicit
+        server_default when set, otherwise one derived from a simple literal
+        default (bool, int, float, Decimal, or str on a String column) so that
+        rows added outside ormar, and existing rows when the column is added,
+        get the default too. The field's own server_default stays unchanged.
+
+        :return: server default passed to sqlalchemy.Column
+        :rtype: Any
+        """
+        default = self.ormar_default
+        if (
+            self.server_default is not None
+            or default is None
+            or self.primary_key
+            or self.is_relation
+        ):
+            return self.server_default
+        field_type = self.__type__
+        if field_type is bool and type(default) is bool:
+            return sqlalchemy.text("true" if default else "false")
+        if field_type is int and type(default) is int:
+            return sqlalchemy.text(str(default))
+        if field_type is float and type(default) in (int, float):
+            try:
+                number = float(default)
+            except OverflowError:
+                return None
+            return sqlalchemy.text(repr(number)) if math.isfinite(number) else None
+        if field_type is decimal.Decimal and type(default) in (int, decimal.Decimal):
+            literal = decimal.Decimal(default)
+            return (
+                sqlalchemy.text(format(literal, "f")) if literal.is_finite() else None
+            )
+        if (
+            field_type is str
+            and type(default) is str
+            and not isinstance(self.column_type, sqlalchemy.Text)
+        ):
+            return default
+        return None
 
     def _get_encrypted_column(self, name: str) -> sqlalchemy.Column:
         """
