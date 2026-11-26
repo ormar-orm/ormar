@@ -3215,14 +3215,14 @@ files = [
 
 [[package]]
 name = "types-pymysql"
-version = "1.2.4.20261116"
+version = "1.2.4.20261122"
 description = "Typing stubs for PyMySQL"
 optional = false
 python-versions = ">=3.10"
 groups = ["dev"]
 files = [
-    {file = "types_pymysql-1.2.4.20261116-py3-none-any.whl", hash = "sha256:9bfa6dad28311fa1f674ce7d26c3435c7f33c86a636d4d6a28a1097dd42cc750"},
-    {file = "types_pymysql-1.2.4.20261116.tar.gz", hash = "sha256:f3ac18c67025589cb9118afe58d0c46ea50dae9ffac6f7c83030a2456b39c549"},
+    {file = "types_pymysql-1.2.4.20261122-py3-none-any.whl", hash = "sha256:e37bd5b3e187973e983e29a8d522bd9e3d71569d1c2abab24374745fe2696f7e"},
+    {file = "types_pymysql-1.2.4.20261122.tar.gz", hash = "sha256:fcd8a185893a81358154647645f2990d8fef45a31c7bc99446f57bb54c891418"},
 ]
 
 [[package]]
