@@ -424,3 +424,23 @@ async def test_fk_update_to_none():
 
             reloaded = await Track.objects.get(id=track.id)
             assert reloaded.album is None
+
+
+@pytest.mark.asyncio
+async def test_setting_fk_to_none_removes_child_from_parent_relation():
+    async with base_ormar_config.database:
+        async with base_ormar_config.database.transaction(force_rollback=True):
+            album = await Album(name="Chichi").save()
+            track = await Track(
+                album=album, title="The Birdman", position=1
+            ).save()
+
+            assert len(album.tracks) == 1
+            assert track in album.tracks
+
+            track.album = None
+            await track.update()
+
+            assert track.album is None
+            assert track not in album.tracks
+            assert len(album.tracks) == 0

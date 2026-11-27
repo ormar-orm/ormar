@@ -184,6 +184,12 @@ class RelationDescriptor:
             previous = cast(Optional["Model"], instance._orm.get(self.name))
             if previous is not None:
                 instance._orm.remove(self.name, previous)
+                # keep the other side of the relation in sync, so the already
+                # loaded parent does not keep pointing at a child whose FK is None
+                relation_name = field.get_related_name()
+                relation = previous._orm._get(relation_name)
+                if relation is not None:
+                    relation.remove(instance)
 
         if not isinstance(instance.__dict__.get(self.name), list):
             instance.set_save_status(False)
